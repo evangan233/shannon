@@ -456,3 +456,22 @@ export async function apiGetText(path: string): Promise<string> {
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.text();
 }
+
+// === 全局扫描闸门（spec 2026-09-08-worker-scan-gate §8）：排队可视化 ===
+export type ScanGateEntry = {
+  workflow_id?: string;
+  ws?: string;
+  scan_id?: string;
+  kind?: string;
+  label?: string;
+  since?: number;
+};
+export type ScanGateSnapshot = {
+  capacity: number;
+  max_waiting?: number;
+  held: ScanGateEntry[];
+  waiting: ScanGateEntry[];
+};
+/** 闸门快照（GET /api/scan/gate）：held=占槽者、waiting 按排队序（=位次）。 */
+export const getScanGate = () =>
+  apiGet<ScanGateSnapshot>("/scan/gate");

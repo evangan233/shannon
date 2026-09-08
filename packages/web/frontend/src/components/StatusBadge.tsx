@@ -5,6 +5,7 @@ const MAP: Record<string, { icon: string; cls: string }> = {
   running:      { icon: "●", cls: "border-cyan/40 text-cyan" },
   "in-progress":{ icon: "●", cls: "border-cyan/40 text-cyan" },
   interrupted:  { icon: "⏸", cls: "border-yellow/40 text-yellow" },
+  queued:       { icon: "⏳", cls: "border-yellow/40 text-yellow" },
   completed: { icon: "✓", cls: "border-green/40 text-green" },
   done:      { icon: "✓", cls: "border-green/40 text-green" },
   failed:    { icon: "✗", cls: "border-red/40 text-red" },

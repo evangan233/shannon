@@ -21,7 +21,10 @@ import {
   cancelScan, deleteScan, deleteBlackboxRun, resumeScan, getScan, getResumePreview,
   scanEventsUrl, ApiError, type ResumePreview,
 } from "@/api/client";
+import useSWR from "swr";
 import { useScans } from "./useScans";
+import { getScanGate, type ScanGateSnapshot } from "@/api/client";
+import { ScanGatePanel } from "@/components/ScanGatePanel";
 import { useEventSource } from "@/api/useEventSource";
 import { liveScanPct } from "@/state/liveScanPct";
 import type { BlackboxRunSummary, ScanSummary } from "@/api/types";
@@ -106,6 +109,11 @@ export function ScanList() {
   const wsCtx = useOutletContext<WsOverviewCtx | null>();
   // SWR 数据层（spec §6.3）：与父容器共享 key → 单请求单轮询（运行中才 10s，后台 tab 暂停）。
   const { scans, loading, error: err, refresh: refreshScans } = useScans(workspace);
+  // 全局闸门快照（spec §8.2）：与 useScans 同款条件轮询——有占用/排队才 10s 刷
+  const { data: gateSnap } = useSWR<ScanGateSnapshot>(["scan-gate"], getScanGate, {
+    refreshInterval: (latest?: ScanGateSnapshot) =>
+      latest && latest.held.length + latest.waiting.length > 0 ? 10_000 : 0,
+  });
   const [filters, setFilters] = useState<ListFilters>(DEFAULT_LIST_FILTERS);
 
   // 关键词 + 类型先行过滤（分段计数以此为准，计数不随当前分段变化）；
@@ -156,6 +164,7 @@ export function ScanList() {
 
   return (
     <div className="space-y-3">
+      <ScanGatePanel snapshot={gateSnap ?? null} />
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-baseline gap-x-2.5">
           <h3 className="text-base font-semibold tracking-tight">{t("workspaceDetail.scans.listTitle")}</h3>
@@ -296,6 +305,8 @@ export function ScanList() {
 function ScanRow({ ws, scan, scansById, onChanged }: {
   ws: string; scan: ScanSummary; scansById: Map<string, ScanSummary>; onChanged: () => void;
 }) {
+  // 闸门快照（与主列表同 key，SWR 缓存共享）：queued 行显示排队位次
+  const { data: gateSnap } = useSWR<ScanGateSnapshot>(["scan-gate"], getScanGate);
   const { t } = useTranslation();
   const nav = useNavigate();
   const [busy, setBusy] = useState(false);
@@ -485,7 +496,16 @@ function ScanRow({ ws, scan, scansById, onChanged }: {
           )}
         </TableCell>
         {/* 状态徽标：correlation 主行追加 🔗 类型标记（StatusBadge correlation prop，D4 接回） */}
-        <TableCell><StatusBadge status={scan.status} correlation={isCorr} /></TableCell>
+        <TableCell>
+          <div className="flex items-center gap-1">
+            <StatusBadge status={scan.status} correlation={isCorr} />
+            {scan.status === "queued" && (() => {
+              const pos = gateSnap?.waiting.findIndex((e) => e.scan_id === scan.scan_id) ?? -1;
+              return pos >= 0
+                ? <span className="text-xs text-muted-foreground">#{pos + 1}</span> : null;
+            })()}
+          </div>
+        </TableCell>
         <TableCell className="max-w-0 truncate font-mono">
           <Link
             to={`${scanPath}/${defaultTab}`}

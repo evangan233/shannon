@@ -60,6 +60,11 @@ describe("StatusBadge i18n", () => {
     expect(screen.getByText("Running")).toBeInTheDocument();
   });
 
+  it("queued → ⏳ + 排队中", () => {
+    render(<StatusBadge status="queued" />);
+    expect(screen.getByText("排队中")).toBeInTheDocument();
+  });
+
   it("未知状态 fallback 原值不空白", () => {
     render(<StatusBadge status="some-new-state" />);
     expect(screen.getByText("some-new-state")).toBeInTheDocument();

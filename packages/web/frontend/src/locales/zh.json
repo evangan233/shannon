@@ -230,6 +230,18 @@
       "updateNetwork": "更新失败（网络错误）"
     }
   },
+  "scanGate": {
+    "title": "扫描并发",
+    "usage": "{{held}}/{{capacity}} 运行中",
+    "waiting": "排队中 ({{n}})",
+    "rank": "第 {{n}} 位",
+    "kinds": {
+      "whitebox": "白盒",
+      "mr": "MR",
+      "blackbox": "黑盒",
+      "correlation": "跨仓"
+    }
+  },
   "workspaces": {
     "title": "工作区",
     "subtitle": "所有扫描任务与产物",
@@ -237,6 +249,7 @@
       "running": "运行中",
       "in-progress": "进行中",
       "interrupted": "已中断",
+      "queued": "排队中",
       "completed": "已完成",
       "done": "已完成",
       "failed": "失败",

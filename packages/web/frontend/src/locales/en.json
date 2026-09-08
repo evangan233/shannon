@@ -230,6 +230,18 @@
       "updateNetwork": "Update failed (network error)"
     }
   },
+  "scanGate": {
+    "title": "Scan Concurrency",
+    "usage": "{{held}}/{{capacity}} running",
+    "waiting": "Queued ({{n}})",
+    "rank": "#{{n}}",
+    "kinds": {
+      "whitebox": "Whitebox",
+      "mr": "MR",
+      "blackbox": "Blackbox",
+      "correlation": "Correlation"
+    }
+  },
   "workspaces": {
     "title": "Workspaces",
     "subtitle": "All scan tasks and deliverables",
@@ -237,6 +249,7 @@
       "running": "Running",
       "in-progress": "In Progress",
       "interrupted": "Interrupted",
+      "queued": "Queued",
       "completed": "Completed",
       "done": "Completed",
       "failed": "Failed",
