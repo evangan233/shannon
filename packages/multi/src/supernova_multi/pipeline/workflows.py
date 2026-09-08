@@ -16,6 +16,9 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 
 with workflow.unsafe.imports_passed_through():
+    from supernova_core.services.scan_gate import (
+        acquire_gate_slot, release_gate_slot,
+        gate_scan_id_from_event_file, gate_ws_from_path)
     from supernova_core.agents.runner import UsageSink, run_claude_prompt
     from supernova_core.agents.tool_audit_logger import ToolAuditLogger
     from supernova_core.config.parser import parse_multi_repo_config
@@ -56,10 +59,22 @@ async def run_correlation_activity(inp: CorrelationPipelineInput) -> dict:
 class CorrelationScanWorkflow:
     @workflow.run
     async def run(self, inp: CorrelationPipelineInput) -> dict:
-        return await workflow.execute_activity(
-            run_correlation_activity, inp,
-            start_to_close_timeout=timedelta(hours=4),
-        )
+        # 全局扫描闸门（spec 2026-09-08-worker-scan-gate §5）：关联阶段占 1 槽。
+        # corr input 无 workspace_name——ws 从 event_file/out_ws_dir 反推（仅展示用）。
+        await acquire_gate_slot({
+            "kind": "correlation",
+            "ws": gate_ws_from_path(inp.event_file or inp.out_ws_dir),
+            "scan_id": gate_scan_id_from_event_file(inp.event_file or None),
+            "label": " + ".join(sorted(inp.repo_workspace_paths)) or "correlation",
+        })
+        try:
+            return await workflow.execute_activity(
+                run_correlation_activity, inp,
+                start_to_close_timeout=timedelta(hours=4),
+            )
+        finally:
+            # 尽力释放：异常时由 runner 的闸门 janitor 兜底回收（spec §6）
+            await release_gate_slot()
 
 
 class _NdjsonToolAuditLogger(ToolAuditLogger):

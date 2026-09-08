@@ -16,11 +16,21 @@ from supernova_core.models.agents import AGENTS, AgentName
 from supernova_core.models.metrics import AgentMetrics
 from supernova_blackbox.agents.endpoint_verify_executor import EndpointVerifyExecutor
 from supernova_blackbox.pipeline.workflows import BlackboxScanWorkflow
+from supernova_core.services import scan_gate as gate_mod
 from supernova_blackbox.pipeline.shared import BlackboxPipelineInput
 from supernova_blackbox.services.exploitation_checker import QueueValidationResult
 
 
 # ─── B1: agent 登记 ────────────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _reset_gate():
+    """闸门接线后 run() 首个 activity 是 scan_gate_try_acquire（真实现）——
+    进程级 gate 单例跨测试清态，防槽残留互扰。"""
+    gate_mod.reset_gate_for_tests()
+    yield
+    gate_mod.reset_gate_for_tests()
 
 def test_endpoint_verify_agent_registered():
     """endpoint-verify agent 登记:prompt_template + 产 json 不产 md(不校验 md deliverable)。
@@ -234,7 +244,9 @@ def _build_exploit_chain_mocks(call_order: list, endpoint_verify_return: dict) -
 async def _run_workflow(acts, inp, wid, tq):
     async with await WorkflowEnvironment.start_local() as env:
         async with Worker(env.client, task_queue=tq, workflows=[BlackboxScanWorkflow],
-                          activities=acts):
+                          # gate activity 用真实现：闸门接线后 run() 首个 activity 即过闸
+                          activities=[*acts, gate_mod.scan_gate_try_acquire,
+                                      gate_mod.scan_gate_release]):
             return await env.client.execute_workflow(
                 BlackboxScanWorkflow.run, inp, id=wid, task_queue=tq)
 

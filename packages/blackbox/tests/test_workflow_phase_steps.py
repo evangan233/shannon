@@ -22,9 +22,19 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from supernova_core.agents.progress_tool import AUTH_VALIDATION_PROGRESS
+from supernova_core.services import scan_gate as gate_mod
 from supernova_blackbox.pipeline.workflows import BlackboxScanWorkflow
 from supernova_blackbox.pipeline.shared import BlackboxPipelineInput
 from supernova_blackbox.services.exploitation_checker import QueueValidationResult
+
+
+@pytest.fixture(autouse=True)
+def _reset_gate():
+    """闸门接线后 run() 首个 activity 是 scan_gate_try_acquire（真实现）——
+    进程级 gate 单例跨测试清态，防槽残留互扰。"""
+    gate_mod.reset_gate_for_tests()
+    yield
+    gate_mod.reset_gate_for_tests()
 
 
 def _build_phase_steps_mocks(declared: list) -> list:
@@ -106,7 +116,8 @@ def _build_phase_steps_mocks(declared: list) -> list:
     @activity.defn
     async def persist_completed_agents(i, completed_agents): pass
 
-    return [setup_display, log_phase_start_activity, run_host_proxy_setup,
+    return [gate_mod.scan_gate_try_acquire, gate_mod.scan_gate_release,
+            setup_display, log_phase_start_activity, run_host_proxy_setup,
             run_blackbox_preflight, resolve_blackbox_engine,
             run_blackbox_auth_validation, detect_whitebox_results,
             log_info_activity, run_endpoint_verify,

@@ -34,9 +34,19 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from supernova_blackbox.pipeline.workflows import BlackboxScanWorkflow
+from supernova_core.services import scan_gate as gate_mod
 from supernova_blackbox.pipeline.shared import BlackboxPipelineInput
 from supernova_blackbox.services.exploitation_checker import QueueValidationResult
 
+
+
+@pytest.fixture(autouse=True)
+def _reset_gate():
+    """闸门接线后 run() 首个 activity 是 scan_gate_try_acquire（真实现）——
+    进程级 gate 单例跨测试清态，防槽残留互扰。"""
+    gate_mod.reset_gate_for_tests()
+    yield
+    gate_mod.reset_gate_for_tests()
 
 def _build_proxy_chain_mocks(call_order: list, proxy_url_return: str) -> list:
     """Build the full mock activity chain for BlackboxScanWorkflow with host
@@ -111,7 +121,9 @@ def _build_proxy_chain_mocks(call_order: list, proxy_url_return: str) -> list:
 async def _run_workflow(acts, inp, wid, tq):
     async with await WorkflowEnvironment.start_local() as env:
         async with Worker(env.client, task_queue=tq, workflows=[BlackboxScanWorkflow],
-                          activities=acts):
+                          # gate activity 用真实现：闸门接线后 run() 首个 activity 即过闸
+                          activities=[*acts, gate_mod.scan_gate_try_acquire,
+                                      gate_mod.scan_gate_release]):
             return await env.client.execute_workflow(
                 BlackboxScanWorkflow.run, inp, id=wid, task_queue=tq)
 
