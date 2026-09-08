@@ -61,3 +61,24 @@ async def create_scan(req: ScanRequest, request: Request,
             except Exception:  # noqa: BLE001 - 读 session best-effort，不阻塞提交响应
                 bb_phase = None
     return ScanAccepted(workspace=ws_name, scan_id=scan_id, bb_phase=bb_phase)
+
+
+@router.get("/gate")
+async def get_scan_gate(request: Request, user: User = Depends(current_user)):
+    """全局扫描闸门快照（排队可视化，spec 2026-09-08-worker-scan-gate §8.1）。
+
+    快照由 worker 闸门原子写（<workspaces_root>/gate_state.json）；文件缺失/损坏
+    = worker 未起或未配置落盘 → 空快照。非全局 admin 按工作区成员资格过滤条目，
+    容量计数保留（全局数字无害）。
+    """
+    from supernova_core.services.scan_gate import read_gate_snapshot_file
+    sf = request.app.state.config.workspaces_dir / "gate_state.json"
+    data = read_gate_snapshot_file(sf) or {
+        "capacity": 5, "max_waiting": 50, "held": [], "waiting": []}
+    if not is_global_admin(user):
+        allowed = set(request.app.state.auth_store.list_user_workspaces(user.id))
+        data = {**data,
+                "held": [e for e in data.get("held", []) if e.get("ws") in allowed],
+                "waiting": [e for e in data.get("waiting", [])
+                            if e.get("ws") in allowed]}
+    return data

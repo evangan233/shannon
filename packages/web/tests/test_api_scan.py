@@ -157,3 +157,58 @@ def test_post_scan_workspace_field_name_contract(_authed_app):
     assert r2.status_code == 422  # workspace 不存在
     # start 没被第二次调用（422 在 sm.start 之前抛）
     assert len(fake.started) == 1
+
+
+# ── GET /api/scan/gate：全局扫描闸门快照（spec 2026-09-08-worker-scan-gate §8.1）──
+
+def _write_gate_file(app, payload):
+    import json as _json
+    app.state.config.workspaces_dir.joinpath("gate_state.json").write_text(
+        _json.dumps(payload))
+
+
+def test_get_scan_gate_returns_snapshot(_authed_app):
+    """正常：读 gate_state.json 返回快照。"""
+    _write_gate_file(_authed_app, {
+        "capacity": 5, "max_waiting": 50,
+        "held": [{"ws": "w1", "scan_id": "s1", "kind": "whitebox",
+                  "label": "r@main", "since": 1.0}],
+        "waiting": [{"ws": "w2", "scan_id": "s2", "kind": "mr",
+                     "label": "u!12", "since": 2.0}]})
+    client = _authed_client(_authed_app)
+    resp = client.get("/api/scan/gate")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["capacity"] == 5
+    assert body["held"][0]["ws"] == "w1"
+    assert body["waiting"][0]["kind"] == "mr"
+
+
+def test_get_scan_gate_missing_file_empty(_authed_app):
+    """worker 未起/未落盘：空快照不 500。"""
+    client = _authed_client(_authed_app)
+    resp = client.get("/api/scan/gate")
+    assert resp.status_code == 200
+    assert resp.json() == {"capacity": 5, "max_waiting": 50, "held": [], "waiting": []}
+
+
+def test_get_scan_gate_filters_by_ws_membership(_authed_app):
+    """非全局 admin：无权 ws 的条目过滤，容量计数保留（spec §8.1）。"""
+    from supernova_web.auth.passwords import hash_password
+    app = _authed_app
+    app.state.auth_store.create_user("alice", hash_password("test-pw"), role="user")
+    app.state.auth_store.add_workspace_member("w1", app.state.auth_store.get_user_by_username("alice").id)
+    _write_gate_file(app, {
+        "capacity": 5, "max_waiting": 50,
+        "held": [{"ws": "w1", "scan_id": "s1", "kind": "whitebox", "label": "a", "since": 1.0},
+                 {"ws": "w2", "scan_id": "s2", "kind": "whitebox", "label": "b", "since": 1.0}],
+        "waiting": [{"ws": "w3", "scan_id": "s3", "kind": "blackbox", "label": "c", "since": 2.0}]})
+    client = TestClient(app)
+    tok = client.get("/api/auth/csrf").json()["csrf_token"]
+    client.post("/api/auth/login", json={"username": "alice", "password": "test-pw"},
+                headers={"X-CSRF-Token": tok})
+    resp = client.get("/api/scan/gate")
+    body = resp.json()
+    assert [e["ws"] for e in body["held"]] == ["w1"]
+    assert body["waiting"] == []
+    assert body["capacity"] == 5
