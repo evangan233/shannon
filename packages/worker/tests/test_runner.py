@@ -108,6 +108,11 @@ async def test_run_worker_registers_all_defined_activities(monkeypatch):
 
     wb_expected = _activity_def_names(
         Path(wb_activities.__file__).read_text(encoding="utf-8"))
+    # MR 增量前置 activities 定义在独立模块 mr_activities（spec 2026-09-03），注册
+    # wb 队列——预存漏扫（模块拆分后本测试未跟上，extra=MR 5 名恒红）。
+    from supernova_whitebox.pipeline import mr_activities
+    wb_expected |= _activity_def_names(
+        Path(mr_activities.__file__).read_text(encoding="utf-8"))
     bb_expected = _activity_def_names(
         Path(bb_activities.__file__).read_text(encoding="utf-8"))
     # corr 的 @activity.defn 定义在 multi pipeline workflows 模块（单 activity 直通）。
@@ -119,6 +124,12 @@ async def test_run_worker_registers_all_defined_activities(monkeypatch):
     topology_activity = {"run_topology_analysis_activity"}
     bb_expected |= topology_activity
     corr_expected = multi_defined - topology_activity
+    # 全局扫描闸门（spec 2026-09-08-worker-scan-gate §4.1）：定义在 core scan_gate
+    # 模块（不在上面扫的 wb/bb/multi 源文件里），三 Worker 都要注册（跨 queue 过闸）。
+    gate_activities = {"scan_gate_try_acquire", "scan_gate_release"}
+    wb_expected |= gate_activities
+    bb_expected |= gate_activities
+    corr_expected |= gate_activities
 
     assert wb_registered == wb_expected, (
         f"whitebox worker 注册不一致：missing={sorted(wb_expected - wb_registered)}, "

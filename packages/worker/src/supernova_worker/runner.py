@@ -9,6 +9,7 @@ CLI 路径（supernova-whitebox/-blackbox start）零改动，仍用 generate_ta
 唯一随机 queue 自己提交自己消费，与本 worker 容器互不干扰（queue 精确匹配）。
 """
 import asyncio
+import logging
 import os
 from datetime import timedelta
 
@@ -71,6 +72,10 @@ from supernova_multi.pipeline.workflows import (
     run_topology_analysis_activity,
 )
 from supernova_core.runtime.heartbeat import snapshot_heartbeat_workflows
+from supernova_core.services.scan_gate import (
+    scan_gate_try_acquire, scan_gate_release,
+    preload_gate, reap_ids, gate_candidate_ids,
+)
 
 _GRACEFUL_SHUTDOWN = timedelta(seconds=10)
 # 心跳节流收紧（spec 2026-08-28-temporal-native-cancel-design 修 F）：temporalio 默认
@@ -81,6 +86,15 @@ _HEARTBEAT_THROTTLE = timedelta(seconds=10)
 # 协作取消桥轮询周期（2026-08-28 取消失效治本方案 B）。exists() 检查极廉，
 # 取短周期换「点取消 → worker 真停」的低延迟。
 _CANCEL_BRIDGE_INTERVAL_SECONDS = 5.0
+
+# 闸门 janitor 轮询周期（spec 2026-09-08-worker-scan-gate §6）：槽泄漏兜底，
+# 最坏多占一个周期。
+_GATE_JANITOR_INTERVAL_SECONDS = 10.0
+# bootstrap 预占的扫描类 workflow 类型（退化查询用；TaskQueue 查询优先）
+_SCAN_WORKFLOW_TYPES = (
+    "BlackboxScanWorkflow", "CorrelationScanWorkflow",
+    "MrScanWorkflow", "WhiteboxScanWorkflow",
+)
 
 
 async def _process_cancel_signals(client: Client) -> None:
@@ -120,6 +134,61 @@ async def _cancel_signal_bridge(client: Client) -> None:
             pass
 
 
+async def _gate_bootstrap(client: Client) -> None:
+    """worker 启动预占：所有 RUNNING 扫描类 workflow 计槽（spec §6 防重启超卖）。
+
+    重启后内存闸门清零，但已过闸的 workflow 重放不会重新 acquire（event-sourced
+    history 恢复 granted 结果直接跳过闸门段）——不预占则新排队者立即拿空闸门超卖。
+    TaskQueue visibility 查询优先（排除 CLI 随机 queue 的同类型 workflow）；
+    当前 temporal 版本不支持该 search attribute 时退化为 WorkflowType 过滤
+    （接受 CLI 干扰：保守少槽，无害，spec §11）。两级都失败 fail-open（空预占 +
+    warning）——bootstrap 查询失败不该阻断 worker 启动（闸门/janitor 起来仍工作，
+    代价仅本次预占不全的短暂超卖窗口）。
+    """
+    queues = "','".join(
+        (WEB_TASK_QUEUE_WHITEBOX, WEB_TASK_QUEUE_BLACKBOX, WEB_TASK_QUEUE_CORRELATION))
+    types = "','".join(_SCAN_WORKFLOW_TYPES)
+    ids: list[str] = []
+    try:
+        ids = [w.id async for w in client.list_workflows(
+            query=f"TaskQueue IN ('{queues}')")]
+    except Exception:
+        try:
+            ids = [w.id async for w in client.list_workflows(
+                query=f"WorkflowType IN ('{types}')")]
+        except Exception:  # noqa: BLE001 - fail-open，见 docstring
+            logging.getLogger(__name__).warning(
+                "gate bootstrap 两级 visibility 查询均失败，跳过预占（可能短暂超卖）")
+    preload_gate(ids)
+
+
+async def _gate_janitor_once(client: Client) -> None:
+    """单轮闸门回收：校验持有/等待者存活性，死 key 摘除（spec §6）。
+
+    覆盖一切异常释放路径：cancel 保险丝 terminate（不给清理机会）、cancel 时
+    cleanup 没跑成、workflow 崩溃。waiting 死 key 同摘——幽灵排队者会挡 FIFO。
+    """
+    from temporalio.client import WorkflowExecutionStatus
+    for wf_id in gate_candidate_ids():
+        try:
+            desc = await client.get_workflow_handle(wf_id).describe()
+            alive = desc.status == WorkflowExecutionStatus.RUNNING
+        except Exception:
+            alive = False  # 查不到 = 死 key，best-effort 回收
+        if not alive:
+            reap_ids([wf_id])
+
+
+async def _gate_janitor(client: Client) -> None:
+    """闸门 janitor 主循环（worker 常驻后台 task，进程退出即止；对齐取消桥模式）。"""
+    while True:
+        await asyncio.sleep(_GATE_JANITOR_INTERVAL_SECONDS)
+        try:
+            await _gate_janitor_once(client)
+        except Exception:  # noqa: BLE001 - janitor 绝不因单轮异常退出
+            pass
+
+
 async def run_worker(temporal_address: str = "localhost:7233") -> None:
     """连接 temporal，起白盒+黑盒+跨仓关联三个常驻 Worker 并行消费 WEB 固定 queue。
 
@@ -153,6 +222,8 @@ async def run_worker(temporal_address: str = "localhost:7233") -> None:
             run_mr_repo_prepare, run_git_diff,
             run_protection_removal_analysis, run_incremental_scope,
             run_mr_empty_diff_finalize,
+            # 全局扫描闸门（spec 2026-09-08-worker-scan-gate §4.1）：三 queue 都要注册
+            scan_gate_try_acquire, scan_gate_release,
         ],
         # P3c 阶段 3：AuditSession/LogBus/heartbeat 已 contextvar 化（按 workflow_id 隔离），
         # 多 scan 并发不再串台 → max_concurrent 放开（默认 4，env 可配）。
@@ -181,6 +252,7 @@ async def run_worker(temporal_address: str = "localhost:7233") -> None:
             bb_cleanup_auth_state_activity,
             bb_persist_completed_agents,
             bb_verify_report_vuln_blocks,
+            scan_gate_try_acquire, scan_gate_release,
         ],
         # P3c 阶段 3：对齐 wb_worker，contextvar 化后并发放开（默认 4，env 可配）。
         max_concurrent_workflow_tasks=int(
@@ -193,7 +265,8 @@ async def run_worker(temporal_address: str = "localhost:7233") -> None:
         client=client,
         task_queue=WEB_TASK_QUEUE_CORRELATION,
         workflows=[CorrelationScanWorkflow],
-        activities=[run_correlation_activity],
+        activities=[run_correlation_activity,
+                    scan_gate_try_acquire, scan_gate_release],
         # 对齐 wb/bb worker，contextvar 化后并发放开（默认 4，env 可配）。
         max_concurrent_workflow_tasks=int(
             os.environ.get("SUPERNOVA_WORKER_MAX_CONCURRENT_WF", "4")
@@ -202,13 +275,18 @@ async def run_worker(temporal_address: str = "localhost:7233") -> None:
         default_heartbeat_throttle_interval=_HEARTBEAT_THROTTLE,
     )
 
+    # 闸门 bootstrap 预占必须在 worker 消费前（spec §6：防重启超卖）
+    await _gate_bootstrap(client)
+
     # 协作取消桥（方案 B）：把 web cancel ② 轨的 cancel.requested 文件信号转发为
     # temporal cancel（worker 容器路径协作通道的唯一消费者）。worker 全退时一并取消。
     bridge = asyncio.create_task(_cancel_signal_bridge(client))
+    gate_janitor_task = asyncio.create_task(_gate_janitor(client))
     try:
         await asyncio.gather(wb_worker.run(), bb_worker.run(), corr_worker.run())
     finally:
         bridge.cancel()
+        gate_janitor_task.cancel()
 
 
 def main() -> None:
