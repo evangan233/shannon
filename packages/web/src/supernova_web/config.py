@@ -10,7 +10,6 @@ class WebConfig:
     def __init__(self) -> None:
         self.port = int(os.environ.get("SUPERNOVA_WEB_PORT", "7878"))
         # P3c 阶段 3：与 worker SUPERNOVA_WORKER_MAX_CONCURRENT_WF 建议同值（避免 pending 堆积）。
-        self.max_concurrent = max(1, int(os.environ.get("SUPERNOVA_WEB_MAX_CONCURRENT", "4")))
         self.scan_timeout = float(os.environ.get("SUPERNOVA_WEB_SCAN_TIMEOUT", "0"))
         self.gitlab_user = os.environ.get("GITLAB_USER")
         self.gitlab_token = os.environ.get("GITLAB_TOKEN")

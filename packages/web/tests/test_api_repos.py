@@ -1,7 +1,7 @@
 """Legacy repos API tests, ported to ws-scoped routes (P2: /api/workspaces/{ws}/repos/...).
 
 T2 moved every repo route under the workspace context + added workspace_member authz.
-These cases cover repo CRUD/SSE behavior (not membership) — canonical admin bypasses the
+These cases cover repo CRUD/SSE behavior (not membership) — admin bypasses the
 member check. Membership-specific cases live in test_repos_routes_ws.py.
 """
 import json
@@ -43,7 +43,7 @@ def _app(tmp_path, monkeypatch, repos):
 def _authed(app):
     """构造已登录的 admin TestClient + 创建测试用户。返回 TestClient。
 
-    使用 canonical admin，使这些用例聚焦 repo CRUD/SSE 行为本身（成员鉴权另见 test_repos_routes_ws.py）。
+    使用 admin，使这些用例聚焦 repo CRUD/SSE 行为本身（成员鉴权另见 test_repos_routes_ws.py）。
     """
     from supernova_web.auth.passwords import hash_password
     store = app.state.auth_store

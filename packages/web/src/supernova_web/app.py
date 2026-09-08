@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
     app.state._purge_task = asyncio.create_task(_purge_loop())
 
     # 启动对账序列（顺序敏感）：
-    #   1) 给所有真实 ws 补 canonical admin (manager)
+    #   1) 给所有真实 ws 补全部 admin (manager)
     #   2) 为历史用户创建同名工作区（在成员补充后，避免用户名与残留目录同名时误判）
     #   3) per-ws 补写仓库 meta（读时自愈 _ensure_meta 的启动兜底）
     #   4) 重建孤儿 scan 状态（遍历 ScanStore scans）
@@ -296,7 +296,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     overrides = overrides or {}
     app.state.scan_manager = overrides.get("scan_manager") or ScanManager(
         cfg.workspaces_dir, cfg.repos_dir, app.state.config_store,
-        max_concurrent=cfg.max_concurrent, scan_timeout=cfg.scan_timeout,
+        scan_timeout=cfg.scan_timeout,
         ws_config_store=app.state.ws_config_store,
         auth_profile_store=app.state.auth_profile_store,
         host_profile_store=app.state.host_profile_store)

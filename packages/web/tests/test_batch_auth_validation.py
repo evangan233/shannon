@@ -31,7 +31,7 @@ def _mgr(tmp_path, store):
     # 测试关注 batch 编排而非 provider 解析——不降级行为另有专测）。
     return ScanManager(
         workspaces_dir=tmp_path, repos_dir=tmp_path / "repos", config_store=MagicMock(),
-        max_concurrent=1, scan_timeout=0.0,
+        scan_timeout=0.0,
         auth_profile_store=store,
     )
 

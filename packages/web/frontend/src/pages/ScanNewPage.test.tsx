@@ -155,13 +155,13 @@ describe("ScanNewPage", () => {
     await waitFor(() => expect(spy).toHaveBeenCalledWith(expect.stringMatching(/Temporal/i)));
   });
 
-  it("提交 409 → toast 并发扫描超限", async () => {
+  it("提交 409 → 通用错误文案（并发门已下沉 worker，409 分支已删，spec 2026-09-08-worker-scan-gate §7）", async () => {
     server.use(http.post("/api/scan", () => new HttpResponse(null, { status: 409 })));
     const spy = vi.spyOn(toast, "error");
     renderPage();
     await fillValidRepo();
     fireEvent.click(screen.getByRole("button", { name: /开始扫描/ }));
-    await waitFor(() => expect(spy).toHaveBeenCalledWith(expect.stringMatching(/并发扫描超限/)));
+    await waitFor(() => expect(spy).toHaveBeenCalled());
   });
 
   it("提交 422 → toast yaml 校验失败（友好消息，不含原始 JSON）", async () => {

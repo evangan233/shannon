@@ -19,7 +19,7 @@ def _store(tmp_path):
 def _mgr_with_store(tmp_path, store):
     return ScanManager(
         workspaces_dir=tmp_path, repos_dir=tmp_path / "repos", config_store=MagicMock(),
-        max_concurrent=1, scan_timeout=0.0, ws_config_store=MagicMock(),
+        scan_timeout=0.0, ws_config_store=MagicMock(),
         auth_profile_store=store,
     )
 

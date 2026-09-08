@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from supernova_web.auth.dependencies import current_user, workspace_member
 from supernova_web.components.workspace_provisioner import is_global_admin, is_safe_workspace_name
 from supernova_web.auth.models import User
-from supernova_web.components.scan_manager import TemporalUnavailable, TooManyScans
+from supernova_web.components.scan_manager import TemporalUnavailable
 from supernova_web.components.ws_config_store import ProviderConfigIncomplete
 from supernova_web.models import ScanAccepted, ScanRequest
 
@@ -41,8 +41,6 @@ async def create_scan(req: ScanRequest, request: Request,
         ws_name, scan_id = await sm.start(req)
     except TemporalUnavailable:
         raise HTTPException(400, "Temporal 服务未运行，请先 docker-compose up -d")
-    except TooManyScans as e:
-        raise HTTPException(409, f"已有扫描在跑，并发上限 {e.limit}")
     except PermissionError as e:
         # OS-level EACCES/EPERM from ws_dir.mkdir()（git-creds 来源已于 Task 3 移除）
         raise HTTPException(400, str(e))

@@ -34,7 +34,7 @@ def _store(request: Request):
 
 @cross_ws_router.get("")
 async def list_all_scans(request: Request, user: User = Depends(current_user)):
-    """跨 ws 扫描聚合（IA 重设计 §3.1/§7.1）。canonical admin 见全部 ws 扫描，
+    """跨 ws 扫描聚合（IA 重设计 §3.1/§7.1）。admin 见全部 ws 扫描，
     普通用户只见归属 ws（list_user_workspaces）的扫描。每条注入 workspace 字段，
     按 created_at 倒序。ws 量通常个位数到几十，每 ws list_scans 是目录扫描，可接受。"""
     from supernova_web.components.scan_store import ScanStore
@@ -667,7 +667,7 @@ async def resume_scan(ws: str, scan_id: str, request: Request, _: User = Depends
     completed/running -> 422（completed 用重扫 POST /api/scan 起新 scan，旧记录保留）。
     scan 不存在 -> 404。
     """
-    from supernova_web.components.scan_manager import TemporalUnavailable, TooManyScans
+    from supernova_web.components.scan_manager import TemporalUnavailable
     sm = request.app.state.scan_manager
     try:
         ws_name, scan_id_out = await sm.resume(ws, scan_id)
@@ -678,8 +678,6 @@ async def resume_scan(ws: str, scan_id: str, request: Request, _: User = Depends
         raise HTTPException(422, msg)
     except TemporalUnavailable:
         raise HTTPException(400, "Temporal 服务未运行，请先 docker-compose up -d")
-    except TooManyScans as e:
-        raise HTTPException(409, f"已有扫描在跑，并发上限 {e.limit}")
     return {"workspace": ws_name, "scan_id": scan_id_out}
 
 

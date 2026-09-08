@@ -43,16 +43,10 @@ class TemporalUnavailable(Exception):
     pass
 
 
-class TooManyScans(Exception):
-    def __init__(self, limit: int) -> None:
-        self.limit = limit
-        super().__init__(f"已有扫描在跑（并发上限 {limit}）")
-
-
 class ScanRunning(Exception):
     """删除 running scan 被拒（应先 cancel 再删，对齐 delete_workspace 删 ws 前要求无 running scan）。
 
-    删在跑 workflow 的目录会致 _watch describe 不存在的 workflow / max_concurrent 槽位泄漏。
+    删在跑 workflow 的目录会致 _watch describe 不存在的 workflow（_handles 降级为簿记后已无闸门影响）。
     """
     def __init__(self, scan_id: str) -> None:
         self.scan_id = scan_id
@@ -199,21 +193,20 @@ class ScanManager:
     T3: 1 ws : N scans -- _handles/_tasks/_active_reqs key 由 ws 改 (ws, scan_id)；
     ScanStore.create_scan 建 scans/<scan_id>/session.json（ws 根不再写 session.json）；
     event_file=scan_dir/events.ndjson（worker 据其 parent 推导产物目录，零改动）。
-    同 ws 多 scan 不互斥（key 不同），全局 max_concurrent 保留为全局上限。
+    同 ws 多 scan 不互斥（key 不同）；并发权威 = worker 全局扫描闸门（spec 2026-09-08-worker-scan-gate）。
     start -> Client.connect + start_workflow; _watch -> tail events.ndjson 直到 scan_end;
     cancel(ws, scan_id) 精确取消（scan_id 强制；旧 cancel(ws) shim + DELETE /api/scan/{ws} 已于 e1406473 移除）;
     resume(ws, scan_id) 续跑 interrupted/crashed scan（completed/failed/cancelled/running 拒）。active_pids 返空(判活靠 heartbeat mtime)。
     """
 
     def __init__(self, workspaces_dir: Path, repos_dir: Path, config_store: Any,
-                 max_concurrent: int = 1, scan_timeout: float = 0.0,
+                 scan_timeout: float = 0.0,
                  ws_config_store: Any = None,
                  auth_profile_store: Any = None,
                  host_profile_store: Any = None) -> None:
         self._workspaces_dir = Path(workspaces_dir)
         self._repos_dir = Path(repos_dir)
         self._config_store = config_store
-        self._max_concurrent = max(1, max_concurrent)
         self._scan_timeout = scan_timeout
         # T3: _handles/_tasks/_active_reqs key = (ws, scan_id)（同 ws 多 scan 不互斥）。
         self._handles: dict[tuple[str, str], Any] = {}
@@ -308,9 +301,8 @@ class ScanManager:
         ``host_config`` snapshot is written before auth config/workflow submission.
         """
         await self._check_temporal()
-        if len(self._handles) >= self._max_concurrent:
-            raise TooManyScans(self._max_concurrent)
-
+        # 并发闸门已下沉 worker（spec 2026-09-08-worker-scan-gate §7）：web 不再
+        # 拒绝，超出容量的扫描在 worker 闸门排队（temporal workflow RUNNING）。
         target, yaml_path = await self._resolve_inputs(req)
         # C3（跨仓关联）：主行落请求 ws——旧 _resolve_out_workspace（从 yaml 推 ws）已随
         # D7 清理删除：out_workspace 由下方 correlation 分支覆写为主行 scan_id 落盘 yaml。
@@ -595,9 +587,7 @@ class ScanManager:
             raise ValueError("该扫描仍在运行，无需恢复")
 
         await self._check_temporal()
-        if len(self._handles) >= self._max_concurrent:
-            raise TooManyScans(self._max_concurrent)
-
+        # 并发闸门已下沉 worker（spec §7）：resume 同样不拒绝，排队在 worker 闸门。
         data = mgr.get_session_data(scan_dir)
         event_file = scan_dir / "events.ndjson"
         scan_key = (ws, scan_id)
@@ -2096,7 +2086,7 @@ class ScanManager:
         # 必须兜底: worker 的 workflow except CancelledError 分支不写 scan_end / 不更新
         # session(仅 try 正常完成分支调 finalize_summary)。web 不标 -> session 卡 running
         # (heartbeat stale 后误显 interrupted, 非 cancelled) + _watch 等不到 scan_end 永不
-        # 退出 -> _handles 占死 -> max_concurrent 槽位泄漏、新扫描起不来。标终态则
+        # 退出 -> _handles 占死（闸门下沉 worker 后仅簿记泄漏，不再挡新扫描）。标终态则
         # _status_of 终态优先显 cancelled + _watch 见 scan_end 退出释放槽位(对齐 ②/③ 轨).
         handle = self._handles.get(scan_key)
         if handle is not None:
@@ -2129,7 +2119,7 @@ class ScanManager:
         """删除单个 scan（真删目录，spec §5.1 DELETE）。
 
         running scan -> ScanRunning（端点转 409，先 cancel 再删，避免删在跑 workflow 的目录致
-        _watch describe 不存在的 workflow / max_concurrent 槽位泄漏）；不存在 -> None（端点 404）。
+        _watch describe 不存在的 workflow）；不存在 -> None（端点 404）。
         删除范围由 ScanStore.delete_scan 决定（源①整删 scans/<id>/，源② legacy 根仅删产物保 ws 壳）。
         """
         scan_dir = self._store.get_scan_dir(ws, scan_id)

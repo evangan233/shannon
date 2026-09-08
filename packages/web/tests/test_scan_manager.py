@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from supernova_web.models import PathSource, RepoSource, ScanRequest
-from supernova_web.components.scan_manager import ScanManager, ScanRunning, TemporalUnavailable, TooManyScans
+from supernova_web.components.scan_manager import ScanManager, ScanRunning, TemporalUnavailable
 
 
 async def _ok():
@@ -59,7 +59,7 @@ async def test_start_submits_workflow_to_fixed_queue(tmp_path, monkeypatch):
     from supernova_core.services.temporal_infra import WEB_TASK_QUEUE_WHITEBOX
     from supernova_whitebox.pipeline.shared import PipelineInput
 
-    mgr = ScanManager(tmp_path, tmp_path / "repos", None, max_concurrent=2)
+    mgr = ScanManager(tmp_path, tmp_path / "repos", None)
     _patch_temporal_ok(monkeypatch, mgr)
     mock_client = _patch_client(monkeypatch)
 
@@ -83,7 +83,7 @@ async def test_start_submits_workflow_to_fixed_queue(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_start_lands_scan_in_scans_subdir(tmp_path, monkeypatch):
     """T3: start 建 scans/<scan_id>/session.json（ws 根不再写 session.json）。"""
-    mgr = ScanManager(tmp_path, tmp_path / "repos", None, max_concurrent=2)
+    mgr = ScanManager(tmp_path, tmp_path / "repos", None)
     _patch_temporal_ok(monkeypatch, mgr)
     _patch_client(monkeypatch)
     ws, scan_id = await mgr.start(ScanRequest(type="whitebox",
@@ -104,7 +104,7 @@ async def test_start_writes_submitted_at(tmp_path, monkeypatch):
     submitted_at 每次 start_workflow 提交刷新 -> resume 场景也准确(resume 时 created_at 是老的).
     提交失败(start_workflow 抛)不写此字段(start 已抛, 不到此分支).
     """
-    mgr = ScanManager(tmp_path, tmp_path / "repos", None, max_concurrent=2)
+    mgr = ScanManager(tmp_path, tmp_path / "repos", None)
     _patch_temporal_ok(monkeypatch, mgr)
     _patch_client(monkeypatch)
     before = time.time()
@@ -120,7 +120,7 @@ async def test_start_writes_submitted_at(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_start_cleanup_active_reqs_on_submit_failure(tmp_path, monkeypatch):
     """提交失败(start_workflow 抛)-> _active_reqs 必须清理, 否则 active_repo_sources 误报."""
-    mgr = ScanManager(tmp_path, tmp_path / "repos", None, max_concurrent=2)
+    mgr = ScanManager(tmp_path, tmp_path / "repos", None)
     _patch_temporal_ok(monkeypatch, mgr)
     mock_client = AsyncMock()
     mock_client.start_workflow = AsyncMock(side_effect=RuntimeError("temporal reject"))
@@ -138,7 +138,7 @@ async def test_start_cleanup_active_reqs_on_submit_failure(tmp_path, monkeypatch
 @pytest.mark.asyncio
 async def test_start_same_ws_two_scans_not_mutually_exclusive(tmp_path, monkeypatch):
     """T3: 同 ws 起两个 scan 不互斥（_handles 两键，不触发 TooManyScans）。"""
-    mgr = ScanManager(tmp_path, tmp_path / "repos", None, max_concurrent=2)
+    mgr = ScanManager(tmp_path, tmp_path / "repos", None)
     _patch_temporal_ok(monkeypatch, mgr)
     _patch_client(monkeypatch)
     ws1, id1 = await mgr.start(ScanRequest(type="whitebox",
@@ -154,14 +154,20 @@ async def test_start_same_ws_two_scans_not_mutually_exclusive(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_concurrency_limit_raises(tmp_path, monkeypatch):
-    mgr = ScanManager(tmp_path, tmp_path / "r", None, max_concurrent=1)
+async def test_start_no_longer_rejects_when_handles_full(tmp_path, monkeypatch):
+    """并发闸门下沉 worker 后（spec 2026-09-08-worker-scan-gate §7）：web 不再拒绝。
+
+    _handles 占满（甚至塞超）也应照常走 start 流程——排队发生在 worker 闸门。"""
+    mgr = ScanManager(tmp_path, tmp_path / "r", None)
     _patch_temporal_ok(monkeypatch, mgr)
-    mgr._handles[("existing", "s1")] = object()  # 占位 1 个在跑
-    with pytest.raises(TooManyScans):
-        await mgr.start(ScanRequest(type="whitebox",
-                                    source=PathSource(kind="path", value="/x"),
-                                    url="u", workspace="W2"))
+    _patch_client(monkeypatch)
+    mgr._handles[("existing", "s1")] = object()  # 占位（历史在跑）
+    mgr._handles[("existing", "s2")] = object()  # 超过旧上限也无妨
+    ws, scan_id = await mgr.start(ScanRequest(type="whitebox",
+                                              source=PathSource(kind="path", value="/x"),
+                                              url="u", workspace="W2"))
+    assert ws == "W2"
+    assert ("W2", scan_id) in mgr._handles  # 照常登记（_watch/cancel 簿记）
 
 
 @pytest.mark.asyncio
@@ -221,7 +227,7 @@ async def test_cancel_web_started_scan_marks_cancelled_and_writes_scan_end(tmp_p
     轨 ① 只调 handle.cancel(temporal 原生) 不够--worker 的 workflow except CancelledError
     分支不写 scan_end / 不更新 session(只有 try 正常完成分支调 finalize_summary)。若 web 端
     不兜底标记: ① session 卡 running -> heartbeat stale 后误显 interrupted(非 cancelled);
-    ② _watch 等不到 scan_end 永不退出 -> _handles 占死 -> max_concurrent 槽位泄漏,
+    ② _watch 等不到 scan_end 永不退出 -> _handles 占死（闸门下沉 worker 后仅簿记泄漏）,
     新扫描再也起不来。故轨 ① 须像 ②/③ 一样调 _mark_cancelled(写 session.status=cancelled
     + scan_end) -> _status_of 终态优先显 cancelled + _watch 见 scan_end 退出释放槽位。
     """
@@ -443,7 +449,7 @@ async def test_correlation_config_name_traversal_rejected(tmp_path, monkeypatch)
     """config_name="../evil" 必须被 store 遍历校验拦截(在 C1 raise ValueError 前)."""
     from supernova_web.components.multi_repo_config_store import MultiRepoConfigStore
     store = MultiRepoConfigStore(tmp_path / "configs")
-    mgr = ScanManager(tmp_path, tmp_path / "r", store, max_concurrent=2)
+    mgr = ScanManager(tmp_path, tmp_path / "r", store)
     _patch_temporal_ok(monkeypatch, mgr)
     with pytest.raises(ValueError):
         await mgr.start(ScanRequest(type="correlation", config_name="../evil"))
@@ -770,7 +776,7 @@ async def _start_corr_env(tmp_path, monkeypatch, *, yaml_text, url=None,
     from supernova_web.components.multi_repo_config_store import MultiRepoConfigStore
 
     sm = ScanManager(tmp_path, tmp_path / "r",
-                     MultiRepoConfigStore(tmp_path / "configs"), max_concurrent=8)
+                     MultiRepoConfigStore(tmp_path / "configs"))
     _patch_temporal_ok(monkeypatch, sm)
     submitted = {"wb": [], "corr": 0, "corr_paths": {}, "bb": None}
     if host_url is not None:

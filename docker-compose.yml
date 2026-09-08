@@ -51,7 +51,6 @@ services:
     extra_hosts:
       - "gitlab.futunn.com:172.24.20.196"
     environment:
-      - SUPERNOVA_WEB_MAX_CONCURRENT=${SUPERNOVA_WEB_MAX_CONCURRENT:-4}
       - SUPERNOVA_WEB_SCAN_TIMEOUT=${SUPERNOVA_WEB_SCAN_TIMEOUT:-0}
       - SUPERNOVA_TEMPORAL_HOST=temporal
       - SUPERNOVA_TEMPORAL_PORT=7233

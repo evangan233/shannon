@@ -130,7 +130,7 @@ def test_member_put_delete_403(app):
 
 
 def test_admin_bypasses_membership(app):
-    # workspace_member/manager 的 admin 直通 = canonical 用户名 "admin"（is_global_admin）
+    # workspace_member/manager 的 admin 直通由 is_global_admin 判定
     admin = _login(app, "admin", "admin")
     assert _put_ws(admin, "ws-a", {"currency": "USD", "models": {"m": _tiers()}}).status_code == 200
 

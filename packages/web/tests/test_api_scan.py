@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from supernova_web.app import create_app
-from supernova_web.components.scan_manager import TemporalUnavailable, TooManyScans
+from supernova_web.components.scan_manager import TemporalUnavailable
 from supernova_web.components.ws_config_store import default_ws_config
 
 
@@ -32,7 +32,7 @@ def _authed_app(tmp_workspaces, monkeypatch):
 
     create_app 之前需把 cookie_secure 关掉（get_config lru_cache）。
 
-    Task 4 起 /api/scan 还要求 ws 已存在 + 当前用户成员/admin。使用 canonical admin
+    Task 4 起 /api/scan 还要求 ws 已存在 + 当前用户成员/admin。使用 admin
     + 预建 WSX 目录, 使现有 6 个测试 (测 endpoint 错误处理, 非测成员) 不受影响。
     成员语义由 test_workspace_lifecycle.py 覆盖。
     """
@@ -92,17 +92,6 @@ def test_post_scan_400_temporal(_authed_app):
     client = _authed_client(app)
     tok = _csrf(client)
     assert client.post("/api/scan", json=_BODY, headers={"X-CSRF-Token": tok}).status_code == 400
-
-
-def test_post_scan_409_concurrent(_authed_app):
-    fake = FakeSM()
-    fake.exc = TooManyScans(1)
-    app = create_app(overrides={"scan_manager": fake})
-    app.state.auth_store = _authed_app.state.auth_store
-    app.state.session_manager = _authed_app.state.session_manager
-    client = _authed_client(app)
-    tok = _csrf(client)
-    assert client.post("/api/scan", json=_BODY, headers={"X-CSRF-Token": tok}).status_code == 409
 
 
 def test_post_scan_422_when_workspace_provider_config_missing(_authed_app):

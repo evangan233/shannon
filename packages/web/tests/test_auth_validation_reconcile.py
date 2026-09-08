@@ -55,7 +55,7 @@ def _store_with_running(tmp_path, workflow_id, probe_dir, state="running"):
 def _mgr(tmp_path, store):
     return ScanManager(
         workspaces_dir=tmp_path, repos_dir=tmp_path / "repos", config_store=MagicMock(),
-        max_concurrent=1, scan_timeout=0.0, ws_config_store=MagicMock(),
+        scan_timeout=0.0, ws_config_store=MagicMock(),
         auth_profile_store=store,
     )
 

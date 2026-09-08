@@ -61,7 +61,7 @@ def app_with_ws(tmp_workspaces, monkeypatch):
 
 @pytest.fixture
 def authed_client(app_with_ws, monkeypatch):
-    """已登录的 TestClient（canonical admin/admin-pw），供需要鉴权的现有测试迁移用。
+    """已登录的 TestClient（admin/admin-pw），供需要鉴权的现有测试迁移用。
 
     委托 app_with_ws（已有 remount + cookie_secure=0）；此处仅补「建用户 + 登录」。
     """

@@ -388,7 +388,6 @@ export function buildBody(type: ScanType, f: FormState, workspace: string, corrY
 
 function renderError(e: ApiError, t: TFunction): string {
   if (e.status === 400) return t("scan.errors.temporal");
-  if (e.status === 409) return t("scan.errors.concurrent");
   if (e.status === 422) {
     const detail = (e.body as { detail?: unknown })?.detail;
     // string detail = 后端 ValueError 族原文（scan API except ValueError 转来：仓库未就绪 /

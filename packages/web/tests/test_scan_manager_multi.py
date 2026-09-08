@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from supernova_web.models import RepoSource, ScanRequest
-from supernova_web.components.scan_manager import ScanManager, TooManyScans
+from supernova_web.components.scan_manager import ScanManager
 
 
 def _make_scan_dir(workspaces_dir, ws, scan_id, status="running",
@@ -202,11 +202,11 @@ async def test_resume_second_time_appends_resume_2(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resume_too_many_scans_raises(tmp_path, monkeypatch):
-    """resume 也受 max_concurrent 上限（_handles 满 -> TooManyScans）。"""
-    mgr = ScanManager(tmp_path, tmp_path / "r", None, max_concurrent=1)
+async def test_resume_no_longer_rejects_when_handles_full(tmp_path, monkeypatch):
+    """并发闸门下沉 worker 后（spec 2026-09-08-worker-scan-gate §7）：resume 不再拒绝。"""
+    mgr = ScanManager(tmp_path, tmp_path / "r", None)
     _patch_temporal_ok(monkeypatch, mgr)
-    mgr._handles[("other", "s0")] = object()  # 占满 1 个槽
+    _patch_client(monkeypatch)
+    mgr._handles[("other", "s0")] = object()  # 占位（历史在跑）
     _make_scan_dir(tmp_path, "WS", scan_id="s1", status="interrupted")
-    with pytest.raises(TooManyScans):
-        await mgr.resume("WS", "s1")
+    await mgr.resume("WS", "s1")  # 不抛 TooManyScans，照常续跑

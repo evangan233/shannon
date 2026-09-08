@@ -19,7 +19,7 @@ from supernova_web.models import RepoSource, ScanRequest
 
 
 def _mgr(tmp_path):
-    return ScanManager(tmp_path, tmp_path / "repos", None, max_concurrent=2)
+    return ScanManager(tmp_path, tmp_path / "repos", None)
 
 
 async def _ok():
