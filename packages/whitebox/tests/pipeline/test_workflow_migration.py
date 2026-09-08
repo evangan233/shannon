@@ -16,14 +16,25 @@ from temporalio import activity
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+from supernova_core.services import scan_gate as gate_mod
 from supernova_whitebox.pipeline.workflows import WhiteboxScanWorkflow
 from supernova_whitebox.pipeline.shared import PipelineInput
+
+
+@pytest.fixture(autouse=True)
+def _reset_gate():
+    """闸门接线后 run() 首个 activity 是 scan_gate_try_acquire（真实现）——
+    进程级 gate 单例须跨测试清态，防槽残留互扰（worker 路径占槽泄漏到 CLI 用例）。"""
+    gate_mod.reset_gate_for_tests()
+    yield
+    gate_mod.reset_gate_for_tests()
 
 
 def _migration_activity_mocks(calls: list) -> list:
     """3 个迁移 activity mock + log_phase_start_activity(让 workflow 主体 await 期间
     并行 heartbeat activity 被 worker poll + 执行; 否则 workflow 在首个未注册 activity
-    立即失败, heartbeat 还没轮到执行). run_heartbeat 长驻(simulate long-running)."""
+    立即失败, heartbeat 还没轮到执行). run_heartbeat 长驻(simulate long-running).
+    gate activity 注册真实现（闸门段在 setup_display 之前，缺注册则 workflow 卡闸门）."""
     @activity.defn
     async def setup_display(i):
         calls.append("setup_display")
@@ -40,7 +51,8 @@ def _migration_activity_mocks(calls: list) -> list:
         # workflow 主体首个 await; sleep 给并行 heartbeat activity 时间被 worker poll + 执行
         # (模拟真实 workflow 主体跑 activity 耗时, heartbeat 并行).
         await asyncio.sleep(0.2)
-    return [setup_display, run_heartbeat, finalize_summary, log_phase_start_activity]
+    return [gate_mod.scan_gate_try_acquire, gate_mod.scan_gate_release,
+            setup_display, run_heartbeat, finalize_summary, log_phase_start_activity]
 
 
 @pytest.mark.asyncio

@@ -41,6 +41,7 @@ from supernova_core.models.audit import AgentMetricsSummary, WorkflowSummary
 from supernova_core.audit.display_lifecycle import run_with_display
 from supernova_core.display.structured_event_renderer import wire_web_event_file
 from supernova_core.audit.session_registry import set_audit_session, clear_audit_session
+from supernova_core.services.scan_gate import scan_gate_try_acquire, scan_gate_release
 from supernova_core.runtime.heartbeat import HeartbeatManager, mark_owner_if_unset
 from supernova_core.runtime.scan_runner import (
     ScanCancelled,
@@ -156,6 +157,10 @@ async def run_scan(input: BlackboxPipelineInput, temporal_address: str = "localh
             cleanup_auth_state_activity,
             setup_display, finalize_summary,
             run_host_proxy_setup, stop_host_proxy,
+            # 全局扫描闸门（spec 2026-09-08-worker-scan-gate §5）：CLI 进程独立
+            # gate 实例（空闸直接 granted），但 activity 必须注册——漏注册 =
+            # workflow 卡闸门段（unregistered activity 无限重试）。
+            scan_gate_try_acquire, scan_gate_release,
         ],
         graceful_shutdown_timeout=timedelta(seconds=10),
     )

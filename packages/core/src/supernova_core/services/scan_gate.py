@@ -190,13 +190,18 @@ async def acquire_gate_slot(descriptor: dict) -> None:
 
     cancel 传导：temporal cancel 在 sleep/execute_activity await 点抛 CancelledError，
     此时尚未获槽、无需 release——waiting 残留由 janitor 回收（spec §6）。
+    retry_policy=maximum_attempts=1：activity 是读内存 dict 的瞬时操作，失败无重试
+    价值（轮询循环下一轮天然重试）；且默认无限重试会把 unregistered activity
+    （CLI worker 漏注册等部署不一致）变成「workflow 永挂闸门」而非快速失败。
     """
     from temporalio import workflow
+    from temporalio.common import RetryPolicy
     from temporalio.exceptions import ApplicationError
     while True:
         r = await workflow.execute_activity(
             scan_gate_try_acquire, descriptor,
             start_to_close_timeout=_ACTIVITY_TIMEOUT,
+            retry_policy=RetryPolicy(maximum_attempts=1),
         )
         if r.get("granted"):
             return
@@ -211,8 +216,10 @@ async def acquire_gate_slot(descriptor: dict) -> None:
 async def release_gate_slot() -> None:
     """workflow 侧释放（finally 调用）：尽力释放，失败吞掉由 janitor 兜底。"""
     from temporalio import workflow
+    from temporalio.common import RetryPolicy
     try:
         await workflow.execute_activity(
-            scan_gate_release, start_to_close_timeout=_ACTIVITY_TIMEOUT)
+            scan_gate_release, start_to_close_timeout=_ACTIVITY_TIMEOUT,
+            retry_policy=RetryPolicy(maximum_attempts=1))
     except Exception:
         pass

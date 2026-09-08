@@ -53,6 +53,7 @@ from .pipeline.activities import (
 )
 from .pipeline.workflows import WhiteboxScanWorkflow
 from .pipeline.shared import PipelineInput, PipelineState
+from supernova_core.services.scan_gate import scan_gate_try_acquire, scan_gate_release
 from supernova_core.utils.paths import resolve_workspaces_dir
 from supernova_core.services.temporal_infra import generate_task_queue
 from supernova_core.runtime.heartbeat import HeartbeatManager, mark_owner_if_unset
@@ -223,6 +224,10 @@ async def run_scan(input: PipelineInput, temporal_address: str = "localhost:7233
             persist_completed_agents,
             setup_display, finalize_summary,
             cleanup_auth_state_activity,
+            # 全局扫描闸门（spec 2026-09-08-worker-scan-gate §5）：CLI 进程独立
+            # gate 实例（空闸直接 granted），但 activity 必须注册——漏注册 =
+            # workflow 卡闸门段（unregistered activity 无限重试）。
+            scan_gate_try_acquire, scan_gate_release,
         ],
         graceful_shutdown_timeout=timedelta(seconds=10),
     )
