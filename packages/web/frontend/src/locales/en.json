@@ -1399,6 +1399,8 @@
       "title": "Workspace Membership",
       "workspace": "Workspace",
       "wsRole": "Role",
+      "wsMember": "Workspace member",
+      "wsManager": "Workspace admin",
       "add": "Add",
       "remove": "Remove",
       "save": "Save",

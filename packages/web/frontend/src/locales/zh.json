@@ -1399,6 +1399,8 @@
       "title": "工作区归属",
       "workspace": "工作区",
       "wsRole": "角色",
+      "wsMember": "工作区成员",
+      "wsManager": "工作区管理员",
       "add": "加入",
       "remove": "移除",
       "save": "保存",

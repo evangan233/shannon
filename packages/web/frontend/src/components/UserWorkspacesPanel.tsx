@@ -92,10 +92,10 @@ export function UserWorkspacesPanel({ user }: { user: UserRow }) {
                 {role ? (
                   <>
                     <Select value={role} onValueChange={(v) => onRoleChange(ws, v as "manager" | "member")}>
-                      <SelectTrigger className="h-8 w-28"><SelectValue /></SelectTrigger>
+                      <SelectTrigger className="h-8 w-36"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="member">{t("users.members.wsRole")} member</SelectItem>
-                        <SelectItem value="manager">manager</SelectItem>
+                        <SelectItem value="member">{t("users.members.wsMember")}</SelectItem>
+                        <SelectItem value="manager">{t("users.members.wsManager")}</SelectItem>
                       </SelectContent>
                     </Select>
                     <Button variant="ghost" size="icon-sm" aria-label={t("users.members.remove")} title={t("users.members.remove")} onClick={() => onRemove(ws)}>
