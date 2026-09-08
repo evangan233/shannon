@@ -161,6 +161,12 @@ async def reconcile_orphaned(ws_dir: Path, is_running: bool,
         if is_scan_alive(ws_dir):
             return False
 
+        # 排队中（worker 闸门 waiting 命中）：正常等待态，心跳不更新是预期
+        # （spec 2026-09-08-worker-scan-gate §7.5）——temporal 查询前短路。
+        from supernova_web.components.workspaces_indexer import _is_queued_in_gate
+        if _is_queued_in_gate(ws_dir):
+            return False
+
         # temporal workflow 仍 RUNNING（含 worker 队列排队等执行的阶段）→ scan 绝非孤儿，
         # 不写 scan_end。对症并发排队超提交宽限被误判 interrupted（2026-08-04 幽灵 scan）：
         # 第二个白盒 scan 被第一个占着 worker，排队 >120s 期间无 heartbeat，旧逻辑据 heartbeat

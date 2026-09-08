@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -50,8 +51,62 @@ def _compute_status(path: Path, session_status: str | None) -> str:
     # hr_1784014329(提交后 1s 误杀)即缺提交宽限门。
     if is_scan_alive(path):
         return "running"
+    # queued 档（spec 2026-09-08-worker-scan-gate §7.4）：非终态 + 心跳死但命中
+    # worker 闸门 waiting——修「排队 >120s 无心跳误显已中断」的预存 bug（排队期间
+    # workflow 在闸门轮询、不写 heartbeat 是预期行为）。
+    if _is_queued_in_gate(path):
+        return "queued"
     # 无终态 + 无 fresh heartbeat = 未正常结束(死掉的孤儿/容器重启后子进程同死)。
     return "interrupted"
+
+
+def _gate_state_file_for(p: Path) -> Path | None:
+    """从 scan_dir/ws_dir 反推 workspaces 根下的 gate_state.json（worker 落盘约定）。
+
+    scan_dir = <workspaces_root>/<ws>/scans/<scan_id>：scans 段上退两级才是根。"""
+    for anc in p.parents:
+        if anc.name == "scans":
+            return anc.parent.parent / "gate_state.json"
+    for anc in p.parents:
+        if anc.name == "workspaces":
+            return anc / "gate_state.json"
+    return None
+
+
+def _ws_and_scan_of(path: Path) -> tuple[str, str]:
+    """scan_dir=…/<ws>/scans/<scan_id> → (ws, scan_id)；ws_dir 场景 scan_id 空。"""
+    parts = path.parts
+    if len(parts) >= 3 and parts[-2] == "scans":
+        return parts[-3], parts[-1]
+    return (parts[-1] if parts else "", "")
+
+
+def _is_queued_in_gate(path: Path) -> bool:
+    """非终态 + 心跳死时查闸门快照：本 scan（或 corr 非 reused 子仓）在 waiting。"""
+    from supernova_core.services.scan_gate import read_gate_snapshot_file
+
+    sf = _gate_state_file_for(path)
+    if sf is None:
+        return False
+    snap = read_gate_snapshot_file(sf)
+    if not snap:
+        return False
+    waiting = {(w.get("ws", ""), w.get("scan_id", ""))
+               for w in snap.get("waiting", [])}
+    if not waiting:
+        return False
+    ws, scan_id = _ws_and_scan_of(path)
+    if (ws, scan_id) in waiting:
+        return True
+    # 跨仓主行：corr_children 非 reused 子仓在排队 → 主行 queued（spec §7.4）
+    try:
+        sess = json.loads((path / "session.json").read_text())
+    except (OSError, ValueError):
+        return False
+    for child in (sess or {}).get("corr_children") or []:
+        if not child.get("reused") and (ws, child.get("scan_id", "")) in waiting:
+            return True
+    return False
 
 
 class WorkspacesIndexer:
