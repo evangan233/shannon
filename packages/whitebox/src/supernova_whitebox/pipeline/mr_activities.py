@@ -53,14 +53,33 @@ def _git(repo: Path, *args: str, check: bool = True) -> str:
     return proc.stdout.strip()
 
 
+def _fetch_branch(repo: Path, ref: str) -> None:
+    """best-effort fetch（check=False 的可观测版）：失败不挡流程——本地仓无
+    remote（测试/本地调试）或远端瞬时故障时本地 ref 已可用；但 stderr 落
+    warning——2026-09-08 事故排障时 fetch 真实成败不可见，只能靠 rev-parse
+    报错倒推。"""
+    proc = subprocess.run(["git", "fetch", "origin", ref], cwd=repo,
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        logger.warning("git fetch origin %s failed (rc=%d): %s",
+                       ref, proc.returncode, proc.stderr.strip())
+
+
 def _rev_parse(repo: Path, ref: str) -> str:
-    out = _git(repo, "rev-parse", "--verify", ref + "^{commit}")
-    if not out:
-        raise PentestError(
-            f"MR ref 解析失败: {ref}", category="mr_prepare",
-            error_code=ErrorCode.REPO_NOT_FOUND,
-        )
-    return out
+    """裸名 → origin/<ref> 兜底（2026-09-08 risk_user_side!153 事故）。
+
+    fetch/clone 只建 refs/remotes/origin/<ref>（remote-tracking），而 git 裸名
+    解析路径（gitrevisions）不含它——repo 按 head 分支 clone 时 head 有本地
+    分支碰巧成功、base 无本地分支必失败。逐候选试解析，全败才 fail-fast。
+    """
+    for candidate in (ref, f"origin/{ref}"):
+        out = _git(repo, "rev-parse", "--verify", candidate + "^{commit}", check=False)
+        if out:
+            return out
+    raise PentestError(
+        f"MR ref 解析失败: {ref}（本地分支与 origin/{ref} 均无）",
+        category="mr_prepare", error_code=ErrorCode.REPO_NOT_FOUND,
+    )
 
 
 @activity.defn
@@ -85,8 +104,8 @@ async def run_mr_repo_prepare(input: ActivityInput) -> dict:
         )
 
     # fetch best-effort：本地仓无 remote（测试/本地调试）时忽略失败，本地 ref 已可用
-    _git(repo, "fetch", "origin", head_ref, check=False)
-    _git(repo, "fetch", "origin", base_ref, check=False)
+    _fetch_branch(repo, head_ref)
+    _fetch_branch(repo, base_ref)
 
     head_commit = _rev_parse(repo, head_ref)
     base_commit = _rev_parse(repo, base_ref)
@@ -116,7 +135,7 @@ async def _prepare_by_commits(repo: Path, input: ActivityInput) -> dict:
     """
     # merge commit 在目标分支历史上——fetch 目标分支即带下（best-effort 同上）。
     if input.mr_base_ref:
-        _git(repo, "fetch", "origin", input.mr_base_ref, check=False)
+        _fetch_branch(repo, input.mr_base_ref)
 
     try:
         head_commit = _rev_parse(repo, input.mr_head_commit or "")

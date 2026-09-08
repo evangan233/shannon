@@ -91,6 +91,56 @@ async def test_repo_prepare_resolves_merge_base_and_checks_out_head(mr_repo, tmp
     assert head == result["head_commit"]
 
 
+@pytest.fixture()
+def remote_mr_repo(tmp_path):
+    """事故形态（2026-09-08 risk_user_side!153）：repo 注册按 MR head 分支
+    clone（-b head），base 分支只存在于 refs/remotes/origin/ 下、无同名本地
+    分支——裸名 rev-parse 解析不到 remote-tracking ref（gitrevisions 路径
+    不含 refs/remotes/origin/<name>）。"""
+    origin = tmp_path / "origin.git"
+    _git(tmp_path, "init", "-q", "--bare", str(origin))
+    work = tmp_path / "work"
+    work.mkdir()
+    _git(work, "init", "-q", "-b", "feature/v20260618_th")
+    _git(work, "config", "user.email", "t@t")
+    _git(work, "config", "user.name", "t")
+    f = work / "app.py"
+    f.write_text("def h(req):\n    q = req['q']\n    q = sanitize(q)\n    return db(q)\n")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-qm", "base")
+    _git(work, "push", "-q", str(origin), "feature/v20260618_th")
+    _git(work, "checkout", "-qb", "feature/th-credit-limit-v2")
+    f.write_text("def h(req):\n    q = req['q']\n    return db(q)\n"
+                 "\n\ndef new_route(req):\n    return db(req['id'])\n")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-qm", "head")
+    _git(work, "push", "-q", str(origin), "feature/th-credit-limit-v2")
+    repo = tmp_path / "repo"
+    _git(tmp_path, "clone", "-q", "-b", "feature/th-credit-limit-v2", str(origin), str(repo))
+    return repo
+
+
+async def test_repo_prepare_resolves_base_from_remote_tracking_only(
+        remote_mr_repo, tmp_path):
+    """base 分支无本地分支、仅 origin/<base> remote-tracking（fetch/clone 产物）
+    → prepare 应经 origin/<ref> 兜底解析成功，而非 fail-fast。"""
+    repo = remote_mr_repo
+    act = _act(repo, tmp_path,
+               mr_base_ref="feature/v20260618_th",
+               mr_head_ref="feature/th-credit-limit-v2")
+
+    result = await run_mr_repo_prepare(act)
+
+    base_sha = subprocess.run(
+        ["git", "rev-parse", "refs/remotes/origin/feature/v20260618_th"],
+        cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+    assert result["base_commit"] == base_sha
+    assert result["merge_base"] == base_sha  # head 从 base 分出，merge-base 即 base tip
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                          capture_output=True, text=True, check=True).stdout.strip()
+    assert head == result["head_commit"]
+
+
 async def test_repo_prepare_fails_fast_on_unresolvable_ref(mr_repo, tmp_path):
     act = _act(mr_repo, tmp_path)
     act.mr_base_ref = "no-such-ref"
