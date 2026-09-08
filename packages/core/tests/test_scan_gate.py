@@ -1,0 +1,127 @@
+"""ScanGate 单测：FIFO 授予 / 幂等 / queue_full / release / reap / preload / 快照原子写。"""
+
+import json
+from unittest.mock import MagicMock, patch
+
+from supernova_core.services.scan_gate import (
+    ScanGate, read_gate_snapshot_file, reset_gate_for_tests,
+)
+
+
+def _mk(capacity=2, max_waiting=3, state_path=None):
+    return ScanGate(capacity, max_waiting, state_path)
+
+
+def test_first_acquire_granted_immediately():
+    g = _mk()
+    assert g.try_acquire("w1", {"kind": "whitebox"})["granted"] is True
+
+
+def test_fifo_earliest_waiter_wins_slot():
+    g = _mk(capacity=1)
+    g.try_acquire("w1", {})
+    assert g.try_acquire("w2", {})["granted"] is False
+    assert g.try_acquire("w3", {})["granted"] is False
+    g.release("w1")
+    # w2 是最早等待者：w3 先 poll 也不能插队（近似 FIFO，spec §4）
+    assert g.try_acquire("w3", {})["granted"] is False
+    assert g.try_acquire("w2", {})["granted"] is True
+    assert g.try_acquire("w3", {})["granted"] is False
+
+
+def test_idempotent_reacquire():
+    g = _mk(capacity=1)
+    g.try_acquire("w1", {})
+    assert g.try_acquire("w1", {})["granted"] is True
+
+
+def test_queue_full_rejects_new_waiter():
+    g = _mk(capacity=1, max_waiting=1)
+    g.try_acquire("w1", {})
+    assert g.try_acquire("w2", {})["granted"] is False  # w2 占住唯一 waiting 位
+    assert g.try_acquire("w3", {})["queue_full"] is True
+
+
+def test_position_reports_queue_rank():
+    g = _mk(capacity=1, max_waiting=10)
+    g.try_acquire("w1", {})
+    g.try_acquire("w2", {})
+    g.try_acquire("w3", {})
+    assert g.try_acquire("w3", {})["position"] == 2  # 第 2 位
+
+
+def test_release_and_reap_clear_state():
+    g = _mk()
+    g.try_acquire("w1", {})
+    g.try_acquire("w2", {})  # waiting
+    g.release("w1")
+    assert "w1" not in g.held
+    g.reap(["w2"])
+    assert "w2" not in g.waiting
+
+
+def test_preload_counts_as_held():
+    g = _mk(capacity=2)
+    g.preload(["a", "b"])
+    assert g.try_acquire("c", {})["granted"] is False  # 槽被预占满
+    assert g.try_acquire("a", {})["granted"] is True   # 预占者幂等命中
+
+
+def test_candidate_ids_union():
+    g = _mk()
+    g.try_acquire("w1", {})
+    g.try_acquire("w2", {})
+    assert set(g.candidate_ids()) == {"w1", "w2"}
+
+
+def test_snapshot_written_atomically(tmp_path):
+    sf = tmp_path / "gate_state.json"
+    g = _mk(state_path=sf)
+    g.try_acquire("w1", {"kind": "whitebox", "ws": "prod",
+                         "scan_id": "s1", "label": "repo@main"})
+    data = json.loads(sf.read_text())
+    assert data["capacity"] == 2
+    assert data["held"][0]["scan_id"] == "s1"
+    assert not sf.with_suffix(".json.tmp").exists()  # 原子写无残留 tmp
+
+
+def test_snapshot_state_path_none_is_noop(tmp_path):
+    g = _mk(state_path=None)
+    g.try_acquire("w1", {})  # 不应抛错
+
+
+def test_read_gate_snapshot_file_missing_returns_none(tmp_path):
+    assert read_gate_snapshot_file(tmp_path / "nope.json") is None
+
+
+def test_gate_scan_id_from_event_file():
+    from supernova_core.services.scan_gate import gate_scan_id_from_event_file
+    assert gate_scan_id_from_event_file(
+        "/app/workspaces/prod/scans/20260908-120000/events.ndjson") == "20260908-120000"
+    assert gate_scan_id_from_event_file(None) == ""
+    assert gate_scan_id_from_event_file("") == ""
+
+
+def test_gate_ws_from_path():
+    from supernova_core.services.scan_gate import gate_ws_from_path
+    assert gate_ws_from_path(
+        "/app/workspaces/prod/scans/x/events.ndjson") == "prod"
+    assert gate_ws_from_path("/app/workspaces/prod") == "prod"
+    assert gate_ws_from_path("") == ""
+
+
+def test_activity_wrappers_delegate_to_gate():
+    """activity 包装：workflow_id 取 activity.info()，逻辑委托进程级 gate。"""
+    import asyncio
+    from supernova_core.services import scan_gate as mod
+
+    reset_gate_for_tests()
+    info = MagicMock()
+    info.workflow_id = "wf-abc"
+    with patch.object(mod.activity, "info", return_value=info), \
+         patch.dict("os.environ", {"SUPERNOVA_SCAN_GATE_CAPACITY": "1"}):
+        r = asyncio.run(mod.scan_gate_try_acquire({"kind": "whitebox"}))
+        assert r["granted"] is True
+        asyncio.run(mod.scan_gate_release())
+        assert mod._gate().candidate_ids() == []
+    reset_gate_for_tests()
