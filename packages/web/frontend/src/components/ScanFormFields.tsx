@@ -7,9 +7,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { RepoCombobox } from "./RepoCombobox";
-import { LinkResolveBox } from "./LinkResolveBox";
 import { RepoQuickActions } from "./RepoQuickActions";
-import type { ResolveLinkResult } from "@/api/types";
 import { CredentialRows } from "./auth/CredentialRows";
 import { AddRepoDialog } from "./AddRepoDialog";
 import { CloneProgress } from "./CloneProgress";
@@ -87,9 +85,6 @@ interface Props {
   wsLoading: boolean;
   /** 重跑预填的黑盒复用 scan_id（同 ws）；首帧保留预填值，不被 ws-change 清空 / 默认选最新覆盖。 */
   presetReuseScanId?: string;
-  /** 链接解析回调（2026-09-03 仓库入口整合 B 段）：白盒 Step2 链接框解析成功时上抛——
-   *  页面统一处理回填 repo + MR 链接自动切类型。缺省不渲染链接框。 */
-  onLinkResolved?: (r: ResolveLinkResult) => void;
 }
 
 /** 分组小标题：coral 竖条 eyebrow（复用 settings Section 的视觉语言，适配中文卡内分组——
@@ -780,7 +775,6 @@ export function ScanFormFields({
   onWorkspaceChange,
   wsLoading,
   presetReuseScanId,
-  onLinkResolved,
 }: Props) {
   const { t } = useTranslation();
   const { user } = useAuth();
@@ -876,9 +870,6 @@ export function ScanFormFields({
       )}
       <AddRepoDialog ws={workspace} open={addOpen} onOpenChange={setAddOpen}
         onCreated={(name) => set({ selectedRepo: name })} />
-      {onLinkResolved && (
-        <LinkResolveBox workspace={workspace} onResolved={onLinkResolved} />
-      )}
     </div>
   ) : (
     <div className="text-xs text-muted-foreground">{t("scan.fields.selectWsFirst")}</div>

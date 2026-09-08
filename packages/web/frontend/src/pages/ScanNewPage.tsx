@@ -244,8 +244,7 @@ export function validateAuth(a: AuthFormState, t: TFunction): string | null {
  *  repo_state=cloning 时由页面挂起，轮询 SWR 共享 key ["repos", ws]（两张表单的
  *  仓库下拉同缓存，refresh 一处全局生效），repo 脱离忙态即停。
  *
- *  放页面级而非 LinkResolveBox 内：白盒解析 MR 链接会切到 MR 表单、卸载白盒侧
- *  组件实例，提示与轮询态不能随之丢失。 */
+ *  放页面级而非 LinkResolveBox 内：组件随表单切换卸载，提示与轮询态不能随之丢失。 */
 const CLONE_POLL_MS = 2000;
 const CLONE_BUSY_STATES = new Set(["cloning", "pulling", "extracting", "empty"]);
 
@@ -661,9 +660,9 @@ export function ScanNewPage() {
     try { setAnalysis(await cancelCorrelationTopologyAnalysis(workspace, analysisId)); }
     catch (e) { setAnalysisError(e instanceof Error ? e.message : String(e)); }
   };
-  /** 链接解析回填（2026-09-03 仓库入口整合 B 段）：仓库立即选中（cloning 也选中，
-   *  下载提示由页面级 CloneWatch 承担）；MR 链接附 refs 回填，且在非 MR 表单解析到
-   *  MR 时自动切类型（白盒粘 MR 链接 → setType("mr")，refs 已就位）。
+  /** 链接解析回填（2026-09-03 仓库入口整合 B 段；2026-09-08 白盒侧链接框删除，
+   *  仅剩 MR 表单 hero 框触发）：仓库立即选中（cloning 也选中，下载提示由页面级
+   *  CloneWatch 承担）；MR 链接附 refs 回填。
    *  MR refs 回填时同步 mrFlashAt（2026-09-04 重排）：RefRangeInput 收到新时间戳做
    *  一次 coral 环脉冲——回填成功的「答案式」确认动效。 */
   const [pendingClone, setPendingClone] = useState<string | null>(null);
@@ -680,10 +679,7 @@ export function ScanNewPage() {
     }
     set(patch);
     if (r.repo_state === "cloning") setPendingClone(r.repo);
-    if (r.kind === "mr") {
-      setMrFlashAt(Date.now());
-      if (type !== "mr") setType("mr");
-    }
+    if (r.kind === "mr") setMrFlashAt(Date.now());
   };
 
   const selectTopologyRepos = (repos: string[]) => {
@@ -844,7 +840,6 @@ export function ScanNewPage() {
               wsList={wsList}
               onWorkspaceChange={setWorkspace}
               wsLoading={wsLoading}
-              onLinkResolved={handleLinkResolved}
             />
           ) : type === "mr" ? (
             /* MR 增量扫描（spec 2026-09-03 §3.1/§6；2026-09-04 布局重排）：
@@ -924,7 +919,6 @@ export function ScanNewPage() {
                       workspace={workspace}
                       accepts={["mr"]}
                       onResolved={handleLinkResolved}
-                      variant="hero"
                     />
                   </section>
 
@@ -1040,7 +1034,8 @@ export function ScanNewPage() {
               />
             </div>
           )}
-          {/* 链接解析触发的下载提示（表单区末尾——三张表单共用，不随表单切换卸载） */}
+          {/* 链接解析触发的下载提示（表单区末尾，MR hero 触发；白盒侧链接框已删
+              2026-09-08——新仓库走「+ 添加仓库」弹窗，克隆提示仍由 CloneWatch 承担） */}
           {pendingClone && (
             <CloneWatch workspace={workspace} name={pendingClone} onDone={() => setPendingClone(null)} />
           )}

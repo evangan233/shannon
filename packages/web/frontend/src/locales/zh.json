@@ -664,7 +664,6 @@
       "rangeReady": "将检测此范围内的增量变更"
     },
     "link": {
-      "inputLabel": "或直接粘贴仓库 / MR 链接",
       "placeholder": "https://gitlab.example.com/group/repo/-/merge_requests/123",
       "resolveBtn": "解析",
       "resolving": "解析中…",

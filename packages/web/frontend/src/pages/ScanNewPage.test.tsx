@@ -1502,23 +1502,6 @@ describe("ScanNewPage 链接解析（resolve-link 回填，2026-09-03 仓库入�
     fireEvent.click(screen.getByTestId("link-resolve-btn"));
   }
 
-  it("白盒表单粘 MR 链接：自动切到 MR + 回填 refs + 选中仓库", async () => {
-    server.use(
-      REPOS_READY(),
-      mockResolve({ kind: "mr", repo: "nodegoat", base_ref: "main", head_ref: "feature/xss", repo_state: "ready" }),
-    );
-    renderPageFresh();
-    await selectWorkspace("ws1");
-    // 白盒表单（Step2 仓库）内有链接框
-    await waitFor(() => expect(screen.getByTestId("link-url-input")).toBeInTheDocument());
-    await resolveLink("https://gitlab.example.com/nodegoat/-/merge_requests/42");
-    // 自动切类型：MR 表单渲染 + refs 回填 + repo 选中
-    await waitFor(() => expect(screen.getByTestId("mr-form")).toBeInTheDocument());
-    expect((screen.getByTestId("mr-base-ref") as HTMLInputElement).value).toBe("main");
-    expect((screen.getByTestId("mr-head-ref") as HTMLInputElement).value).toBe("feature/xss");
-    await waitFor(() => expect(screen.getByText("nodegoat")).toBeInTheDocument());
-  });
-
   it("MR 表单粘仓库链接：提示切白盒，不切类型不回填", async () => {
     server.use(
       REPOS_READY(),
@@ -1564,11 +1547,11 @@ describe("ScanNewPage 链接解析（resolve-link 回填，2026-09-03 仓库入�
       mockResolve({ kind: "mr", repo: "nodegoat", base_ref: "main", head_ref: "feature/xss", repo_state: "cloning" }),
     );
     renderPageFresh();
+    fireEvent.click(screen.getByRole("button", { name: "MR 增量扫描" }));
     await selectWorkspace("ws1");
-    await waitFor(() => expect(screen.getByTestId("link-url-input")).toBeInTheDocument());
-    await resolveLink("https://gitlab.example.com/nodegoat/-/merge_requests/42");
-    // 切到 MR + refs 回填 + 仓库已选中（cloning 也立即选中）
     await waitFor(() => expect(screen.getByTestId("mr-form")).toBeInTheDocument());
+    await resolveLink("https://gitlab.example.com/nodegoat/-/merge_requests/42");
+    // refs 回填 + 仓库已选中（cloning 也立即选中）
     await waitFor(() => expect(screen.getByText("nodegoat")).toBeInTheDocument());
     // 下载中提示出现（CloneWatch 轮询中）
     await waitFor(() => expect(screen.getByText(/正在下载仓库/)).toBeInTheDocument());

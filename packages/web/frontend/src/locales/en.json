@@ -664,7 +664,6 @@
       "rangeReady": "Incremental scan will cover this range"
     },
     "link": {
-      "inputLabel": "Or paste a repo / MR link",
       "placeholder": "https://gitlab.example.com/group/repo/-/merge_requests/123",
       "resolveBtn": "Resolve",
       "resolving": "Resolving…",
