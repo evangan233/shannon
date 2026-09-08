@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from supernova_web.auth.dependencies import current_user, require_admin, workspace_manager
 from supernova_web.components.workspace_provisioner import (
-    ensure_global_admin_member,
+    ensure_global_admin_members,
     is_global_admin,
     is_safe_workspace_name,
 )
@@ -56,7 +56,7 @@ async def create_workspace(body: CreateWorkspaceIn, request: Request,
     request.app.state.ws_config_store.write(ws, default_ws_config())
     store = request.app.state.auth_store
     store.add_workspace_member(ws, user.id, "manager")
-    ensure_global_admin_member(ws, store)
+    ensure_global_admin_members(ws, store)
     return {"name": ws}
 
 

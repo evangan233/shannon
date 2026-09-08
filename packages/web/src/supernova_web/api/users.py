@@ -61,13 +61,13 @@ async def set_theme(body: ThemeIn, request: Request,
 async def set_pinned_workspace(body: PinnedWorkspaceIn, request: Request,
                                user: User = Depends(current_user)):
     """per-user 置顶工作区（IA 重设计 §2.3）。只能 pin 有权限的 ws
-    （canonical admin 全部、其他用户/超管需为成员）。"""
+    （admin 全部、其他用户需为成员）。"""
     _check_csrf(request)
     if not is_safe_workspace_name(body.workspace):
         raise HTTPException(422, "invalid workspace name")
     # workspace_member 依赖项的 ws 来自路径参数，此处 ws 来自 body，手动复用同款鉴权。
     # 顺序：先 403（成员检查）后 404（存在性）--非成员对任意 ws 一律 403，不泄露 ws 存在性，
-    # 与 workspace_member 依赖项语义一致；canonical admin 跳过 403 后命中 404。get_workspace_member_role
+    # 与 workspace_member 依赖项语义一致；admin 跳过 403 后命中 404。get_workspace_member_role
     # 对不存在的 ws 返 None -> 403，故非成员探测不到存在性。
     if not is_global_admin(user):
         role = request.app.state.auth_store.get_workspace_member_role(body.workspace, user.id)
@@ -181,11 +181,13 @@ async def update_role(user_id: int, body: UpdateRoleIn, request: Request,
         raise HTTPException(409, "cannot demote last admin")
     previous_role = target.role
     store.update_role(user_id, body.role)
-    if target.username == "admin":
-        if body.role == "admin":
-            ensure_global_admin_access(request.app.state.config.workspaces_dir, store)
-        elif previous_role == "admin":
-            store.remove_user_from_workspaces(target.id)
+    if body.role == "admin":
+        ensure_global_admin_access(request.app.state.config.workspaces_dir, store)
+    elif previous_role == "admin":
+        store.remove_user_from_workspaces(target.id)
+        own_workspace = request.app.state.config.workspaces_dir / target.username
+        if own_workspace.is_dir():
+            store.ensure_workspace_member(target.username, target.id, "manager")
     return {"ok": True}
 
 

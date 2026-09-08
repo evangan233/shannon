@@ -76,11 +76,11 @@ def test_unauth_401(setup):
     assert c.get("/api/scans").status_code == 401
 
 
-def test_noncanonical_admin_sees_only_member_ws_scans(setup):
+def test_admin_sees_all_ws_scans_without_membership(setup):
     c, _, _ = setup
     _login(c, "ops", "ops-pw")
     r = c.get("/api/scans")
     assert r.status_code == 200
     scans = r.json()
-    assert len(scans) == 1
-    assert scans[0]["workspace"] == "ws-a"
+    assert len(scans) == 2
+    assert {scan["workspace"] for scan in scans} == {"ws-a", "ws-b"}

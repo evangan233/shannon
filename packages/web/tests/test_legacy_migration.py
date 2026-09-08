@@ -20,7 +20,7 @@ def test_legacy_workspace_assigned_to_canonical_admin(tmp_workspaces, monkeypatc
     assert app.state.auth_store.get_workspace_member_role("legacy_ws", admin.id) == "manager"
 
 
-def test_workspace_with_members_gets_canonical_admin_without_reassigning_members(
+def test_workspace_with_members_gets_all_admins_without_reassigning_members(
     tmp_workspaces, monkeypatch
 ):
     monkeypatch.setenv("SUPERNOVA_WEB_COOKIE_SECURE", "0")
@@ -36,9 +36,9 @@ def test_workspace_with_members_gets_canonical_admin_without_reassigning_members
         pass
     members = app.state.auth_store.list_workspace_members("ws1")
     assert app.state.auth_store.get_workspace_member_role("ws1", admin.id) == "manager"
-    assert app.state.auth_store.get_workspace_member_role("ws1", ops.id) is None
+    assert app.state.auth_store.get_workspace_member_role("ws1", ops.id) == "manager"
     assert app.state.auth_store.get_workspace_member_role("ws1", alice.id) == "manager"
-    assert len(members) == 2
+    assert len(members) == 3
 
 
 def test_startup_provisions_historical_user_workspaces(tmp_workspaces, monkeypatch):
@@ -61,10 +61,10 @@ def test_startup_provisions_historical_user_workspaces(tmp_workspaces, monkeypat
     assert (app.state.config.workspaces_dir / "alice" / "workspace.json").exists()
     assert st.get_workspace_member_role("alice", alice.id) == "manager"
     assert st.get_workspace_member_role("alice", admin.id) == "manager"
-    assert st.get_workspace_member_role("alice", ops.id) is None
+    assert st.get_workspace_member_role("alice", ops.id) == "manager"
     assert st.get_workspace_member_role("existing", admin.id) == "manager"
     assert st.get_workspace_member_role("existing", alice.id) == "member"
-    assert st.get_workspace_member_role("existing", ops.id) is None
+    assert st.get_workspace_member_role("existing", ops.id) == "manager"
 
 
 def test_user_named_stale_dir_blocks_ws_provisioning_without_touching_it(

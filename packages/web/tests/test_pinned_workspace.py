@@ -82,7 +82,7 @@ def test_pin_without_csrf_rejected(admin_client):
     assert r.status_code == 403
 
 
-def test_noncanonical_admin_cannot_pin_nonmember_workspace(tmp_workspaces, monkeypatch):
+def test_admin_can_pin_nonmember_workspace(tmp_workspaces, monkeypatch):
     monkeypatch.setenv("SUPERNOVA_WEB_COOKIE_SECURE", "0")
     from supernova_core.utils.paths import resolve_workspaces_dir
     monkeypatch.setenv("SUPERNOVA_WORKER_ROOT", str(tmp_workspaces.parent))
@@ -101,4 +101,5 @@ def test_noncanonical_admin_cannot_pin_nonmember_workspace(tmp_workspaces, monke
 
     r = c.put("/api/users/me/pinned-workspace", json={"workspace": "ws-a"},
               headers={"X-CSRF-Token": _csrf(c)})
-    assert r.status_code == 403
+    assert r.status_code == 200
+    assert app.state.auth_store.get_user_by_username("ops").pinned_workspace == "ws-a"

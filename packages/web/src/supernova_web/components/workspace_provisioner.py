@@ -8,12 +8,10 @@ from supernova_web.auth.store import AuthStore
 
 from .scan_store import read_workspace_meta, write_workspace_meta
 
-GLOBAL_ADMIN_USERNAME = "admin"
-
 
 def is_global_admin(user: User) -> bool:
-    """Return whether ``user`` is the canonical global workspace administrator."""
-    return user.username == GLOBAL_ADMIN_USERNAME and user.role == "admin"
+    """Return whether ``user`` has global workspace administrator access."""
+    return user.role == "admin"
 
 
 def is_safe_workspace_name(name: str) -> bool:
@@ -29,9 +27,8 @@ def is_safe_workspace_name(name: str) -> bool:
     )
 
 
-def _global_admin(store: AuthStore) -> User | None:
-    user = store.get_user_by_username(GLOBAL_ADMIN_USERNAME)
-    return user if user is not None and is_global_admin(user) else None
+def _global_admins(store: AuthStore) -> list[User]:
+    return [user for user in store.list_all_users() if is_global_admin(user)]
 
 
 def _workspace_is_real(ws_dir: Path) -> bool:
@@ -62,8 +59,7 @@ def ensure_user_workspace(workspaces_dir: Path, store: AuthStore, user: User) ->
 
     try:
         store.ensure_workspace_member(user.username, user.id, "manager")
-        admin = _global_admin(store)
-        if admin is not None:
+        for admin in _global_admins(store):
             store.ensure_workspace_member(user.username, admin.id, "manager")
     except Exception:
         if created:
@@ -72,22 +68,22 @@ def ensure_user_workspace(workspaces_dir: Path, store: AuthStore, user: User) ->
     return ws_dir
 
 
-def ensure_global_admin_member(workspace_name: str, store: AuthStore) -> None:
-    admin = _global_admin(store)
-    if admin is not None:
+def ensure_global_admin_members(workspace_name: str, store: AuthStore) -> None:
+    for admin in _global_admins(store):
         store.add_workspace_member(workspace_name, admin.id, "manager")
 
 
 def ensure_global_admin_access(workspaces_dir: Path, store: AuthStore) -> None:
-    """Idempotently add canonical ``admin`` to every non-system workspace directory."""
-    admin = _global_admin(store)
-    if admin is None or not workspaces_dir.is_dir():
+    """Idempotently add every administrator to every non-system workspace directory."""
+    admins = _global_admins(store)
+    if not admins or not workspaces_dir.is_dir():
         return
 
     for ws_dir in workspaces_dir.iterdir():
         if not ws_dir.is_dir() or ws_dir.is_symlink() or ws_dir.name.startswith("."):
             continue
-        store.ensure_workspace_member(ws_dir.name, admin.id, "manager")
+        for admin in admins:
+            store.ensure_workspace_member(ws_dir.name, admin.id, "manager")
 
 
 def ensure_all_user_workspaces(workspaces_dir: Path, store: AuthStore) -> None:

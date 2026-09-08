@@ -18,23 +18,25 @@ def _store(tmp_path: Path) -> AuthStore:
     return store
 
 
-def test_is_global_admin_requires_exact_username_and_admin_role():
+def test_is_global_admin_requires_admin_role():
     assert is_global_admin(User(id=1, username="admin", role="admin")) is True
-    assert is_global_admin(User(id=2, username="root", role="admin")) is False
+    assert is_global_admin(User(id=2, username="root", role="admin")) is True
     assert is_global_admin(User(id=3, username="admin", role="user")) is False
 
 
 def test_ensure_user_workspace_creates_metadata_and_manager_memberships(tmp_path):
     store = _store(tmp_path)
-    admin = store.create_user("admin", "h", role="admin")
     alice = store.create_user("alice", "h", role="user")
+    first_admin = store.create_user("admin", "h", role="admin")
+    second_admin = store.create_user("ops", "h", role="admin")
 
     ws_dir = ensure_user_workspace(tmp_path / "workspaces", store, alice)
 
     assert ws_dir == tmp_path / "workspaces" / "alice"
     assert (ws_dir / "workspace.json").exists()
     assert store.get_workspace_member_role("alice", alice.id) == "manager"
-    assert store.get_workspace_member_role("alice", admin.id) == "manager"
+    assert store.get_workspace_member_role("alice", first_admin.id) == "manager"
+    assert store.get_workspace_member_role("alice", second_admin.id) == "manager"
 
 
 def test_ensure_user_workspace_is_idempotent(tmp_path):
@@ -61,7 +63,7 @@ def test_ensure_user_workspace_rejects_unsafe_username(tmp_path):
         ensure_user_workspace(tmp_path / "workspaces", store, user)
 
 
-def test_ensure_global_admin_access_adds_only_canonical_admin_to_all_workspaces(tmp_path):
+def test_ensure_global_admin_access_adds_all_admins_to_all_workspaces(tmp_path):
     store = _store(tmp_path)
     admin = store.create_user("admin", "h", role="admin")
     other_admin = store.create_user("ops", "h", role="admin")
@@ -77,8 +79,8 @@ def test_ensure_global_admin_access_adds_only_canonical_admin_to_all_workspaces(
 
     assert store.get_workspace_member_role("one", admin.id) == "manager"
     assert store.get_workspace_member_role("two", admin.id) == "manager"
-    assert store.get_workspace_member_role("one", other_admin.id) is None
-    assert store.get_workspace_member_role("two", other_admin.id) is None
+    assert store.get_workspace_member_role("one", other_admin.id) == "manager"
+    assert store.get_workspace_member_role("two", other_admin.id) == "manager"
     assert store.get_workspace_member_role("one", alice.id) == "member"
 
 

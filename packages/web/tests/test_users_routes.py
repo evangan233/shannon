@@ -75,7 +75,7 @@ def test_create_user_success(admin_client):
     assert app.state.auth_store.get_workspace_member_role("bob", admin.id) == "manager"
 
 
-def test_create_user_does_not_add_other_admin_to_workspace(admin_client):
+def test_create_user_adds_all_admins_to_workspace(admin_client):
     c, app = admin_client
     ops = app.state.auth_store.create_user("ops", "h", role="admin")
 
@@ -83,7 +83,7 @@ def test_create_user_does_not_add_other_admin_to_workspace(admin_client):
                headers={"X-CSRF-Token": _csrf(c)})
 
     assert r.status_code == 200
-    assert app.state.auth_store.get_workspace_member_role("bob", ops.id) is None
+    assert app.state.auth_store.get_workspace_member_role("bob", ops.id) == "manager"
 
 
 def test_create_user_dup_409(admin_client):
@@ -260,7 +260,7 @@ def test_create_user_requires_csrf(admin_client):
     assert r.status_code == 403
 
 
-def test_demoting_canonical_admin_clears_workspace_memberships(tmp_workspaces, monkeypatch):
+def test_demoting_admin_clears_workspace_memberships(tmp_workspaces, monkeypatch):
     monkeypatch.setenv("SUPERNOVA_WEB_COOKIE_SECURE", "0")
     from supernova_core.utils.paths import resolve_workspaces_dir
     monkeypatch.setenv("SUPERNOVA_WORKER_ROOT", str(tmp_workspaces.parent))

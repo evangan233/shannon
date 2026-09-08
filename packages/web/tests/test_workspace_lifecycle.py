@@ -116,7 +116,7 @@ def test_post_workspace_writes_workspace_json(_app):
     assert not (ws_dir / "session.json").exists()
 
 
-def test_other_admin_creates_workspace_and_canonical_admin_is_added(_app):
+def test_other_admin_creates_workspace_and_all_admins_are_added(_app):
     st = _app.state.auth_store
     st.create_user("ops", hash_password("p"), role="admin")
     c = _login(_app, "ops")
@@ -131,7 +131,7 @@ def test_other_admin_creates_workspace_and_canonical_admin_is_added(_app):
     assert st.get_workspace_member_role("ws-ops", ops.id) == "manager"
 
 
-def test_other_admin_lists_only_workspaces_they_belong_to(_app):
+def test_other_admin_lists_all_workspaces(_app):
     st = _app.state.auth_store
     st.create_user("ops", hash_password("p"), role="admin")
 
@@ -146,4 +146,4 @@ def test_other_admin_lists_only_workspaces_they_belong_to(_app):
                       headers={"X-CSRF-Token": ops_tok}).status_code == 201
 
     names = {row["name"] for row in ops_c.get("/api/workspaces").json()}
-    assert names == {"ws-ops"}
+    assert names == {"ws-admin", "ws-ops"}
