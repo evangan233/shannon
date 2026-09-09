@@ -28,14 +28,19 @@ const buttonVariants = cva(
         // 任意值输出在具名值之后，覆盖基类 rounded-md 生效）。
         cta:
           "bg-primary text-primary-foreground font-medium shadow-[var(--shadow-cta)] hover:shadow-[var(--shadow-cta-hover)] hover:-translate-y-px active:translate-y-0 transition-all [border-radius:var(--radius-cta,calc(var(--radius)_-_2px))]",
-        // ai · AI 辅助动作按钮（扫描页三按钮家族 2026-09-09）：主命令（提交扫描）恒走
-        // cta 实色胶囊，AI 辅助（自动关联分析等，产物是须确认的草稿）走 primary 轻染
-        // 描边 + 同款 hover 微浮——层级编码在容器，动作语义在图标。不实色：与 cta 同为
-        // bg-primary 会两个实色按钮争层级，用户可能把「分析」当「扫描」点。
-        // 图标色放调用处染（primary / 取消态 destructive），不在 variant 里 [&_svg] 锁死：
-        // 父级 arbitrary-variant 选择器 specificity 高于图标自身类，锁死会染不进语义色。
+        // ai · AI 辅助动作按钮（扫描页三按钮家族 2026-09-09；同日 v2 淡粉描边改 gutter
+        // 竖条——浅主题下淡粉几乎隐形且与状态徽章同框可供性不足）：主命令（提交扫描）
+        // 恒走 cta 实色胶囊，AI 辅助（自动关联分析等，产物是须确认的草稿）走「静容器 +
+        // 左缘 2px 信号竖条」——彩色收进 gutter 是本仓既定审美（live 日志同款），容器
+        // border-border/bg-card 保证按钮感（与徽章拉开层级），几何随 cta 吃 --radius-cta
+        //（mac 胶囊家族统一，未定义主题回落 rounded-md 等值）。竖条色经 --ai-signal
+        // 变量化（默认 primary；取消态调用处 [--ai-signal:var(--destructive)] 换危险色），
+        // inset 竖条与 toolbar 柔阴影拼一条 box-shadow；hover 只动边框与位移、不换阴影——
+        // hover:shadow-* 是整条替换，会把竖条一起抹掉。图标色仍由调用处染（同 specificity
+        // 考量）。不实色：与 cta 同为 bg-primary 会两个实色按钮争层级，用户可能把
+        // 「分析」当「扫描」点。
         ai:
-          "border border-primary/35 bg-primary/5 text-foreground shadow-sm hover:-translate-y-px hover:border-primary/50 hover:bg-primary/10 active:translate-y-0",
+          "border border-border bg-card text-foreground shadow-[inset_2px_0_0_0_hsl(var(--ai-signal,var(--primary))),var(--shadow-toolbar)] hover:-translate-y-px hover:border-primary/40 active:translate-y-0 [border-radius:var(--radius-cta,calc(var(--radius)_-_2px))]",
         // toolbar · 工作区页操作条按钮（切换工作区/成员/仓库/认证/HOST/置顶）：card 表面
         // 浮于页面 + hover 上浮 -2px + 暖色柔阴影 + 图标染 coral（与 cta 同一浮动语言）。
         // 图标默认 muted，hover 跟随按钮整体上浮后点亮，给出可点击反馈。

@@ -1032,12 +1032,15 @@ export function ScanNewPage() {
           )}
         </div>
 
-        {/* 底部操作栏：主命令按钮（三按钮家族 2026-09-09）——Play 图标是「启动」的
-            动词符号，三种类型（白盒/MR/跨仓）共用同一按钮节点与图标，label 区分宾语
-            （开始扫描 / 启动跨仓扫描）；实色胶囊只属于发射时刻，AI 辅助见 ai variant。 */}
+        {/* 底部操作栏：主命令按钮（三按钮家族 2026-09-09；同日 v2 描边三角改实心——
+            stroke 三角空心发飘像播放器残影，fill 实心 3.5 号 + gap 收紧成文字前缀，
+            「发射」有分量）。三种类型（白盒/MR/跨仓）共用同一按钮节点与图标，label
+            区分宾语（开始扫描 / 启动跨仓扫描）；实色胶囊只属于发射时刻，AI 辅助见
+            ai variant。!size-3.5 须 important：基类 [&_svg]:size-4 的父级选择器
+            specificity 高于图标自身类；gap-1.5 经 cn 的 tailwind-merge 覆盖基类 gap-2。 */}
         <div className="flex items-center justify-between px-5 py-3.5 border-t border-border bg-card">
-          <Button variant="cta" onClick={onSubmit} disabled={!isValid || submitting}>
-            <Play aria-hidden />
+          <Button variant="cta" className="gap-1.5" onClick={onSubmit} disabled={!isValid || submitting}>
+            <Play fill="currentColor" stroke="none" className="!size-3.5" aria-hidden />
             {submitLabel}
           </Button>
           <span className="text-xs text-muted-foreground">{footerHint}</span>

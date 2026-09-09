@@ -97,10 +97,13 @@ export function CorrelationTopologyAnalysisPanel({
   return (
     <section className="space-y-2 rounded-lg border border-border bg-card p-3" aria-label={t("scan.correlation.analysis.panel")}>
       <div className="flex flex-wrap items-center gap-2">
-        {/* ai variant（三按钮家族 2026-09-09）：AI 辅助动作不实色——分析与提交同为
-            bg-primary 实色会争层级（把「分析」当「扫描」点）；图标染 primary=AI 能力
-            信号（Wand2/RefreshCw），取消态 StopCircle 转 destructive 语义色。 */}
-        <Button type="button" variant="ai" size="sm" onClick={active ? onCancel : terminalFailure || analysis?.status === "completed" ? onRetry : onStart}
+        {/* ai variant（三按钮家族 2026-09-09，v2 gutter 竖条版）：AI 辅助动作不实色——
+            与提交同为 bg-primary 会争层级（把「分析」当「扫描」点）；左缘 2px 信号竖条
+            （默认 primary）+ 图标同色；取消态竖条与图标一起转 destructive（[--ai-signal]
+            经 arbitrary property 换信号色）。 */}
+        <Button type="button" variant="ai" size="sm"
+          className={active ? "[--ai-signal:var(--destructive)]" : undefined}
+          onClick={active ? onCancel : terminalFailure || analysis?.status === "completed" ? onRetry : onStart}
           disabled={starting}>
           {active ? <StopCircle className="h-3.5 w-3.5 text-destructive" /> : terminalFailure ? <RefreshCw className="h-3.5 w-3.5 text-primary" /> : <Wand2 className="h-3.5 w-3.5 text-primary" />}
           {active ? t("scan.correlation.analysis.cancel") : terminalFailure || analysis?.status === "completed" ? t("scan.correlation.analysis.retry") : t("scan.correlation.analysis.start")}
