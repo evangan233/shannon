@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { CorrelationTopologyAnalysis } from "@/api/types";
-import { CorrelationTopologyAnalysisPanel } from "./TopologyAnalysisPanel";
+import { CorrelationTopologyAnalysisPanel, AuditTrail } from "./TopologyAnalysisPanel";
 
 const baseHandlers = {
   onStart: vi.fn(), onRetry: vi.fn(), onCancel: vi.fn(),
@@ -14,7 +14,7 @@ it("shows status, cost and cache", () => {
       cache_hit: true, progress: 100,
       usage: { input_tokens: 1, output_tokens: 2, cost_usd: 3, cost_currency: "CNY" },
     }}
-    starting={false} error={null} logLines={[]}
+    starting={false} error={null}
     onStart={vi.fn()} onRetry={onRetry} onCancel={vi.fn()}
   />);
   expect(screen.getByText(/completed/i)).toBeInTheDocument();
@@ -24,17 +24,25 @@ it("shows status, cost and cache", () => {
   expect(onRetry).toHaveBeenCalled();
 });
 
-it("renders live audit trail while running", () => {
-  render(<CorrelationTopologyAnalysisPanel
-    analysis={{ analysis_id: "topology-2", workspace: "ws1", status: "running", repos: ["a", "b"], progress: 20 }}
-    starting={false} error={null} logDropped={42}
-    logLines={[
+// 面板已不渲染过程日志（2026-09-09 搬去 ScanNewPage 视图区拓扑图上方）——日志职责
+// 由导出的 AuditTrail 直测覆盖；面板侧锁定「无日志框」防回归。
+it("panel no longer renders the audit trail", () => {
+  const { container } = render(<CorrelationTopologyAnalysisPanel
+    analysis={{ analysis_id: "topology-2", workspace: "ws1", status: "running", repos: ["a"], progress: 20 }}
+    starting={false} error={null} {...baseHandlers}
+  />);
+  expect(container.querySelector(".font-mono")).toBeNull();
+});
+
+it("AuditTrail renders lines and dropped counter", () => {
+  render(<AuditTrail
+    dropped={42}
+    lines={[
       { no: 0, ts: "2026-09-03T18:00:00Z", type: "tool_start", tool: "read_file", summary: "{'path': '/repos/gw/main.go'}" },
       { no: 1, ts: "2026-09-03T18:00:01Z", type: "tool_end", summary: "func main() {" },
       { no: 2, ts: "2026-09-03T18:00:02Z", type: "assistant_turn", summary: "turn 3: gateway calls identity" },
       { no: 3, ts: "2026-09-03T18:00:03Z", type: "error", summary: "boom" },
     ]}
-    {...baseHandlers}
   />);
   expect(screen.getByText(/main\.go/)).toBeInTheDocument();
   expect(screen.getByText(/gateway calls identity/)).toBeInTheDocument();
@@ -44,16 +52,13 @@ it("renders live audit trail while running", () => {
 
 // 行网格对齐扫描 live 页 LogStream 同款 CSS（log-row/log-gutter/log-ts/log-icon/log-tag/
 // log-body）+ ev-* 语义类型色：三处日志框（live/跨仓关联/认证测试）统一视觉语言。
-it("renders audit lines as log-row grid with ev-* type colors", () => {
-  const { container } = render(<CorrelationTopologyAnalysisPanel
-    analysis={{ analysis_id: "topology-3", workspace: "ws1", status: "running", repos: ["a"], progress: 10 }}
-    starting={false} error={null}
-    logLines={[
+it("AuditTrail renders lines as log-row grid with ev-* type colors", () => {
+  const { container } = render(<AuditTrail
+    lines={[
       { no: 0, ts: "2026-09-03T18:00:00Z", type: "tool_start", tool: "read_file", summary: "main.go" },
       { no: 1, ts: "2026-09-03T18:00:02Z", type: "assistant_turn", summary: "turn 3" },
       { no: 2, ts: "2026-09-03T18:00:03Z", type: "error", summary: "boom" },
     ]}
-    {...baseHandlers}
   />);
   const rows = container.querySelectorAll(".log-row");
   expect(rows).toHaveLength(3);
@@ -69,12 +74,10 @@ it("renders audit lines as log-row grid with ev-* type colors", () => {
   expect(rows[2].className).toContain("ev-error");
 });
 
-it("hides audit trail when idle with no lines", () => {
-  const { container } = render(<CorrelationTopologyAnalysisPanel
-    analysis={null} starting={false} error={null} logLines={[]}
-    onStart={vi.fn()} onRetry={vi.fn()} onCancel={vi.fn()}
-  />);
-  expect(container.querySelector(".font-mono")).toBeNull();
+it("AuditTrail empty state shows placeholder", () => {
+  const { container } = render(<AuditTrail lines={[]} />);
+  expect(container.querySelectorAll(".log-row")).toHaveLength(0);
+  expect(container.textContent).toContain("…");
 });
 
 it("renders history entries and forwards selection (restore without re-analysis)", () => {
@@ -84,7 +87,7 @@ it("renders history entries and forwards selection (restore without re-analysis)
     repos: ["api-gateway", "user-svc"], created_at: "2026-09-03T06:22:00Z",
   };
   render(<CorrelationTopologyAnalysisPanel
-    analysis={null} starting={false} error={null} logLines={[]}
+    analysis={null} starting={false} error={null}
     historyEntries={[entry]} historyActiveId="topology-h1"
     onSelectHistoryEntry={onSelectHistoryEntry}
     {...baseHandlers}
@@ -95,7 +98,7 @@ it("renders history entries and forwards selection (restore without re-analysis)
   expect(onSelectHistoryEntry).toHaveBeenCalledWith(entry);
   // 无历史数据源（未传 onSelectHistoryEntry）→ 历史区不渲染
   const bare = render(<CorrelationTopologyAnalysisPanel
-    analysis={null} starting={false} error={null} logLines={[]} {...baseHandlers}
+    analysis={null} starting={false} error={null} {...baseHandlers}
   />);
   expect(bare.container.querySelector("[data-testid='topology-history']")).toBeNull();
 });

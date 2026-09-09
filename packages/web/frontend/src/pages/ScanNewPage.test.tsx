@@ -1295,6 +1295,63 @@ describe("correlation topology auto flow", () => {
     expect(submittedYaml).toContain("roles:\n      - entrypoint\n      - backend");
   });
 
+  // 过程日志是观察窗而非完成态首屏：running 可见、completed 产物生成后收起——
+  // 用户反馈「完成后不要停在日志，直接看拓扑」。失败终态仍保留日志供定位。
+  it("分析完成后隐藏过程日志并直接展示拓扑", async () => {
+    let stateCalls = 0;
+    server.use(
+      http.get("/api/workspaces/:ws/correlation-topology/analyses/latest", () =>
+        new HttpResponse(null, { status: 404 })),
+      http.get("/api/workspaces/:ws/repos", () => HttpResponse.json([
+        { name: "web", state: "ready" }, { name: "order", state: "ready" },
+      ])),
+      http.post("/api/workspaces/:ws/correlation-topology/analyses", () =>
+        HttpResponse.json({ analysis_id: "topology-live" }, { status: 202 })),
+      http.get("/api/workspaces/:ws/correlation-topology/analyses/topology-live", () => {
+        stateCalls += 1;
+        if (stateCalls === 1) {
+          return HttpResponse.json({
+            analysis_id: "topology-live", workspace: "ws1", status: "running",
+            repos: ["web", "order"], progress: 20,
+          });
+        }
+        return HttpResponse.json({
+          analysis_id: "topology-live", workspace: "ws1", status: "completed",
+          repos: ["web", "order"],
+          result: {
+            nodes: [{ repo: "web", roles: ["entrypoint"] }, { repo: "order", roles: ["backend"] }],
+            edges: [{ from: "web", to: "order", protocol: "grpc", confidence: "high",
+              client_evidence: [], handler_evidence: [] }],
+            uncertain: [], coverage: [],
+          },
+        });
+      }),
+      http.get("/api/workspaces/:ws/correlation-topology/analyses/topology-live/log",
+        async ({ request }) => {
+        const after = Number(new URL(request.url).searchParams.get("after") ?? "-1");
+        return HttpResponse.json({
+          lines: after < 0 ? [
+            { no: 0, ts: "2026-09-09T00:00:00Z", type: "tool_start", tool: "grep",
+              summary: "pattern=grpc" },
+          ] : [],
+          next: after < 0 ? 1 : after,
+        });
+      }),
+    );
+    renderAutoPage();
+    fireEvent.click(screen.getByTestId("scan-type-correlation"));
+    await selectWorkspace("ws1");
+    fireEvent.click(await screen.findByRole("checkbox", { name: /web/ }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: /order/ }));
+    fireEvent.click(screen.getByRole("button", { name: /自动关联分析/ }));
+    // running 观察期：日志先出现，用于确认被收起的确实是过程日志台。
+    expect(await screen.findByText(/pattern=grpc/)).toBeInTheDocument();
+    // 下一帧 completed：拓扑直接成为产物，日志台不再压在视图区顶部。
+    expect(await screen.findByTestId("topology-node-web")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(/pattern=grpc/)).toBeNull());
+    expect(screen.getByTestId("corr-tab-graph")).toHaveAttribute("data-state", "active");
+  });
+
   // === 拓扑↔YAML 双向同步（2026-09-04）：图编辑实时派生 YAML，无需等确认 ===
   it("图侧编辑（分析完成 + 画布拖线加边）实时同步到 YAML 面板，无需确认动作", async () => {
     useTopologyCompleted();
@@ -1451,6 +1508,10 @@ describe("correlation topology auto flow", () => {
     expect(await screen.findByRole("button", { name: /取消/ })).toBeInTheDocument();
     expect(await screen.findByText(/tracing gateway→identity/)).toBeInTheDocument();
     expect(screen.getByText(/pattern=identity/)).toBeInTheDocument();
+    // 日志台住视图区 tabs 上方（2026-09-09 从左轨道搬来）：DOM 顺序 trail 先于 tabs
+    const trail = screen.getByText(/tracing gateway→identity/).closest(".overflow-y-auto");
+    const tabs = screen.getByTestId("corr-view-tabs");
+    expect(trail && (trail.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING)).toBeTruthy();
   });
 
   // 恢复断链修复（2026-09-04 反馈「点进来又是空又要重新分析」）：latest 恢复此前只
@@ -1527,7 +1588,6 @@ describe("correlation topology auto flow", () => {
     expect(screen.queryByTestId("topology-node-web")).toBeNull();
     expect(successSpy).toHaveBeenCalledWith("分析已删除");
   });
-
   it("分析历史：列表按时间倒序可点选，点击切换恢复对应勾选/拓扑（单条拉全量 result）", async () => {
     server.use(
       http.get("/api/workspaces/:ws/repos", () => HttpResponse.json([
@@ -1551,6 +1611,20 @@ describe("correlation topology auto flow", () => {
             uncertain: [], coverage: [],
           },
         })),
+      // 旧条目全量（置顶锁需要：点旧条目 → 恢复 + 顺序不变）
+      http.get("/api/workspaces/:ws/correlation-topology/analyses/topology-h1", () =>
+        HttpResponse.json({
+          analysis_id: "topology-h1", workspace: "ws1", status: "completed",
+          repos: ["web", "order"],
+          result: {
+            nodes: [{ repo: "web", roles: ["entrypoint"] }, { repo: "order", roles: ["backend"] }],
+            edges: [{ from: "web", to: "order", protocol: "grpc", confidence: "high" }],
+            uncertain: [], coverage: [],
+          },
+        })),
+      // 选中条目后页面拉该分析过程日志（视图区日志台数据源）——空窗消 msw 未接管噪音
+      http.get("/api/workspaces/:ws/correlation-topology/analyses/:id/log", () =>
+        HttpResponse.json({ lines: [], next: -1 })),
     );
     renderAutoPage();
     fireEvent.click(screen.getByTestId("scan-type-correlation"));
@@ -1566,6 +1640,13 @@ describe("correlation topology auto flow", () => {
     expect(screen.queryByTestId("topology-node-web")).toBeNull();
     expect(screen.getByRole("checkbox", { name: "admin" }).getAttribute("aria-checked")).toBe("true");
     expect(rows[0].getAttribute("aria-current")).toBe("true");
+    // 选中旧条目不置顶（2026-09-09 用户反馈多余）：历史顺序 = 时间序，选择行为不扰动
+    fireEvent.click(screen.getAllByRole("button", { name: /, / })[1]); // web, order（旧）
+    expect(await screen.findByTestId("topology-node-web")).toBeInTheDocument();
+    const rowsAfter = screen.getAllByRole("button", { name: /, / });
+    expect(rowsAfter[0].textContent).toContain("admin, user"); // 最新仍在前
+    expect(rowsAfter[1].textContent).toContain("web, order");  // 选中项原地不动
+    expect(rowsAfter[1].getAttribute("aria-current")).toBe("true");
   });
 });
 

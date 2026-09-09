@@ -11,8 +11,6 @@ interface Props {
   analysis: CorrelationTopologyAnalysis | null;
   starting: boolean;
   error: string | null;
-  logLines: TopologyAuditLine[];
-  logDropped?: number;
   onStart: () => void;
   onRetry: () => void;
   onCancel: () => void;
@@ -63,9 +61,13 @@ function AuditLineRow({ line }: { line: TopologyAuditLine }) {
   );
 }
 
-/** 过程日志尾窗：近底自动跟随（用户上翻查看历史时不拽回），新行到达才滚。
- *  容器与 live 页 LogStream 同款（rounded border bg-background p-2 font-mono text-xs）。 */
-function AuditTrail({ lines, dropped }: { lines: TopologyAuditLine[]; dropped?: number }) {
+/** 过程日志尾窗（导出供 ScanNewPage 挂视图区——2026-09-09 从轨道搬至拓扑图上方全宽
+ *  展示）：近底自动跟随（用户上翻查看历史时不拽回），新行到达才滚。容器与 live 页
+ *  LogStream 同款（rounded border bg-background p-2 font-mono text-xs）；高度经
+ *  className 注入（running 观察期 h-56 / 参考态 h-40，调用处分态）。 */
+export function AuditTrail({ lines, dropped, className }: {
+  lines: TopologyAuditLine[]; dropped?: number; className?: string;
+}) {
   const ref = useRef<HTMLDivElement | null>(null);
   const lastNo = lines.length ? lines[lines.length - 1].no : -1;
   useEffect(() => {
@@ -76,7 +78,7 @@ function AuditTrail({ lines, dropped }: { lines: TopologyAuditLine[]; dropped?: 
   }, [lastNo]);
   return (
     <div ref={ref}
-      className="h-40 overflow-y-auto rounded-md border border-border bg-background p-2 font-mono text-xs">
+      className={`overflow-y-auto rounded-md border border-border bg-background p-2 font-mono text-xs ${className ?? ""}`}>
       {dropped ? (
         <div className="text-muted-foreground/60">… {dropped} ↑</div>
       ) : null}
@@ -88,8 +90,11 @@ function AuditTrail({ lines, dropped }: { lines: TopologyAuditLine[]; dropped?: 
   );
 }
 
+/** 轨道分析面板（2026-09-09 瘦身）：动作 + 状态 + 用量 + 历史档案——过程日志
+ *  （AuditTrail）已搬去 ScanNewPage 视图区拓扑图上方全宽展示（320px 轨道里正文列
+ *  仅剩 ~120px ≈ 15 等宽字符，天生看不全；用户反馈要直接就地看，展开弹窗亦裁）。 */
 export function CorrelationTopologyAnalysisPanel({
-  analysis, starting, error, logLines, logDropped, onStart, onRetry, onCancel,
+  analysis, starting, error, onStart, onRetry, onCancel,
   historyEntries, historyActiveId, onSelectHistoryEntry,
   onDeleteHistoryEntry, historyDeletingId,
 }: Props) {
@@ -125,9 +130,6 @@ export function CorrelationTopologyAnalysisPanel({
           <span className="text-[11px] text-muted-foreground">{analysis.progress}%</span>
         )}
       </div>
-      {analysis && (logLines.length > 0 || active) && (
-        <AuditTrail lines={logLines} dropped={logDropped} />
-      )}
       {analysis?.usage && (
         <p className="text-xs text-muted-foreground">
           {t("scan.correlation.analysis.usage", {

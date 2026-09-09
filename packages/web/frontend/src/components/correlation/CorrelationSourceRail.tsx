@@ -4,7 +4,7 @@ import { GroupLabel } from "@/components/GroupLabel";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import type { CorrelationTopologyAnalysis, Repo, TopologyAuditLine, Workspace } from "@/api/types";
+import type { CorrelationTopologyAnalysis, Repo, Workspace } from "@/api/types";
 import { RepositoryMultiSelector } from "./RepositoryMultiSelector";
 import { CorrelationTopologyAnalysisPanel } from "./TopologyAnalysisPanel";
 
@@ -26,8 +26,6 @@ interface Props {
   onSelectHistoryEntry?: (entry: CorrelationTopologyAnalysis) => void;
   onDeleteHistoryEntry?: (entry: CorrelationTopologyAnalysis) => void;
   historyDeletingId?: string | null;
-  logLines: TopologyAuditLine[];
-  logDropped?: number;
   onStart: () => void;
   onRetry: () => void;
   onCancel: () => void;
@@ -94,7 +92,7 @@ export function CorrelationSourceRail(props: Props) {
             ) : <p className="text-xs text-muted-foreground">{t("scan.fields.selectWsFirst")}</p>}
             <p className="text-[11px] text-muted-foreground">{t("scan.correlation.analysis.hint")}</p>
             <CorrelationTopologyAnalysisPanel analysis={props.analysis} starting={props.starting}
-              error={props.analysisError} logLines={props.logLines} logDropped={props.logDropped}
+              error={props.analysisError}
               onStart={props.onStart} onRetry={props.onRetry}
               onCancel={props.onCancel}
               historyEntries={props.historyEntries} historyActiveId={props.historyActiveId}

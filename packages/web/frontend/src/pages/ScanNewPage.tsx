@@ -16,6 +16,7 @@ import { useRepos } from "../api/useRepos";
 import { CorrelationFormFields } from "../components/correlation/CorrelationFormFields";
 import { CorrelationGraphTab } from "../components/correlation/CorrelationGraphTab";
 import { CorrelationSourceRail } from "../components/correlation/CorrelationSourceRail";
+import { AuditTrail } from "../components/correlation/TopologyAnalysisPanel";
 import { CorrelationGatewayFields } from "../components/correlation/CorrelationGatewayFields";
 import { TopologyConfirmBar } from "../components/correlation/TopologyConfirmBar";
 import { YamlPanel } from "../components/correlation/YamlPanel";
@@ -551,6 +552,15 @@ export function ScanNewPage() {
   }, []);
 
   const analysisStatus = analysis?.status;
+  // 日志是过程观察窗，不是完成后的主产物：active / 失败终态保留（失败要靠日志定位）；
+  // completed 且已建拓扑时收起日志，让图/YAML 直接成为首屏产物。completed 但异常无
+  // 拓扑时仍回退显示日志，避免只剩一个状态徽章没有可诊断信息。
+  const analysisActive = analysisStatus === "queued" || analysisStatus === "running";
+  const analysisObserved = analysisActive || analysisStatus === "failed"
+    || analysisStatus === "interrupted" || analysisStatus === "cancelled";
+  const showAnalysisTrail = !!analysis && (
+    analysisObserved || (analysisStatus === "completed" && !topologyState)
+  );
   useEffect(() => {
     if (!analysisId || (analysisStatus && analysisStatus !== "queued" && analysisStatus !== "running")) return;
     let cancelled = false;
@@ -620,13 +630,17 @@ export function ScanNewPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysis, selectedTopologyRepos]);
 
-  // 当前 analysis upsert 进历史列表：新发起的分析入列置顶、轮询推进的状态实时反映
+  // 当前 analysis upsert 进历史列表：新发起的分析（不在列表）置顶入列、轮询推进的
+  // 状态实时反映；已知条目原地更新保序——历史选中回填不再把它顶到队首（2026-09-09
+  // 用户反馈置顶多余：历史顺序 = 时间序，不被选择行为扰动）。
   useEffect(() => {
     if (!analysis) return;
-    setAnalysisHistory((prev) => [
-      { ...analysis, result: undefined },
-      ...prev.filter((e) => e.analysis_id !== analysis.analysis_id),
-    ]);
+    setAnalysisHistory((prev) => {
+      const next = { ...analysis, result: undefined };
+      return prev.some((e) => e.analysis_id === analysis.analysis_id)
+        ? prev.map((e) => (e.analysis_id === analysis.analysis_id ? next : e))
+        : [next, ...prev];
+    });
   }, [analysis]);
 
   /** 历史条目选择：换回该次分析的世界——回填勾选仓库、拉全量（list 摘要无
@@ -981,8 +995,6 @@ export function ScanNewPage() {
                   onSelectRepos={selectTopologyRepos}
                   analysis={analysis}
                   starting={analysisStarting}
-                  logLines={logLines}
-                  logDropped={logDropped}
                   analysisError={analysisError}
                   historyEntries={analysisHistory}
                   historyActiveId={analysisId}
@@ -995,6 +1007,14 @@ export function ScanNewPage() {
                   analysisOpen={analysisOpen}
                   onAnalysisOpen={setAnalysisOpen}
                 />
+              {/* 过程日志台（2026-09-09 从左轨道搬至视图区顶部；同日收口为观察窗）：
+                  running/queued 全宽可读（轨道 320px 天生看不全），失败终态保留诊断上下文；
+                  completed 产物已生成即隐藏，直接以拓扑为首屏，不让证据日志压过结果。
+                  行渲染与 live 页 LogStream 同款 log-row 网格（三处日志框统一视觉不变量）。 */}
+              {showAnalysisTrail && (
+                <AuditTrail lines={logLines} dropped={logDropped}
+                  className={analysisActive ? "h-56" : "h-40"} />
+              )}
               {/* 三视图子页（2026-09-04 tabs 重组）：图 | 表单 | YAML——同一拓扑的三个透镜，
                   改任何一方其他两方实时生成（updateCorr / applyTopologyState / onCorrYaml 三扇出）。
                   tab 标签状态点把别处视图的问题带到眼前：表单校验错 / YAML 错 → 红点，
