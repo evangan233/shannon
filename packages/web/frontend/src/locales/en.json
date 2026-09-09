@@ -233,8 +233,13 @@
   "scanGate": {
     "title": "Scan Concurrency",
     "usage": "{{held}}/{{capacity}} running",
+    "heldCount": "Holding ({{n}})",
+    "heldHint": "started · running",
     "waiting": "Queued ({{n}})",
+    "waitHint": "queued · waiting",
     "rank": "#{{n}}",
+    "ownRank": "You're #{{n}}",
+    "own": "This workspace",
     "kinds": {
       "whitebox": "Whitebox",
       "mr": "MR",

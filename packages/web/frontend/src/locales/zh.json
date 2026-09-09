@@ -233,8 +233,13 @@
   "scanGate": {
     "title": "扫描并发",
     "usage": "{{held}}/{{capacity}} 运行中",
+    "heldCount": "占用中 ({{n}})",
+    "heldHint": "启动 · 已运行",
     "waiting": "排队中 ({{n}})",
+    "waitHint": "入队 · 已等待",
     "rank": "第 {{n}} 位",
+    "ownRank": "我排第 {{n}} 位",
+    "own": "本工作区",
     "kinds": {
       "whitebox": "白盒",
       "mr": "MR",

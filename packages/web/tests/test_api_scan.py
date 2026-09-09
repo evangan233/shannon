@@ -192,8 +192,9 @@ def test_get_scan_gate_missing_file_empty(_authed_app):
     assert resp.json() == {"capacity": 5, "max_waiting": 50, "held": [], "waiting": []}
 
 
-def test_get_scan_gate_filters_by_ws_membership(_authed_app):
-    """非全局 admin：无权 ws 的条目过滤，容量计数保留（spec §8.1）。"""
+def test_get_scan_gate_visible_to_all_users(_authed_app):
+    """全局透明（2026-09-09 用户裁定）：非 admin、非成员的普通用户也见完整快照——
+    闸门是共享调度器，全员可见全局占用与自己的排队位次，不按 ws 成员过滤。"""
     from supernova_web.auth.passwords import hash_password
     app = _authed_app
     app.state.auth_store.create_user("alice", hash_password("test-pw"), role="user")
@@ -209,6 +210,7 @@ def test_get_scan_gate_filters_by_ws_membership(_authed_app):
                 headers={"X-CSRF-Token": tok})
     resp = client.get("/api/scan/gate")
     body = resp.json()
-    assert [e["ws"] for e in body["held"]] == ["w1"]
-    assert body["waiting"] == []
+    # alice 仅是 w1 成员，但 w2/w3 条目照样可见（全局透明）
+    assert [e["ws"] for e in body["held"]] == ["w1", "w2"]
+    assert [e["ws"] for e in body["waiting"]] == ["w3"]
     assert body["capacity"] == 5

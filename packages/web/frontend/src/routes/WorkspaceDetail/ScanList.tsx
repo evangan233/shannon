@@ -164,7 +164,7 @@ export function ScanList() {
 
   return (
     <div className="space-y-3">
-      <ScanGatePanel snapshot={gateSnap ?? null} />
+      <ScanGatePanel snapshot={gateSnap ?? null} currentWs={workspace} />
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-baseline gap-x-2.5">
           <h3 className="text-base font-semibold tracking-tight">{t("workspaceDetail.scans.listTitle")}</h3>
