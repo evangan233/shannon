@@ -43,10 +43,9 @@ export function CorrelationGatewayFields({
         aria-expanded={open}
         className="flex w-full items-center gap-2 text-left"
       >
-        <GroupLabel>{t("scan.correlation.gatewayTitle")}</GroupLabel>
-        <span className="text-[11px] font-normal text-muted-foreground">
-          {t("scan.correlation.gatewayOptional")}
-        </span>
+        <GroupLabel hint={t("scan.correlation.gatewayOptional")} className="flex-1">
+          {t("scan.correlation.gatewayTitle")}
+        </GroupLabel>
         <ChevronRight
           className={`size-3.5 text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`}
           aria-hidden

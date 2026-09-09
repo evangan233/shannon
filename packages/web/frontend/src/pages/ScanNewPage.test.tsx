@@ -80,10 +80,11 @@ async function selectWorkspace(name: string) {
   await selectOption("选择 workspace", name);
 }
 
-// RepoCombobox 在某 StepGroup 内：白盒 Step2="仓库"。
-// ws Select 在另一个 StepGroup（"工作区"）——按 step 标题 scope 避开它。
+// RepoCombobox 在「仓库」分节 section 内（2026-09-09 质感统一：StepGroup 卡中卡退役，
+// 白盒/MR 分区同为开放 section + GroupLabel）。
+// ws Select 在另一个 section（"工作区"）——按分节标题 scope 避开它。
 function repoComboboxIn(stepTitle: string) {
-  const step = screen.getByText(stepTitle).closest<HTMLElement>(".rounded-lg")!;
+  const step = screen.getByText(stepTitle).closest<HTMLElement>("section")!;
   return within(step).getAllByRole("combobox").at(-1)!;
 }
 
@@ -522,7 +523,9 @@ describe("ScanNewPage 跨仓关联（correlation）", () => {
     fireEvent.mouseDown(screen.getByTestId("corr-tab-form"));
     fireEvent.click(screen.getByRole("button", { name: "+ 添加仓库" }));
     fireEvent.click(screen.getByText("选择仓库"));
-    fireEvent.click(await screen.findByText("frontend"));
+    // 按 role=option 定位（rail 服务清单常驻后裸文本会错位，见 addTwoReposViaForm 注释）；
+    // regex 匹配——该 fixture 选项可访问名含 source url（"frontend https://…"）
+    fireEvent.click(await screen.findByRole("option", { name: /frontend/ }));
     // 纯手工（拓扑无 AI 分析来源）→ 无确认门禁：确认按钮不存在，校验过即可提交
     expect(screen.queryByRole("button", { name: /确认拓扑/ })).toBeNull();
     await waitFor(() => expect(screen.getByRole("button", { name: /启动跨仓扫描/ })).toBeEnabled());
@@ -572,7 +575,9 @@ describe("ScanNewPage 跨仓关联三方同步（tabs）", () => {
     for (const repo of ["web", "order"]) {
       fireEvent.click(screen.getByRole("button", { name: "+ 添加仓库" }));
       fireEvent.click(screen.getByText("选择仓库"));
-      fireEvent.click(await screen.findByText(repo));
+      // 选项按 role=option 定位（2026-09-09 来源轨道常驻后，rail 服务清单也渲染仓库名
+      // 文本，裸 findByText 会与弹层选项错位/多命中）
+      fireEvent.click(await screen.findByRole("option", { name: repo }));
     }
   }
 

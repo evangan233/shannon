@@ -665,6 +665,7 @@
       "graphEmptyAnalyze": "Analyze repository source",
       "graphEmptyForm": "Build by hand in the form",
       "graphEmptyYaml": "Paste YAML config",
+      "sourceRail": "Topology source",
       "railTitle": "Services & analysis",
       "gatewayOptional": "optional"
     },

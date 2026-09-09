@@ -665,6 +665,7 @@
       "graphEmptyAnalyze": "自动分析仓库源码",
       "graphEmptyForm": "在表单中手工搭建",
       "graphEmptyYaml": "粘贴 YAML 配置",
+      "sourceRail": "拓扑来源",
       "railTitle": "服务与分析",
       "gatewayOptional": "可选"
     },

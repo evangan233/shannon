@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { RepoCombobox } from "./RepoCombobox";
 import { RepoQuickActions } from "./RepoQuickActions";
+import { GroupLabel } from "./GroupLabel";
 import { CredentialRows } from "./auth/CredentialRows";
 import { AddRepoDialog } from "./AddRepoDialog";
 import { CloneProgress } from "./CloneProgress";
@@ -85,44 +86,6 @@ interface Props {
   wsLoading: boolean;
   /** 重跑预填的黑盒复用 scan_id（同 ws）；首帧保留预填值，不被 ws-change 清空 / 默认选最新覆盖。 */
   presetReuseScanId?: string;
-}
-
-/** 分组小标题：coral 竖条 eyebrow（复用 settings Section 的视觉语言，适配中文卡内分组——
- *  去 uppercase/tracking-wider，仅保留 coral 竖条 + 小号 semibold 标签拉层次）。 */
-function GroupLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-1.5">
-      <span className="h-3 w-[3px] rounded-full bg-primary" aria-hidden />
-      <span className="text-[11px] font-semibold text-muted-foreground">{children}</span>
-    </div>
-  );
-}
-
-/** 步骤分组容器：圆角 + secondary 背景 + 边框（仅白盒用；黑盒已改为轻分区） */
-function StepGroup({ step, title, tag, tagClass, className, children }: {
-  step: number;
-  title: string;
-  tag?: string;
-  tagClass?: string;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className={`rounded-lg border border-border bg-secondary p-3.5 space-y-2.5 ${className ?? ""}`}>
-      <div className="flex items-center gap-2">
-        <span className="inline-flex items-center justify-center w-[22px] h-[22px] rounded-full bg-primary text-primary-foreground text-[11px] font-semibold flex-shrink-0">
-          {step}
-        </span>
-        <span className="text-[13px] font-semibold">{title}</span>
-        {tag && (
-          <span className={`ml-auto inline-flex items-center rounded-full px-2 py-0.5 text-[10.5px] font-semibold ${tagClass ?? ""}`}>
-            {tag}
-          </span>
-        )}
-      </div>
-      {children}
-    </div>
-  );
 }
 
 /** 右栏认证核心（仅在 f.auth.enabled=展开 时挂载；#1 单一 disclosure：展开即启用）：
@@ -915,27 +878,34 @@ export function ScanFormFields({
     setProfileRefresh((n) => n + 1);
   };
 
-  // —— 白盒布局：Step 1 工作区（容器，解锁 repo）→ Step 2 仓库 → Step 3 黑盒组合（可选）——
+  // —— 白盒布局（2026-09-09 质感统一）：① 工作区 | ② 仓库 两列 → ③ 黑盒组合（可选）——
+  // 分区语言对齐 MR/跨仓表单（coral 竖条 GroupLabel + 开放 section）：原 StepGroup
+  // 数字徽章 / bg-secondary 卡中卡 / 胶囊 tag 退役——同一 segmented 切换三种扫描
+  // 类型零质感跳变。数字步骤徽章不再需要：ws→repo 顺序依赖由空间（自上而下）+
+  // 行为（未选 ws 时仓库区提示「请先选择工作区」）编码，与 MR 表单一致。
   // 白盒已去动态（recon 固定静态，见 f2c64c8b）——纯离线源码审计；web_url 仅留作后端兼容签名。
-  // Task 9：Step 3「同时发起黑盒扫描」组合开关——开 → 展开 URL 输入 + 共享 AuthFields。
+  // Task 9：③「同时发起黑盒扫描」组合开关——开 → 展开 URL 输入 + 共享 AuthFields。
   // IA 不变量：repo 列表按 ws 隔离（listRepos(workspace)），故「选工作区」必须在「选仓库」之上。
   if (type === "whitebox") {
     return (
-      <div className="flex flex-col gap-3.5">
-        {/* 宽屏 ① 工作区 / ② 仓库 并排双栏铺满卡宽（替代旧 ScanNewPage max-w-2xl 左贴致满宽卡右半空洞）；
-            窄屏(<lg)回落 2 步纵向堆叠 → 3 步顺序 ①②③ 移动端零回归。StepGroup 本体不动。 */}
-        <div className="grid grid-cols-1 gap-3.5 lg:grid-cols-2">
-          <StepGroup step={1} title={t("scan.steps.workspace")}>
+      <div className="space-y-5">
+        {/* ① 工作区 / ② 仓库 并排双列（sm 起并排、gap-4，与 MR 表单两列同构）；
+            窄屏纵排回落。 */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <section className="space-y-2">
+            <GroupLabel>{t("scan.fields.wsSelectLabel")}</GroupLabel>
             {workspaceField}
-          </StepGroup>
-          <StepGroup step={2} title={t("scan.steps.source")} tag={t("scan.tags.localAudit")} tagClass="bg-secondary text-muted-foreground">
+          </section>
+          <section className="space-y-2">
+            <GroupLabel hint={t("scan.tags.localAudit")}>{t("scan.steps.source")}</GroupLabel>
             {repoPicker}
             {sourceErr && <div className="text-destructive text-xs">{sourceErr}</div>}
-          </StepGroup>
+          </section>
         </div>
 
-        {/* Task 9：同时发起黑盒扫描（组合扫描）——开关 + 展开区 */}
-        <StepGroup step={3} title={t("scan.combined.sectionTitle")} tag={t("scan.tags.optional")} tagClass="bg-secondary text-muted-foreground">
+        {/* Task 9：同时发起黑盒扫描（组合扫描，可选）——开关 + 展开区 */}
+        <section className="space-y-2.5">
+          <GroupLabel hint={t("scan.tags.optional")}>{t("scan.combined.sectionTitle")}</GroupLabel>
           <label className="flex items-start gap-2.5 cursor-pointer">
             <div className="pt-0.5">
               <Switch
@@ -951,7 +921,7 @@ export function ScanFormFields({
           </label>
 
           {f.combined && (
-            <div className="fade-in space-y-3 mt-1 border-t border-border pt-3">
+            <div className="fade-in space-y-3 border-t border-border pt-3">
               <div className="space-y-1.5">
                 <Label className="text-xs font-medium">{t("scan.combined.urlLabel")}</Label>
                 <Input
@@ -978,7 +948,7 @@ export function ScanFormFields({
               />
             </div>
           )}
-        </StepGroup>
+        </section>
       </div>
     );
   }

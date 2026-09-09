@@ -15,6 +15,7 @@ import type { ResolveLinkResult } from "../api/types";
 import { useRepos } from "../api/useRepos";
 import { CorrelationFormFields } from "../components/correlation/CorrelationFormFields";
 import { CorrelationGraphTab } from "../components/correlation/CorrelationGraphTab";
+import { CorrelationSourceRail } from "../components/correlation/CorrelationSourceRail";
 import { CorrelationGatewayFields } from "../components/correlation/CorrelationGatewayFields";
 import { TopologyConfirmBar } from "../components/correlation/TopologyConfirmBar";
 import { YamlPanel } from "../components/correlation/YamlPanel";
@@ -776,9 +777,9 @@ export function ScanNewPage() {
               顺序即频率与复杂度（2026-09-04 重排）：MR 增量（spec 2026-09-03，base..head、纯白盒
               语义）是日常高频且表单最简，紧跟白盒成「单仓检测」组；跨仓关联（多仓拓扑/YAML/编辑器）
               是低频深度分析、表单最重，殿后。
-              跨仓关联时本行右侧并排工作区下拉（2026-09-04 工作台化）：ws 是全局环境选择
-              （切 ws 清空分析域），与类型切换同层级——不再独占一行浪费纵向空间；白盒/MR
-              的 ws 仍在各自表单字段里（与仓库字段成组）。 */}
+              跨仓关联的 ws 在来源轨道首字段（2026-09-09 重排；2026-09-04 曾挂本行右端——
+              控制远离效果域，未选 ws 的提示与下拉分离视线跳跃）。三种类型 IA 统一：ws 恒为
+              表单首字段（白盒/MR 在 ① 工作区列，跨仓在来源轨道顶）。 */}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/40 p-1">
               {(["whitebox", "mr", "correlation"] as const).map((v) => (
@@ -796,31 +797,6 @@ export function ScanNewPage() {
                 </button>
               ))}
             </div>
-            {type === "correlation" && (
-              <div className="w-60 space-y-1">
-                <Select value={workspace} onValueChange={(ws) => {
-                  setWorkspace(ws);
-                  // ws 切换 → 仓库域隔离：清分析勾选与进行中的分析态（对齐原 auto 分支行为）
-                  selectTopologyRepos([]);
-                }}>
-                  <SelectTrigger className="w-full font-mono text-xs" aria-label={t("scan.steps.workspace")}>
-                    <SelectValue placeholder={t("scan.fields.wsSelectPlaceholder")} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {wsEmpty ? (
-                      <SelectItem value="__empty__" disabled>{t("scan.fields.wsEmptyOption")}</SelectItem>
-                    ) : wsList.map((w) => (
-                      <SelectItem key={w.name} value={w.name}>{w.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {wsEmpty && (
-                  <div className="flex items-center gap-1.5 text-xs text-amber">
-                    <AlertCircle className="h-3.5 w-3.5" />{t("scan.fields.wsEmptyHintUser")}
-                  </div>
-                )}
-              </div>
-            )}
           </div>
 
           {/* 表单区：白盒由 ScanFormFields 内 lg:grid-cols-2 把 ① 工作区 / ② 仓库 并排铺满，③ 满宽；
@@ -923,10 +899,7 @@ export function ScanNewPage() {
 
                   {/* ③ 变更范围：base⟷head 区间控件（swap + 就绪摘要 base..head）。 */}
                   <section className="space-y-2">
-                    <div className="flex items-baseline justify-between gap-x-3">
-                      <GroupLabel>{t("scan.mr.rangeGroup")}</GroupLabel>
-                      <span className="text-[11px] text-muted-foreground">{t("scan.mr.rangeHint")}</span>
-                    </div>
+                    <GroupLabel hint={t("scan.mr.rangeHint")}>{t("scan.mr.rangeGroup")}</GroupLabel>
                     <RefRangeInput
                       base={f.mrBaseRef ?? ""}
                       head={f.mrHeadRef ?? ""}
@@ -951,12 +924,47 @@ export function ScanNewPage() {
             </div>
           ) : (
             <div className="space-y-4">
+              {/* 双列工作台（2026-09-09 重排）：左 = 来源轨道（tabs 外常驻——工作区 → 服务清单
+                  → AI 分析是拓扑的来源，图|表单|YAML 只是同一拓扑的三个透镜，切透镜不丢来源，
+                  与黑盒验证同理）；右 = 视图区。tabs 只管辖视图区、不再横跨全宽压在轨道上方；
+                  ws 撤出 segmented 行右上角进轨道首字段（控制紧贴效果域——仓库列表按 ws
+                  隔离）。轨道「服务与分析」段收起时列宽收窄为 ws 段（15rem），画布尽量占满。 */}
+              <div className={`grid gap-4 ${
+                analysisOpen
+                  ? "xl:grid-cols-[320px_minmax(0,1fr)]"
+                  : "xl:grid-cols-[minmax(0,15rem)_minmax(0,1fr)]"
+              }`}>
+                <CorrelationSourceRail
+                  workspace={workspace}
+                  wsList={wsList}
+                  wsLoading={wsLoading}
+                  onWorkspaceChange={(ws) => {
+                    setWorkspace(ws);
+                    // ws 切换 → 仓库域隔离：清分析勾选与进行中的分析态（对齐原 auto 分支行为）
+                    selectTopologyRepos([]);
+                  }}
+                  repos={topologyRepos}
+                  selectedRepos={selectedTopologyRepos}
+                  onSelectRepos={selectTopologyRepos}
+                  analysis={analysis}
+                  starting={analysisStarting}
+                  logLines={logLines}
+                  logDropped={logDropped}
+                  analysisError={analysisError}
+                  historyEntries={analysisHistory}
+                  historyActiveId={analysisId}
+                  onSelectHistoryEntry={(entry) => void selectHistoryEntry(entry)}
+                  onStart={() => void startTopologyAnalysis(false)}
+                  onRetry={() => void startTopologyAnalysis(true)}
+                  onCancel={() => void cancelTopologyAnalysis()}
+                  analysisOpen={analysisOpen}
+                  onAnalysisOpen={setAnalysisOpen}
+                />
               {/* 三视图子页（2026-09-04 tabs 重组）：图 | 表单 | YAML——同一拓扑的三个透镜，
                   改任何一方其他两方实时生成（updateCorr / applyTopologyState / onCorrYaml 三扇出）。
                   tab 标签状态点把别处视图的问题带到眼前：表单校验错 / YAML 错 → 红点，
                   图有分析来源未确认 → 琥珀点。tabs 行右侧挂确认门禁状态条（三视图共享——
-                  2026-09-04 工作台化上移：AI 草稿须确认才可提交，不该埋在图编辑器底部）。
-                  黑盒验证在 tabs 外（切视图不丢配置）。 */}
+                  2026-09-04 工作台化上移：AI 草稿须确认才可提交，不该埋在图编辑器底部）。 */}
               <Tabs value={corrView} onValueChange={(v) => setCorrView(v as CorrView)}>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <TabsList data-testid="corr-view-tabs">
@@ -987,23 +995,6 @@ export function ScanNewPage() {
                 </div>
                 <TabsContent value="graph">
                   <CorrelationGraphTab
-                    workspace={workspace}
-                    repos={topologyRepos}
-                    selectedRepos={selectedTopologyRepos}
-                    onSelectRepos={selectTopologyRepos}
-                    analysis={analysis}
-                    starting={analysisStarting}
-                    logLines={logLines}
-                    logDropped={logDropped}
-                    analysisError={analysisError}
-                    historyEntries={analysisHistory}
-                    historyActiveId={analysisId}
-                    onSelectHistoryEntry={(entry) => void selectHistoryEntry(entry)}
-                    onStart={() => void startTopologyAnalysis(false)}
-                    onRetry={() => void startTopologyAnalysis(true)}
-                    onCancel={() => void cancelTopologyAnalysis()}
-                    analysisOpen={analysisOpen}
-                    onAnalysisOpen={setAnalysisOpen}
                     topologyState={topologyState}
                     onTopologyState={applyTopologyState}
                     onViewChange={setCorrView}
@@ -1018,6 +1009,7 @@ export function ScanNewPage() {
                   <YamlPanel yaml={corrYaml} onChange={onCorrYaml} error={yamlErr} synced />
                 </TabsContent>
               </Tabs>
+              </div>
               {/* 黑盒验证（可选）：gateway + 认证/HOST——三视图共用，放 tabs 外 */}
               <CorrelationGatewayFields
                 workspace={workspace}
