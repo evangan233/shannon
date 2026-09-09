@@ -759,7 +759,9 @@ export function ScanNewPage() {
 
   const subtitleKey = type === "correlation" ? "scan.correlation.subtitle"
     : type === "mr" ? "scan.subtitleMr" : "scan.subtitleWhitebox";
-  const submitLabel = type === "correlation" ? t("scan.correlation.topology.submit") : t("scan.submit");
+  // 提交按钮文案统一「开始扫描」（2026-09-09 v3，用户点名）：扫描类型由顶部
+  // segmented 表达（白盒/MR 增量/跨仓关联），按钮只说动词——三类同一动作同一名。
+  const submitLabel = t("scan.submit");
   const footerHint = type === "correlation" ? t("scan.correlation.footerHint")
     : type === "mr" ? t("scan.mrBaseHeadHint") : t("scan.footerHintWhitebox");
   // ws 空态判定（mr 表单 ws 下拉 + 提示共用；与 CorrelationFormFields/ScanFormFields 同式）
@@ -1032,14 +1034,18 @@ export function ScanNewPage() {
           )}
         </div>
 
-        {/* 底部操作栏：主命令按钮（三按钮家族 2026-09-09；同日 v2 描边三角改实心——
-            stroke 三角空心发飘像播放器残影，fill 实心 3.5 号 + gap 收紧成文字前缀，
-            「发射」有分量）。三种类型（白盒/MR/跨仓）共用同一按钮节点与图标，label
-            区分宾语（开始扫描 / 启动跨仓扫描）；实色胶囊只属于发射时刻，AI 辅助见
-            ai variant。!size-3.5 须 important：基类 [&_svg]:size-4 的父级选择器
-            specificity 高于图标自身类；gap-1.5 经 cn 的 tailwind-merge 覆盖基类 gap-2。 */}
+        {/* 底部操作栏：主命令按钮（三按钮家族 v3 2026-09-09）——三类扫描（白盒/MR/
+            跨仓）共用同一按钮同一文案「开始扫描」+ 实心 Play；「发射特效」只挂此处
+            不进 cta variant（其余页面主按钮保持纯实色）：暖彩流动渐变（primary↔
+            --c-orange，cta-flow 9s 无缝流转）+ 辉光呼吸（cta-breathe，--shadow-cta
+            ↔hover 之间起伏，主题自适应）。就绪才发光：disabled 停转去渐变回纯色；
+            motion-safe 尊重 reduced-motion（渐变静止不闪）。!size-3.5 须 important
+            （基类 [&_svg]:size-4 父级选择器 specificity 高于图标自身类）；gap-1.5 经
+            cn 的 tailwind-merge 覆盖基类 gap-2；bg-[linear-gradient] 与 cta 的
+            bg-primary 分属 image/color 通道共存，disabled:bg-none 去渐变露底色。 */}
         <div className="flex items-center justify-between px-5 py-3.5 border-t border-border bg-card">
-          <Button variant="cta" className="gap-1.5" onClick={onSubmit} disabled={!isValid || submitting}>
+          <Button variant="cta" onClick={onSubmit} disabled={!isValid || submitting}
+            className="gap-1.5 bg-[linear-gradient(110deg,hsl(var(--primary))_25%,color-mix(in_srgb,hsl(var(--primary))_65%,white)_50%,hsl(var(--primary))_75%)] bg-[length:200%_100%] motion-safe:animate-[cta-flow_9s_linear_infinite,cta-breathe_3.6s_ease-in-out_infinite] disabled:animate-none disabled:bg-none disabled:shadow-none">
             <Play fill="currentColor" stroke="none" className="!size-3.5" aria-hidden />
             {submitLabel}
           </Button>

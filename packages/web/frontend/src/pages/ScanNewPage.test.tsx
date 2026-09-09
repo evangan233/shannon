@@ -528,8 +528,8 @@ describe("ScanNewPage 跨仓关联（correlation）", () => {
     fireEvent.click(await screen.findByRole("option", { name: /frontend/ }));
     // 纯手工（拓扑无 AI 分析来源）→ 无确认门禁：确认按钮不存在，校验过即可提交
     expect(screen.queryByRole("button", { name: /确认拓扑/ })).toBeNull();
-    await waitFor(() => expect(screen.getByRole("button", { name: /启动跨仓扫描/ })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: /启动跨仓扫描/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /开始扫描/ })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /开始扫描/ }));
     await waitFor(() => expect(captured).toBeDefined());
     expect(captured!.type).toBe("correlation");
     expect(captured!.workspace).toBe("ws1");
@@ -1258,10 +1258,10 @@ describe("correlation topology auto flow", () => {
     dragConnectTo(screen.getByTestId("topology-node-user"), "web");
     // 确认门禁（2026-09-04 工作台化上移 tabs 行）：AI 草稿待确认状态条 + 确认按钮
     expect(screen.getByTestId("corr-confirm-pending")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /启动跨仓扫描/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /开始扫描/ })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: /确认拓扑/ }));
     expect(screen.getByTestId("corr-confirm-bar")).toHaveTextContent(/已确认/);
-    expect(screen.getByRole("button", { name: /启动跨仓扫描/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /开始扫描/ })).toBeEnabled();
 
     // 三方同步契约（2026-09-04）：YAML 编辑即时生效——语义变化打回确认并即时重建拓扑；
     // 纯文本变化（注释）语义等价，不动确认态。分析来源的拓扑须确认（needsConfirm），
@@ -1270,22 +1270,22 @@ describe("correlation topology auto flow", () => {
     const confirmedYaml = (editor as HTMLTextAreaElement).value;
     // 纯注释（语义不变）→ canonical 等价，确认仍有效
     fireEvent.change(editor, { target: { value: `${confirmedYaml}\n# comment only` } });
-    expect(screen.getByRole("button", { name: /启动跨仓扫描/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /开始扫描/ })).toBeEnabled();
     // 语义变化（web→order 协议 grpc → http；改 to 会与拖线 manual 边撞重复边被解析拦下）
     // → 拓扑即时重建 + 打回确认（状态条回到 AI 草稿）
     fireEvent.change(editor, { target: { value: confirmedYaml.replace("protocol: grpc", "protocol: http") } });
-    expect(screen.getByRole("button", { name: /启动跨仓扫描/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /开始扫描/ })).toBeDisabled();
     expect(screen.getByTestId("corr-confirm-pending")).toBeInTheDocument();
     // 改回原文 → 图复原；合法语义漂移进入过拓扑 state（重建过）→ fingerprint 复原
     // 不自动恢复确认，须重新确认。确认门禁 2026-09-04 工作台化上移 tabs 行（三视图
     // 共享）——YAML tab 下直接确认，不再需要切回图 tab 找按钮。
     fireEvent.change(editor, { target: { value: confirmedYaml } });
     expect(screen.getByRole("button", { name: /确认拓扑/ })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /启动跨仓扫描/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /开始扫描/ })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: /确认拓扑/ }));
     expect(screen.getByTestId("corr-confirm-bar")).toHaveTextContent(/已确认/);
-    expect(screen.getByRole("button", { name: /启动跨仓扫描/ })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: /启动跨仓扫描/ }));
+    expect(screen.getByRole("button", { name: /开始扫描/ })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: /开始扫描/ }));
     await waitFor(() => expect(submitted).toBeDefined());
     const submittedYaml = String(submitted!.config_content);
     expect(submittedYaml).toContain("from: web");

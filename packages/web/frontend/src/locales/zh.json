@@ -631,7 +631,7 @@
         "referenceOnly": "参考仓库",
         "confirm": "确认拓扑",
         "details": "证据与覆盖",
-        "submit": "启动跨仓扫描",
+        "submit": "开始扫描",
         "removedAi": "已移除的 AI 建议",
         "restore": "恢复",
         "canvasHint": "拖动节点调整布局；从节点右侧 ○ 手柄拉到目标节点上松开添加关系（Esc 取消）；空白处拖动平移，滚轮缩放",

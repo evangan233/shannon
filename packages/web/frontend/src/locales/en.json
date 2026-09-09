@@ -631,7 +631,7 @@
         "referenceOnly": "Reference repository",
         "confirm": "Confirm topology",
         "details": "Evidence and coverage",
-        "submit": "Start cross-repo scan",
+        "submit": "Start scan",
         "removedAi": "Removed AI suggestions",
         "restore": "Restore",
         "canvasHint": "Drag nodes to rearrange; drag a node's ○ handle onto a target and release to add an edge (Esc cancels); drag empty space to pan, scroll to zoom",

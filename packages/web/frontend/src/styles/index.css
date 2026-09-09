@@ -63,6 +63,22 @@
   .supernova-spinner::before { animation: none; content: "•"; }
 }
 
+/* 扫描页主提交「发射特效」（2026-09-09 三按钮家族 v3，用户点名要炫彩）：
+   cta-flow = 暖彩流动渐变（primary↔--c-orange 同族暖色，background-position 无缝
+   循环——渐变首尾同色，220% 宽度 = 一圈完整流转）；cta-breathe = 辉光呼吸
+   （在静息 --shadow-cta 与 hover --shadow-cta-hover 之间起伏，主题自适应——
+   各主题阴影 token 不同也能正确呼吸，「待发射」的引擎感）。两动画经
+   motion-safe: 前缀消费（reduced-motion 下渐变静止不闪）；disabled 由按钮处
+   disabled:animate-none 停转。只挂扫描页主提交（ScanNewPage className），
+   不进 cta variant——其余页面主按钮保持纯实色，炫只属于发射时刻。 */
+@keyframes cta-flow {
+  to { background-position: 200% 0; }
+}
+@keyframes cta-breathe {
+  0%, 100% { box-shadow: var(--shadow-cta); }
+  50% { box-shadow: var(--shadow-cta-hover); }
+}
+
 /* Card 可达性变体 .card-reachable 已删（2026-08-27 spec 警报语义层 §2.1：
    「可达性=红左边」与 severity 双重编码冲突，且全库零使用——只留测试保活的死 CSS）。 */
 
