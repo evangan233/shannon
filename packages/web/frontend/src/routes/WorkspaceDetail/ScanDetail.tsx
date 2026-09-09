@@ -185,10 +185,25 @@ function ResumeBreakpointCard({ ws, scanId, onResumed }: {
 
   useEffect(() => {
     let alive = true;
-    getResumePreview(ws, scanId)
-      .then((p) => { if (alive) setPreview(p); })
-      .catch(() => { /* preview 拉取失败静默：列表页入口仍是主路径 */ });
-    return () => { alive = false; };
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const stopPolling = () => { if (timer) { clearInterval(timer); timer = undefined; } };
+    const fetchPreview = () => {
+      getResumePreview(ws, scanId)
+        .then((p) => {
+          if (!alive) return;
+          setPreview(p);
+          // 取消收尾窗口的瞬态不可续（心跳判活未过期）：10s 轮询重拉，窗口一过
+          // resumable:true → 按钮自动出现；非瞬态（race/abort/可续）停轮询——旧实现在
+          // 此一次性拉取，把 ≤90s 的瞬态窗口固化成「永远不可续跑」。
+          stopPolling();
+          if (!p.resumable && p.transient) {
+            timer = setInterval(fetchPreview, 10_000);
+          }
+        })
+        .catch(() => { /* preview 拉取失败静默：列表页入口仍是主路径 */ });
+    };
+    fetchPreview();
+    return () => { alive = false; stopPolling(); };
   }, [ws, scanId]);
 
   if (!preview) return null;

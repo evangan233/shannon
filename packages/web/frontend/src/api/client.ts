@@ -273,6 +273,8 @@ export type ResumePreview = {
   steps: ResumePreviewStep[];
   warnings: string[];
   abort_reason: string | null;
+  /** 瞬态不可续（取消收尾窗口，心跳判活未过期）——前端据此定时重拉，窗口一过自动转出按钮 */
+  transient?: boolean;
   resume_attempts: number;
 };
 export const getResumePreview = (ws: string, scanId: string) =>

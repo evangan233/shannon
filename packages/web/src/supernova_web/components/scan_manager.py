@@ -582,8 +582,11 @@ class ScanManager:
 
         # §4.1 判活：failed = Temporal 已 FAILED 终态无并发风险直接放行；其余续跑
         # 状态（cancelled/killed/crashed/interrupted）先 heartbeat 判活——心跳新鲜
-        # 说明 worker 仍在跑（session 显式终态但 worker 复活的 race），拒绝防撞车。
+        # 说明 worker 仍在跑，拒绝防撞车。cancelled（取消收尾窗口，worker 异步真退）
+        # 与 race 场景文案分开：前者引导「稍等再续」，后者维持「仍在运行」。
         if status != "failed" and is_scan_recently_active(scan_dir):
+            if status == "cancelled":
+                raise ValueError("已取消，等待 worker 退出后可续跑（约 1-2 分钟）")
             raise ValueError("该扫描仍在运行，无需恢复")
 
         await self._check_temporal()
@@ -746,6 +749,7 @@ class ScanManager:
             "status": status, "scan_type": scan_type, "reason": None,
             "completed_agents": [], "interrupted_agent": None,
             "steps": [], "warnings": [], "abort_reason": None,
+            "transient": False,
             "resume_attempts": len(attempts) if isinstance(attempts, list) else 0,
         }
 
@@ -762,7 +766,14 @@ class ScanManager:
                         reason=f"该扫描状态为 {status}，不可续跑（completed 用重跑、running 在跑）")
             return base
         if status != "failed" and is_scan_recently_active(scan_dir):
-            base.update(resumable=False, reason="该扫描仍在运行，无需恢复")
+            if status == "cancelled":
+                # 取消收尾窗口（web 已标终态、worker 异步退出 + 心跳 90s 判活窗）——
+                # 瞬态：窗口一过即 resumable，前端凭 transient:true 轮询重拉、按钮自动出现。
+                base.update(resumable=False, transient=True,
+                            reason="已取消，等待 worker 退出后可续跑（约 1-2 分钟）")
+            else:
+                # worker 复活 race（session 显式终态但 worker 仍在跑）——非瞬态语义。
+                base.update(resumable=False, reason="该扫描仍在运行，无需恢复")
             return base
 
         deliverables = scan_dir / "deliverables" / "whitebox"

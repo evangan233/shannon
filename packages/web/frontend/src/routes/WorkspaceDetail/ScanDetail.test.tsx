@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, within, act } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { setupServer } from "msw/node";
 import { http, HttpResponse, delay } from "msw";
@@ -26,7 +26,7 @@ const server = setupServer(
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 beforeEach(() => { i18n.changeLanguage("zh"); sse.events = []; sse.status = "open"; });
-afterEach(() => { server.resetHandlers(); cleanup(); i18n.changeLanguage("zh"); });
+afterEach(() => { server.resetHandlers(); cleanup(); i18n.changeLanguage("zh"); if (vi.isFakeTimers()) vi.useRealTimers(); });
 afterAll(() => server.close());
 
 function renderAt(path: string) {
@@ -365,6 +365,67 @@ describe("续跑详情卡", () => {
     renderAt("/p/ws/scans/s1/live");
     expect(await screen.findByText(/产出物文件缺失/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "续跑" })).not.toBeInTheDocument();
+  });
+
+  it("transient（取消收尾窗口）：直示引导文案，10s 轮询重拉转出续跑按钮后停轮询", async () => {
+    vi.useFakeTimers();
+    let previewCalls = 0;
+    server.use(
+      http.get("/api/workspaces/:ws/scans/:scanId", () =>
+        HttpResponse.json({ status: "cancelled", scan_type: "whitebox",
+                            repo_path: "/root/code", workflow_id: "ws-s1" })),
+      http.get("/api/workspaces/:ws/scans/:scanId/resume-preview", () => {
+        previewCalls += 1;
+        return previewCalls === 1
+          ? HttpResponse.json({
+              status: "cancelled", resumable: false, transient: true,
+              reason: "已取消，等待 worker 退出后可续跑（约 1-2 分钟）",
+              scan_type: "whitebox", completed_agents: [], interrupted_agent: null,
+              steps: [], warnings: [], abort_reason: null, resume_attempts: 0,
+            })
+          : HttpResponse.json({
+              status: "cancelled", resumable: true, reason: null, transient: false,
+              scan_type: "whitebox", completed_agents: [], interrupted_agent: "pre-recon",
+              steps: [], warnings: [], abort_reason: null, resume_attempts: 0,
+            });
+      }),
+    );
+    renderAt("/p/ws/scans/s1/live");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    // 瞬态：直示引导文案，无续跑按钮
+    expect(screen.getByText(/等待 worker 退出/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "续跑" })).not.toBeInTheDocument();
+    // 10s 后轮询重拉 → 窗口过期 resumable → 按钮自动出现（fake timers 下同步断言，
+    // findBy* 的 waitFor 轮询会被冻结计时器卡到超时）
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(screen.getByRole("button", { name: "续跑" })).toBeInTheDocument();
+    // 非瞬态停轮询：再过 10s 不再发 preview 请求
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(previewCalls).toBe(2);
+  });
+
+  it("resumable:false 非瞬态（race/abort）：不轮询，preview 只拉一次", async () => {
+    vi.useFakeTimers();
+    let previewCalls = 0;
+    server.use(
+      http.get("/api/workspaces/:ws/scans/:scanId", () =>
+        HttpResponse.json({ status: "interrupted", scan_type: "whitebox",
+                            repo_path: "/root/code", workflow_id: "ws-s1" })),
+      http.get("/api/workspaces/:ws/scans/:scanId/resume-preview", () => {
+        previewCalls += 1;
+        return HttpResponse.json({
+          status: "interrupted", resumable: false, transient: false,
+          reason: "该扫描仍在运行，无需恢复", scan_type: "whitebox",
+          completed_agents: [], interrupted_agent: null, steps: [], warnings: [],
+          abort_reason: null, resume_attempts: 0,
+        });
+      }),
+    );
+    renderAt("/p/ws/scans/s1/live");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(screen.getByText(/仍在运行/)).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(previewCalls).toBe(1);
   });
 
   it("running 行不渲染续跑详情卡", async () => {

@@ -1487,7 +1487,7 @@ async def test_resume_completed_status_still_rejected(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["cancelled", "killed", "crashed", "interrupted"])
+@pytest.mark.parametrize("status", ["killed", "crashed", "interrupted"])
 async def test_resume_fresh_heartbeat_rejected(tmp_path, monkeypatch, status):
     """§4.1：非 failed 状态 + 心跳新鲜 → 撞车拒绝（防与残留 workflow 撞车），
     零提交零 session 改动。"""
@@ -1500,6 +1500,26 @@ async def test_resume_fresh_heartbeat_rejected(tmp_path, monkeypatch, status):
     _patch_temporal_ok(monkeypatch, sm)
     mock_client = _patch_client(monkeypatch)
     with pytest.raises(ValueError, match="仍在运行"):
+        await sm.resume("ws", scan_id)
+
+    assert (scan_dir / "session.json").read_text() == before
+    mock_client.start_workflow.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resume_cancelled_fresh_heartbeat_transient_message(
+        tmp_path, monkeypatch):
+    """§4.1：cancelled + 心跳新鲜（worker 退出收尾窗口）→ 拒绝但文案引导「等待
+    worker 退出」（区别于 worker 复活 race 的「仍在运行」），零提交零 session 改动。"""
+    sm, store = _make_manager_with_store(tmp_path)
+    scan_id, scan_dir = store.create_scan("ws", "", "/repo/a", "whitebox")
+    _set_status(scan_dir, "cancelled")
+    (scan_dir / "heartbeat").write_text(f"{time.time()}\n")  # fresh
+    before = (scan_dir / "session.json").read_text()
+
+    _patch_temporal_ok(monkeypatch, sm)
+    mock_client = _patch_client(monkeypatch)
+    with pytest.raises(ValueError, match="等待 worker 退出"):
         await sm.resume("ws", scan_id)
 
     assert (scan_dir / "session.json").read_text() == before
@@ -1627,17 +1647,41 @@ async def test_resume_preview_completed_unresumable(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_resume_preview_fresh_heartbeat_unresumable(tmp_path):
-    """心跳新鲜（worker 复活 race）→ resumable:false「仍在运行」。"""
+@pytest.mark.parametrize("status,expect_transient", [
+    ("cancelled", True),
+    ("interrupted", False),  # worker 复活 race：非瞬态语义，维持「仍在运行」
+])
+async def test_resume_preview_fresh_heartbeat_reason_split(
+        tmp_path, status, expect_transient):
+    """心跳新鲜两分叉：cancelled（取消收尾窗口）→ transient:true + 「等待 worker
+    退出」引导文案；interrupted 等 race 场景 → 原「仍在运行」。"""
     sm, store = _make_manager_with_store(tmp_path)
     scan_id, scan_dir = store.create_scan("ws", "", "/repo/a", "whitebox")
-    _set_status(scan_dir, "cancelled")
+    _set_status(scan_dir, status)
     (scan_dir / "heartbeat").write_text(f"{time.time()}\n")
 
     result = await sm.resume_preview("ws", scan_id)
 
     assert result["resumable"] is False
-    assert "仍在运行" in result["reason"]
+    assert result["transient"] is expect_transient
+    if expect_transient:
+        assert "等待 worker 退出" in result["reason"]
+    else:
+        assert "仍在运行" in result["reason"]
+
+
+@pytest.mark.asyncio
+async def test_resume_preview_resumable_not_transient(tmp_path, monkeypatch,
+                                                      stub_resume_builder):
+    """可续跑（心跳已 stale）→ transient 缺省 False——前端据此停轮询。"""
+    sm, store = _make_manager_with_store(tmp_path)
+    scan_id, scan_dir = store.create_scan("ws", "", "/repo/a", "whitebox")
+    _set_status(scan_dir, "cancelled")  # 心跳不存在 = stale
+
+    result = await sm.resume_preview("ws", scan_id)
+
+    assert result["resumable"] is True
+    assert result["transient"] is False
 
 
 @pytest.mark.asyncio
