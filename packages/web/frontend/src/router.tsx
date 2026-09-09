@@ -1,4 +1,4 @@
-import { lazy } from "react";
+import { lazyWithRetry } from "./lazyWithRetry";
 import { createBrowserRouter, useNavigate, useParams, Navigate } from "react-router-dom";
 import { useEffect } from "react";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -10,29 +10,29 @@ import { RequireAdmin } from "./auth/RequireAdmin";
 
 // 重页面按需加载（spec §B）：Login/Dashboard 是最高频首屏路径保持 eager；
 // ReportTab → MarkdownView → react-markdown/micromark/highlight 栈随动态 import 独立成 chunk。
-const ScanNewPage = lazy(() => import("./pages/ScanNewPage").then(m => ({ default: m.ScanNewPage })));
-const SettingsPage = lazy(() => import("./pages/SettingsPage").then(m => ({ default: m.SettingsPage })));
-const UsersPage = lazy(() => import("./pages/UsersPage").then(m => ({ default: m.UsersPage })));
-const WorkspaceDetail = lazy(() => import("./routes/WorkspaceDetail"));
-const ScanList = lazy(() => import("./routes/WorkspaceDetail/ScanList").then(m => ({ default: m.ScanList })));
-const ScanDetail = lazy(() => import("./routes/WorkspaceDetail/ScanDetail"));
-const OverviewTab = lazy(() => import("./routes/WorkspaceDetail/OverviewTab").then(m => ({ default: m.OverviewTab })));
-const ReportTab = lazy(() => import("./routes/WorkspaceDetail/ReportTab").then(m => ({ default: m.ReportTab })));
-const DeliverablesTab = lazy(() => import("./routes/WorkspaceDetail/DeliverablesTab").then(m => ({ default: m.DeliverablesTab })));
-const DataFlowTab = lazy(() => import("./routes/WorkspaceDetail/DataFlowTab").then(m => ({ default: m.DataFlowTab })));
+const ScanNewPage = lazyWithRetry(() => import("./pages/ScanNewPage").then(m => ({ default: m.ScanNewPage })));
+const SettingsPage = lazyWithRetry(() => import("./pages/SettingsPage").then(m => ({ default: m.SettingsPage })));
+const UsersPage = lazyWithRetry(() => import("./pages/UsersPage").then(m => ({ default: m.UsersPage })));
+const WorkspaceDetail = lazyWithRetry(() => import("./routes/WorkspaceDetail"));
+const ScanList = lazyWithRetry(() => import("./routes/WorkspaceDetail/ScanList").then(m => ({ default: m.ScanList })));
+const ScanDetail = lazyWithRetry(() => import("./routes/WorkspaceDetail/ScanDetail"));
+const OverviewTab = lazyWithRetry(() => import("./routes/WorkspaceDetail/OverviewTab").then(m => ({ default: m.OverviewTab })));
+const ReportTab = lazyWithRetry(() => import("./routes/WorkspaceDetail/ReportTab").then(m => ({ default: m.ReportTab })));
+const DeliverablesTab = lazyWithRetry(() => import("./routes/WorkspaceDetail/DeliverablesTab").then(m => ({ default: m.DeliverablesTab })));
+const DataFlowTab = lazyWithRetry(() => import("./routes/WorkspaceDetail/DataFlowTab").then(m => ({ default: m.DataFlowTab })));
 // 跨仓关联结果 tab（D5 组件收 {ws, scanId} props——与兄弟 tab 的 useParams 自取不同，
 // 由 CorrelationTabRoute 包装注入；ReportTab 独立 chunk 同理，MarkdownView 栈不进主包）。
-const CorrelationTab = lazy(() => import("./routes/WorkspaceDetail/CorrelationTab").then(m => ({ default: m.CorrelationTab })));
-const LogsTab = lazy(() => import("./routes/WorkspaceDetail/LogsTab").then(m => ({ default: m.LogsTab })));
-const LiveTab = lazy(() => import("./routes/WorkspaceDetail/LiveTab"));
-const ReposTab = lazy(() => import("./routes/WorkspaceDetail/ReposTab").then(m => ({ default: m.ReposTab })));
-const WsSettingsTab = lazy(() => import("./routes/WorkspaceDetail/WsSettingsTab"));
-const AuthProfilesPage = lazy(() => import("./pages/AuthProfilesPage").then(m => ({ default: m.AuthProfilesPage })));
-const AuthProfileTestPage = lazy(() => import("./pages/AuthProfileTestPage").then(m => ({ default: m.AuthProfileTestPage })));
-const VerifyProcessPage = lazy(() => import("./pages/VerifyProcessPage").then(m => ({ default: m.VerifyProcessPage })));
-const HostProfilesPage = lazy(() => import("./pages/HostProfilesPage").then(m => ({ default: m.HostProfilesPage })));
-const WorkspacesEntry = lazy(() => import("./components/WorkspacesEntry").then(m => ({ default: m.WorkspacesEntry })));
-const DevComponentsPage = lazy(() => import("./pages/DevComponentsPage").then(m => ({ default: m.DevComponentsPage })));
+const CorrelationTab = lazyWithRetry(() => import("./routes/WorkspaceDetail/CorrelationTab").then(m => ({ default: m.CorrelationTab })));
+const LogsTab = lazyWithRetry(() => import("./routes/WorkspaceDetail/LogsTab").then(m => ({ default: m.LogsTab })));
+const LiveTab = lazyWithRetry(() => import("./routes/WorkspaceDetail/LiveTab"));
+const ReposTab = lazyWithRetry(() => import("./routes/WorkspaceDetail/ReposTab").then(m => ({ default: m.ReposTab })));
+const WsSettingsTab = lazyWithRetry(() => import("./routes/WorkspaceDetail/WsSettingsTab"));
+const AuthProfilesPage = lazyWithRetry(() => import("./pages/AuthProfilesPage").then(m => ({ default: m.AuthProfilesPage })));
+const AuthProfileTestPage = lazyWithRetry(() => import("./pages/AuthProfileTestPage").then(m => ({ default: m.AuthProfileTestPage })));
+const VerifyProcessPage = lazyWithRetry(() => import("./pages/VerifyProcessPage").then(m => ({ default: m.VerifyProcessPage })));
+const HostProfilesPage = lazyWithRetry(() => import("./pages/HostProfilesPage").then(m => ({ default: m.HostProfilesPage })));
+const WorkspacesEntry = lazyWithRetry(() => import("./components/WorkspacesEntry").then(m => ({ default: m.WorkspacesEntry })));
+const DevComponentsPage = lazyWithRetry(() => import("./pages/DevComponentsPage").then(m => ({ default: m.DevComponentsPage })));
 
 // per-scan 默认 tab：进行中 -> live，完成 -> report。fetch scan status 后 navigate（replace 避免占历史栈）。
 // correlation 主行例外（D6，spec 2026-08-24 §8）：tab 组为 概览|跨仓关联|产物|日志（无

@@ -47,6 +47,16 @@ services:
       - ./.env.profiles:/app/.env.profiles:ro
     env_file:
       - .env
+    # 供 up.sh 的 compose up --wait 判定「web 就绪」（lifespan 完成后 /health 才 200）——
+    # 脚本返回即可访问，消除 recreate 窗口「更新后第一次刷新连接拒绝」。python:3.12-slim
+    # 无 curl，用 urllib 探测；worker 不加 healthcheck（忙时不至于假死误判，--wait 下
+    # running 即算过）。
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7878/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
     # 内网 GitLab 在容器 DNS 解析不到/解析错 → clone 私仓失败；固定 hosts 映射。
     extra_hosts:
       - "gitlab.futunn.com:172.24.20.196"

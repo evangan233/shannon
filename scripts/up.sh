@@ -194,10 +194,14 @@ if [ "$ACTION" = "up" ]; then
     COMPOSE_FILES+=(-f "$DEV_FILE")
   fi
 
+  # --wait：等到 web healthcheck 过（compose 里 web 服务的 /health 探测）才返回——
+  # 脚本返回 = 页面可访问，消除 recreate 窗口「更新后第一次刷新连接拒绝」。
+  # worker 无 healthcheck，running 即算过；90s 上限防端口被占/起挂时无限等待
+  # （healthcheck 容忍 15s start_period + 12×5s retries ≈ 75s < 90s）。
   # BUILD_FLAG 不加引号是有意的（空时展开为零个参数）：
   # shellcheck disable=SC2086
   # ${ARR[@]+"${ARR[@]}"} 是 macOS bash 3.2 + set -u 下空数组的安全展开，勿简化。
-  docker compose "${COMPOSE_FILES[@]}" up -d $BUILD_FLAG ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"} web worker
+  docker compose "${COMPOSE_FILES[@]}" up -d --wait --wait-timeout 90 $BUILD_FLAG ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"} web worker
 else
   # down/logs/ps 等子命令透传。用 PASSTHROUGH 而非 $@（$@ 还带着 ACTION，会重复传）。
   # down 只停 compose 管辖的服务，不动外部 temporal。
