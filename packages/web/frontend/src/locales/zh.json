@@ -619,7 +619,10 @@
         "submit": "启动跨仓扫描",
         "hint": "先选择至少两个 ready 仓库。分析只读源码，结果必须人工确认后才能启动扫描。",
         "history": {
-          "title": "历史分析"
+          "title": "历史分析",
+          "delete": "删除分析",
+          "deleteAria": "删除分析 {{analysisId}}",
+          "deleted": "分析已删除"
         },
         "sectionTitle": "自动分析（可选）"
       },

@@ -1486,6 +1486,48 @@ describe("correlation topology auto flow", () => {
     expect(screen.getByRole("checkbox", { name: "order" }).getAttribute("aria-checked")).toBe("true");
   });
 
+  it("分析历史：删除终态条目调 /delete 并从列表移除；删除当前条目清空拓扑来源", async () => {
+    const successSpy = vi.spyOn(toast, "success");
+    const deleteCalls: string[] = [];
+    server.use(
+      http.get("/api/workspaces/:ws/repos", () => HttpResponse.json([
+        { name: "web", state: "ready" }, { name: "order", state: "ready" },
+      ])),
+      http.get("/api/workspaces/:ws/correlation-topology/analyses", () =>
+        HttpResponse.json([
+          { analysis_id: "topology-h1", workspace: "ws1", status: "completed",
+            repos: ["web", "order"], created_at: "2026-09-02T08:00:00Z" },
+        ])),
+      http.get("/api/workspaces/:ws/correlation-topology/analyses/topology-h1", () =>
+        HttpResponse.json({
+          analysis_id: "topology-h1", workspace: "ws1", status: "completed",
+          repos: ["web", "order"],
+          result: {
+            nodes: [{ repo: "web", roles: ["entrypoint"] }, { repo: "order", roles: ["backend"] }],
+            edges: [{ from: "web", to: "order", protocol: "grpc", confidence: "high" }],
+            uncertain: [], coverage: [],
+          },
+        })),
+      http.get("/api/workspaces/:ws/correlation-topology/analyses/:id/log", () =>
+        HttpResponse.json({ lines: [], next: -1 })),
+      http.post("/api/workspaces/:ws/correlation-topology/analyses/:id/delete", ({ params }) => {
+        deleteCalls.push(String(params.id));
+        return HttpResponse.json({ ok: true, analysis_id: params.id });
+      }),
+    );
+    renderAutoPage();
+    fireEvent.click(screen.getByTestId("scan-type-correlation"));
+    await selectWorkspace("ws1");
+    const row = await screen.findByRole("button", { name: /web, order/ });
+    fireEvent.click(row);
+    expect(await screen.findByTestId("topology-node-web")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("topology-history-delete-topology-h1"));
+    await waitFor(() => expect(deleteCalls).toEqual(["topology-h1"]));
+    expect(screen.queryByTestId("topology-history")).toBeNull();
+    expect(screen.queryByTestId("topology-node-web")).toBeNull();
+    expect(successSpy).toHaveBeenCalledWith("分析已删除");
+  });
+
   it("分析历史：列表按时间倒序可点选，点击切换恢复对应勾选/拓扑（单条拉全量 result）", async () => {
     server.use(
       http.get("/api/workspaces/:ws/repos", () => HttpResponse.json([

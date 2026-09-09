@@ -45,6 +45,10 @@ class TopologyProviderConfigError(ValueError):
     pass
 
 
+class TopologyAnalysisActive(RuntimeError):
+    """Analysis is queued/running and must be cancelled before deletion."""
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -320,6 +324,21 @@ class TopologyAnalysisManager:
             raise AnalysisNotFound(analysis_id)
         return state
 
+    async def delete(self, ws: str, analysis_id: str) -> dict[str, Any]:
+        """Explicitly remove one terminal analysis and all of its on-disk state.
+
+        Active jobs are refused because a worker may still write `state.json`
+        after removal; clients cancel first, then retry deletion."""
+        state = self.get(ws, analysis_id)
+        if state.get("status") in {"queued", "running"}:
+            raise TopologyAnalysisActive(analysis_id)
+        # A terminal analysis may still have a web await task (worker wrote the
+        # state, workflow return is pending). Release it before dropping disk;
+        # the status guard prevents the late workflow path from rewriting state.
+        self._cleanup_analysis(analysis_id)
+        self.store.remove(ws, analysis_id)
+        return {"ok": True, "analysis_id": analysis_id}
+
     async def cancel(self, ws: str, analysis_id: str) -> dict[str, Any]:
         state = self.get(ws, analysis_id)
         if state.get("status") in {"queued", "running"}:
@@ -477,5 +496,5 @@ class TopologyAnalysisManager:
 
 __all__ = [
     "AnalysisNotFound", "TopologyAnalysisManager", "TopologyAnalysisStore",
-    "TooManyTopologyAnalyses", "TopologyValidationError",
+    "TooManyTopologyAnalyses", "TopologyAnalysisActive", "TopologyValidationError",
 ]

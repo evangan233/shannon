@@ -1,10 +1,14 @@
 import { useTranslation } from "react-i18next";
+import { Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import type { CorrelationTopologyAnalysis, CorrelationTopologyStatus } from "@/api/types";
 
 interface Props {
   entries: CorrelationTopologyAnalysis[];
   activeId: string | null;
   onSelect: (entry: CorrelationTopologyAnalysis) => void;
+  onDelete?: (entry: CorrelationTopologyAnalysis) => void;
+  deletingId?: string | null;
 }
 
 /** 分析历史条目时间：当年「MM-DD HH:mm」，跨年补「YY-」消歧。无效/缺失返空串。 */
@@ -25,7 +29,7 @@ const FAILURE_STATES: ReadonlySet<CorrelationTopologyStatus> = new Set(["failed"
  *  缓存标记。当前载入条目左缘 coral 竖条 + 淡底——与拓扑图 entrypoint 节点同一
  *  「左缘竖条 = 命中」结构语言（子元素视觉父离子，非装饰）。失败态状态词升
  *  destructive（危险语义色，结构信号）；成功态保持 muted 安静。空历史不渲染。 */
-export function TopologyHistoryList({ entries, activeId, onSelect }: Props) {
+export function TopologyHistoryList({ entries, activeId, onSelect, onDelete, deletingId }: Props) {
   const { t } = useTranslation();
   if (!entries.length) return null;
   return (
@@ -39,12 +43,12 @@ export function TopologyHistoryList({ entries, activeId, onSelect }: Props) {
           const active = entry.analysis_id === activeId;
           const failure = FAILURE_STATES.has(entry.status);
           return (
-            <li key={entry.analysis_id}>
+            <li key={entry.analysis_id} className="relative">
               <button
                 type="button"
                 aria-current={active ? "true" : undefined}
                 onClick={() => onSelect(entry)}
-                className={`relative flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left ${
+                className={`relative flex w-full flex-col gap-0.5 rounded-md py-1.5 pl-2 pr-9 text-left ${
                   active ? "bg-primary/5" : "hover:bg-muted/60"
                 }`}
               >
@@ -65,6 +69,21 @@ export function TopologyHistoryList({ entries, activeId, onSelect }: Props) {
                   )}
                 </span>
               </button>
+              {onDelete && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-destructive"
+                  data-testid={`topology-history-delete-${entry.analysis_id}`}
+                  aria-label={t("scan.correlation.analysis.history.deleteAria", { analysisId: entry.analysis_id })}
+                  title={t("scan.correlation.analysis.history.delete")}
+                  disabled={entry.status === "queued" || entry.status === "running" || deletingId === entry.analysis_id}
+                  onClick={(e) => { e.stopPropagation(); onDelete(entry); }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              )}
             </li>
           );
         })}

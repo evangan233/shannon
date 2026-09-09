@@ -52,6 +52,33 @@ describe("TopologyHistoryList", () => {
     expect(onSelect).toHaveBeenCalledWith(a1);
   });
 
+  it("shows delete actions, forwards terminal entries, and blocks active deletion", () => {
+    const onSelect = vi.fn();
+    const onDelete = vi.fn();
+    const a1 = entry({ analysis_id: "a1", status: "completed" });
+    const a2 = entry({ analysis_id: "a2", status: "running" });
+    render(
+      <TopologyHistoryList
+        entries={[a1, a2]} activeId={null} onSelect={onSelect} onDelete={onDelete}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("topology-history-delete-a1"));
+    expect(onDelete).toHaveBeenCalledWith(a1);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByTestId("topology-history-delete-a2")).toBeDisabled();
+  });
+
+  it("marks the deleting entry disabled while the request is in flight", () => {
+    const entryA = entry({ analysis_id: "a1", status: "completed" });
+    render(
+      <TopologyHistoryList
+        entries={[entryA]} activeId={null} onSelect={() => {}}
+        onDelete={() => {}} deletingId="a1"
+      />,
+    );
+    expect(screen.getByTestId("topology-history-delete-a1")).toBeDisabled();
+  });
+
   it("flags cache-hit entries with the reuse chip", () => {
     render(
       <TopologyHistoryList

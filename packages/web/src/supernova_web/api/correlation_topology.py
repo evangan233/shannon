@@ -6,7 +6,7 @@ from pydantic import BaseModel, field_validator
 from supernova_web.auth.dependencies import workspace_member
 from supernova_web.auth.models import User
 from supernova_web.components.topology_analysis import (
-    AnalysisNotFound, TopologyProviderConfigError,
+    AnalysisNotFound, TopologyAnalysisActive, TopologyProviderConfigError,
     TooManyTopologyAnalyses,
     TopologyValidationError,
 )
@@ -93,6 +93,24 @@ async def get_analysis(ws: str, analysis_id: str, request: Request,
                        _: User = Depends(workspace_member)):
     try:
         return request.app.state.topology_manager.api_view(ws, analysis_id)
+    except AnalysisNotFound:
+        raise HTTPException(404, detail={"code": "analysis_not_found", "message": "analysis not found"})
+
+
+@router.post("/{ws}/correlation-topology/analyses/{analysis_id}/delete")
+async def delete_analysis(ws: str, analysis_id: str, request: Request,
+                          _: User = Depends(workspace_member)):
+    """删除单条历史分析（真删 state/log 目录）。旧 DELETE 保留为取消语义。
+
+    queued/running -> 409（先取消再删，防止 worker 晚到写回）；不存在 -> 404。
+    """
+    try:
+        return await request.app.state.topology_manager.delete(ws, analysis_id)
+    except TopologyAnalysisActive:
+        raise HTTPException(409, detail={
+            "code": "analysis_active",
+            "message": "cancel the analysis before deleting it",
+        })
     except AnalysisNotFound:
         raise HTTPException(404, detail={"code": "analysis_not_found", "message": "analysis not found"})
 

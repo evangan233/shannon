@@ -393,8 +393,15 @@ export function getCorrelationTopologyAnalysis(
 export function cancelCorrelationTopologyAnalysis(
   ws: string, analysisId: string,
 ): Promise<CorrelationTopologyAnalysis> {
+  // 旧 DELETE 语义仍是「取消」；真删除走动作型 /delete，避免破坏既有客户端契约。
   return apiDelete<CorrelationTopologyAnalysis>(
     `/workspaces/${encWs(ws)}/correlation-topology/analyses/${encWs(analysisId)}`);
+}
+export function deleteCorrelationTopologyAnalysis(
+  ws: string, analysisId: string,
+): Promise<{ ok: true; analysis_id: string }> {
+  return apiPost<{ ok: true; analysis_id: string }>(
+    `/workspaces/${encWs(ws)}/correlation-topology/analyses/${encWs(analysisId)}/delete`, {});
 }
 // 过程日志尾读（after 行号游标增量；404=analysis 不存在，空 lines=未启动/无日志）
 export function getTopologyAnalysisLog(

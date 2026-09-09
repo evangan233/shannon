@@ -619,7 +619,10 @@
         "submit": "Start cross-repo scan",
         "hint": "Select at least two ready repositories. Analysis is read-only and must be confirmed before scan submission.",
         "history": {
-          "title": "Analysis history"
+          "title": "Analysis history",
+          "delete": "Delete analysis",
+          "deleteAria": "Delete analysis {{analysisId}}",
+          "deleted": "Analysis deleted"
         },
         "sectionTitle": "Auto analysis (optional)"
       },

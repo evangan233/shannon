@@ -24,6 +24,8 @@ interface Props {
   historyEntries?: CorrelationTopologyAnalysis[];
   historyActiveId?: string | null;
   onSelectHistoryEntry?: (entry: CorrelationTopologyAnalysis) => void;
+  onDeleteHistoryEntry?: (entry: CorrelationTopologyAnalysis) => void;
+  historyDeletingId?: string | null;
   logLines: TopologyAuditLine[];
   logDropped?: number;
   onStart: () => void;
@@ -96,7 +98,9 @@ export function CorrelationSourceRail(props: Props) {
               onStart={props.onStart} onRetry={props.onRetry}
               onCancel={props.onCancel}
               historyEntries={props.historyEntries} historyActiveId={props.historyActiveId}
-              onSelectHistoryEntry={props.onSelectHistoryEntry} />
+              onSelectHistoryEntry={props.onSelectHistoryEntry}
+              onDeleteHistoryEntry={props.onDeleteHistoryEntry}
+              historyDeletingId={props.historyDeletingId} />
           </div>
         )}
       </section>

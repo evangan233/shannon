@@ -138,6 +138,17 @@ class TopologyAnalysisStore:
                 recovered.append(state["analysis_id"])
         return recovered
 
+    def remove(self, ws: str, analysis_id: str) -> bool:
+        """Delete one analysis directory (state + audit log + artifacts).
+
+        Public seam for explicit history deletion. Caller owns the active-state
+        guard; storage only performs the validated path removal."""
+        path = self._dir(ws, analysis_id)
+        if not path.exists():
+            return False
+        _remove_tree(path)
+        return True
+
     def cleanup(self, *, max_records: int = 100) -> None:
         if not self._root.exists() or max_records < 1:
             return

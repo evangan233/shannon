@@ -19,6 +19,8 @@ interface Props {
   historyEntries?: CorrelationTopologyAnalysis[];
   historyActiveId?: string | null;
   onSelectHistoryEntry?: (entry: CorrelationTopologyAnalysis) => void;
+  onDeleteHistoryEntry?: (entry: CorrelationTopologyAnalysis) => void;
+  historyDeletingId?: string | null;
 }
 
 /** 过程日志行 → log-row 网格描述（icon/tag/body/类型色），与 tool-audit 事件类型一一对应。
@@ -89,6 +91,7 @@ function AuditTrail({ lines, dropped }: { lines: TopologyAuditLine[]; dropped?: 
 export function CorrelationTopologyAnalysisPanel({
   analysis, starting, error, logLines, logDropped, onStart, onRetry, onCancel,
   historyEntries, historyActiveId, onSelectHistoryEntry,
+  onDeleteHistoryEntry, historyDeletingId,
 }: Props) {
   const { t } = useTranslation();
   const active = analysis?.status === "queued" || analysis?.status === "running";
@@ -139,7 +142,8 @@ export function CorrelationTopologyAnalysisPanel({
       {error && <p className="flex items-center gap-1 text-xs text-destructive"><AlertTriangle className="h-3.5 w-3.5" />{error}</p>}
       {onSelectHistoryEntry && (
         <TopologyHistoryList entries={historyEntries ?? []} activeId={historyActiveId ?? null}
-          onSelect={onSelectHistoryEntry} />
+          onSelect={onSelectHistoryEntry} onDelete={onDeleteHistoryEntry}
+          deletingId={historyDeletingId} />
       )}
     </section>
   );

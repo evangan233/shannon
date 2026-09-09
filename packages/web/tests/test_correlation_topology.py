@@ -53,6 +53,14 @@ async def test_store_atomic_cache_recovery_and_cleanup(tmp_path):
     store.cleanup(max_records=10)
     assert len(store.list("ws1")) == 10
 
+    # Explicit history delete removes the whole analysis directory, including audit logs.
+    audit_dir = store.path("ws1", "topology-aaaaaaaaaaaa")
+    (audit_dir / "tool-audit.ndjson").write_text("{}", encoding="utf-8")
+    assert store.remove("ws1", "topology-aaaaaaaaaaaa") is True
+    assert store.get("ws1", "topology-aaaaaaaaaaaa") is None
+    assert not audit_dir.exists()
+    assert store.remove("ws1", "topology-aaaaaaaaaaaa") is False
+
 
 @pytest.mark.parametrize("ws", ["__legacy__", "_internal", "中文空间", "ws-1", "a.b", "sp ace"])
 def test_store_accepts_provisioner_legal_workspace_names(tmp_path, ws):
@@ -338,6 +346,46 @@ async def test_manager_restart_leaves_worker_running_analysis_alone(tmp_path):
     await manager.start("ws1", ["gateway", "order-svc"])
     assert manager.get("ws1", "topology-cccccccccccc")["status"] == "completed"  # 未被打断
     assert manager.get("ws1", "topology-dddddddddddd")["status"] == "interrupted"  # 孤儿清
+
+
+@pytest.mark.asyncio
+async def test_api_delete_history_removes_terminal_analysis(authed_client, tmp_path):
+    """/delete 真删历史档案；旧 DELETE 仍保持取消语义，active 删除拒绝 409。"""
+    app = authed_client.app
+    store = TopologyAnalysisStore(tmp_path / "workspaces")
+    app.state.topology_manager = TopologyAnalysisManager(
+        tmp_path / "workspaces", repo_manager=None)
+    csrf = authed_client.get("/api/auth/csrf").json()["csrf_token"]
+
+    def _state(aid: str, status: str) -> dict:
+        return {"analysis_id": aid, "workspace": "ws1", "status": status,
+                "repos": ["a", "b"], "fingerprint": aid,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z", "progress": 100}
+
+    completed = _state("topology-00000000000a", "completed")
+    store.create("ws1", completed)
+    audit = store.path("ws1", completed["analysis_id"]) / "tool-audit.ndjson"
+    audit.write_text("{}", encoding="utf-8")
+    active = _state("topology-00000000000b", "running")
+    store.create("ws1", active)
+
+    url = "/api/workspaces/ws1/correlation-topology/analyses/topology-00000000000a/delete"
+    assert authed_client.post(url, headers={"X-CSRF-Token": csrf}).status_code == 200
+    assert store.get("ws1", completed["analysis_id"]) is None
+    assert not audit.exists()
+    assert authed_client.post(url, headers={"X-CSRF-Token": csrf}).status_code == 404
+
+    active_url = "/api/workspaces/ws1/correlation-topology/analyses/topology-00000000000b/delete"
+    r = authed_client.post(active_url, headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "analysis_active"
+    assert store.get("ws1", active["analysis_id"]) is not None
+    # Legacy DELETE is cancel, not delete.
+    cancel_url = "/api/workspaces/ws1/correlation-topology/analyses/topology-00000000000b"
+    r = authed_client.delete(cancel_url, headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 200 and r.json()["status"] == "cancelled"
+    assert store.get("ws1", active["analysis_id"]) is not None
 
 
 @pytest.mark.asyncio

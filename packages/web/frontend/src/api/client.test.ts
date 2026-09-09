@@ -4,7 +4,7 @@ import {
   linkReposInDir, blackboxRunReportPath, blackboxRunDeliverablesPath,
   listBlackboxRuns, addBlackboxToWhitebox,
   startCorrelationTopologyAnalysis, getCorrelationTopologyAnalysis,
-  cancelCorrelationTopologyAnalysis,
+  cancelCorrelationTopologyAnalysis, deleteCorrelationTopologyAnalysis,
 } from "./client";
 
 // 构造符合 fetch Response 真实契约的 mock：text() 与 json() 都在。
@@ -196,6 +196,22 @@ describe("correlation topology analysis client", () => {
     expect(r.analysis_id).toBe("topology-1");
     expect(captured.url).toBe("/api/workspaces/WS%20one/correlation-topology/analyses");
     expect(captured.init?.body).toBe(JSON.stringify({ repos: ["gateway", "order-svc"], refresh: true }));
+  });
+
+  it("delete uses the action path while legacy DELETE remains cancel", async () => {
+    (globalThis.fetch as any).mockResolvedValue(
+      res({ ok: true, status: 200, body: { ok: true, analysis_id: "topology-1" } }));
+    await cancelCorrelationTopologyAnalysis("WS", "topology-1");
+    expect((globalThis.fetch as any).mock.calls.at(-1)).toEqual([
+      "/api/workspaces/WS/correlation-topology/analyses/topology-1",
+      expect.objectContaining({ method: "DELETE" }),
+    ]);
+    await deleteCorrelationTopologyAnalysis("WS", "topology-1");
+    const last = (globalThis.fetch as any).mock.calls.at(-1);
+    expect(last[0])
+      .toBe("/api/workspaces/WS/correlation-topology/analyses/topology-1/delete");
+    expect(last[1].method).toBe("POST");
+    expect(last[1].body).toBe("{}");
   });
 
   it("get and cancel use the analysis path", async () => {

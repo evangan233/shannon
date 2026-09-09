@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { toast } from "sonner";
 import type { CorrelationTopologyAnalysis, ScanRequest, ScanResponse, TopologyAuditLine, Workspace, ScanAuthentication } from "../api/types";
-import { apiGet, apiPost, ApiError, cancelCorrelationTopologyAnalysis, getCorrelationTopologyAnalysis, getLatestTopologyAnalysis, getTopologyAnalysisLog, listCorrelationTopologyAnalyses, startCorrelationTopologyAnalysis } from "../api/client";
+import { apiGet, apiPost, ApiError, cancelCorrelationTopologyAnalysis, deleteCorrelationTopologyAnalysis, getCorrelationTopologyAnalysis, getLatestTopologyAnalysis, getTopologyAnalysisLog, listCorrelationTopologyAnalyses, startCorrelationTopologyAnalysis } from "../api/client";
 import { useScans } from "../routes/WorkspaceDetail/useScans";
 import { ScanFormFields } from "../components/ScanFormFields";
 import { RepoCombobox } from "../components/RepoCombobox";
@@ -475,6 +475,7 @@ export function ScanNewPage() {
   // 分析历史（摘要列表）：「换一组仓库」不用重新分析——点历史条目恢复该次世界
   const [analysisHistory, setAnalysisHistory] = useState<CorrelationTopologyAnalysis[]>([]);
   const [analysisStarting, setAnalysisStarting] = useState(false);
+  const [historyDeletingId, setHistoryDeletingId] = useState<string | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   // 过程日志：after 行号游标 + 前端保留窗（200 行，更早累计进 dropped）
   const [logLines, setLogLines] = useState<TopologyAuditLine[]>([]);
@@ -652,6 +653,25 @@ export function ScanNewPage() {
     } else {
       // running/queued 轮询自动推进；failed 等终态摘要是完整帧
       setAnalysis(entry);
+    }
+  };
+
+  const deleteHistoryEntry = async (entry: CorrelationTopologyAnalysis) => {
+    if (!workspace || historyDeletingId) return;
+    try {
+      setHistoryDeletingId(entry.analysis_id);
+      await deleteCorrelationTopologyAnalysis(workspace, entry.analysis_id);
+      setAnalysisHistory((prev) => prev.filter((e) => e.analysis_id !== entry.analysis_id));
+      // 删除当前载入的分析来源：清空图/YAML，避免「历史档案已删但右侧仍可确认提交」。
+      if (analysisId === entry.analysis_id) {
+        setAnalysisId(null); setAnalysis(null); setTopologyState(null);
+        resetLog(); setAnalysisError(null);
+      }
+      toast.success(t("scan.correlation.analysis.history.deleted"));
+    } catch (e) {
+      setAnalysisError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setHistoryDeletingId(null);
     }
   };
 
@@ -967,6 +987,8 @@ export function ScanNewPage() {
                   historyEntries={analysisHistory}
                   historyActiveId={analysisId}
                   onSelectHistoryEntry={(entry) => void selectHistoryEntry(entry)}
+                  onDeleteHistoryEntry={(entry) => void deleteHistoryEntry(entry)}
+                  historyDeletingId={historyDeletingId}
                   onStart={() => void startTopologyAnalysis(false)}
                   onRetry={() => void startTopologyAnalysis(true)}
                   onCancel={() => void cancelTopologyAnalysis()}
