@@ -633,14 +633,21 @@ export function ScanNewPage() {
     setAnalysisError(null);
     setTopologyState(null);
     setSelectedTopologyRepos(entry.repos);
-    setAnalysis(entry);
     setAnalysisId(entry.analysis_id);
     if (entry.status === "completed") {
+      // completed 只在全量到达后 setAnalysis（2026-09-09 修确认拓扑不生效）：摘要无
+      // result，若先行 set，草稿 effect 会用「空拓扑」抢先建 draft 且摘要写进
+      // topologyState.analysis，全量到达时被同 analysis_id 短路——AI roles/edges 永
+      // 丢，校验必挂 → 确认恒不生效。null→full 一步到位与刷新恢复/轮询路径同形态
+      //（await 窗口轮询 effect 也会拉同一 GET，幂等无竞态）。
       try {
         setAnalysis(await getCorrelationTopologyAnalysis(workspace, entry.analysis_id));
       } catch (e) {
         setAnalysisError(e instanceof Error ? e.message : String(e));
       }
+    } else {
+      // running/queued 轮询自动推进；failed 等终态摘要是完整帧
+      setAnalysis(entry);
     }
   };
 

@@ -1373,6 +1373,56 @@ describe("correlation topology auto flow", () => {
     expect(tabs.compareDocumentPosition(gatewayInput)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
+  // 历史条目恢复（2026-09-09 修「点历史分析后确认拓扑不生效」）：list 契约是摘要
+  // （无 result），选中条目再拉 :id 全量。摘要先行触发的草稿 effect 曾把"无 result
+  // 的空拓扑"写进 topologyState，全量到达时被 analysis_id 短路——AI roles/edges 永丢，
+  // 校验必挂（无 entrypoint/无边）→ 确认恒不生效。锁定：恢复的是完整 AI 拓扑且可确认。
+  it("历史条目恢复：点历史分析 → AI 拓扑完整恢复 → 确认拓扑生效、开始扫描可用", async () => {
+    const fullAnalysis = {
+      analysis_id: "topology-h1", workspace: "ws1", status: "completed",
+      repos: ["web", "order"], cache_hit: false, created_at: "2026-09-07T10:00:00Z",
+      result: {
+        nodes: [{ repo: "web", roles: ["entrypoint", "backend"], capabilities: [] },
+          { repo: "order", roles: ["backend"], capabilities: [] }],
+        edges: [
+          { from: "web", to: "order", protocol: "grpc", confidence: "high",
+            client_evidence: [], handler_evidence: [] },
+        ],
+        uncertain: [], coverage: [], invalid: [],
+      },
+    };
+    server.use(
+      // 历史列表：摘要（无 result —— list 端点契约）
+      http.get("/api/workspaces/:ws/correlation-topology/analyses", () => HttpResponse.json([
+        { analysis_id: "topology-h1", workspace: "ws1", status: "completed",
+          repos: ["web", "order"], cache_hit: false, created_at: "2026-09-07T10:00:00Z" },
+      ])),
+      // 选中条目拉全量（带 result）
+      http.get("/api/workspaces/:ws/correlation-topology/analyses/topology-h1", () =>
+        HttpResponse.json(fullAnalysis)),
+      http.get("/api/workspaces/:ws/repos", () => HttpResponse.json([
+        { name: "web", state: "ready" }, { name: "order", state: "ready" },
+      ])),
+    );
+    renderAutoPage();
+    fireEvent.click(screen.getByTestId("scan-type-correlation"));
+    await selectWorkspace("ws1");
+    // 点历史条目（accessible name 含 repos 串）
+    fireEvent.click(await screen.findByRole("button", { name: /web, order/ }));
+    expect(await screen.findByTestId("topology-node-web")).toBeInTheDocument();
+    // AI 拓扑须完整恢复：web 是 entrypoint（空 draft 全员 backend 无角色）+ AI 边进 YAML
+    const editor = await openYamlEditor();
+    await waitFor(() => {
+      expect(editor.value).toContain("from: web");
+      expect(editor.value).toContain("to: order");
+    });
+    fireEvent.mouseDown(screen.getByTestId("corr-tab-graph"));
+    // 确认拓扑生效（bug 下恒停"AI 草稿"）
+    fireEvent.click(screen.getByRole("button", { name: /确认拓扑/ }));
+    expect(await screen.findByTestId("corr-confirm-bar")).toHaveTextContent(/已确认/);
+    expect(screen.getByRole("button", { name: /开始扫描/ })).toBeEnabled();
+  });
+
   it("刷新恢复：选 ws 后找回 running 分析，恢复状态轮询并显示过程日志", async () => {
     server.use(
       http.get("/api/workspaces/:ws/correlation-topology/analyses/latest", () =>
