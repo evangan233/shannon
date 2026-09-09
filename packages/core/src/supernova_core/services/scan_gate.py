@@ -175,6 +175,18 @@ def gate_ws_from_path(p: str) -> str:
     return parts[-1] if parts else ""
 
 
+def gate_ws_for_descriptor(workspace_name: str | None, event_file: str | None) -> str:
+    """闸门快照的工作区名：web event_file 路径优先，CLI workspace_name 兜底。
+
+    web 提交端把 ``workspace_name`` 填成 scan_id（worker 目录契约），不能直接当
+    工作区名展示；web event_file 固定在 workspaces/<ws>/scans/<scan_id>/ 下，
+    是权威来源。CLI 没有 workspaces 路径时，workspace_name 才是真实工作区名。
+    """
+    if event_file and "workspaces" in Path(event_file).parts:
+        return gate_ws_from_path(event_file) or (workspace_name or "")
+    return workspace_name or ""
+
+
 @activity.defn
 async def scan_gate_try_acquire(descriptor: dict) -> dict:
     return _gate().try_acquire(activity.info().workflow_id, descriptor)

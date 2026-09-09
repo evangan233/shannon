@@ -13,6 +13,26 @@ from supernova_web.models import ScanAccepted, ScanRequest
 router = APIRouter(prefix="/api/scan", tags=["scan"])
 
 
+def _repair_gate_ws(entries: list[dict]) -> None:
+    """旧闸门快照的 ws 展示修复：从 web workflow_id 反推真实 workspace。
+
+    web 的 workflow_id = ``{ws}-{scan_id}[-resume-N|-bb|-corr]``；早期 descriptor
+    曾把 T3 契约里的 ``workspace_name=scan_id`` 直接填进 ws。这里只在 ws 缺失
+    或等于 scan_id 时修复，CLI 的非空真实 ws 不受影响。
+    """
+
+    for e in entries:
+        wf = e.get("workflow_id")
+        scan_id = e.get("scan_id")
+        ws = e.get("ws")
+        if not wf or not scan_id or (ws and ws != scan_id):
+            continue
+        marker = f"-{scan_id}"
+        idx = wf.rfind(marker)
+        if idx > 0:
+            e["ws"] = wf[:idx]
+
+
 @router.post("", response_model=ScanAccepted, status_code=202)
 async def create_scan(req: ScanRequest, request: Request,
                       user: User = Depends(current_user)):
@@ -75,5 +95,8 @@ async def get_scan_gate(request: Request, user: User = Depends(current_user)):
     """
     from supernova_core.services.scan_gate import read_gate_snapshot_file
     sf = request.app.state.config.workspaces_dir / "gate_state.json"
-    return read_gate_snapshot_file(sf) or {
+    snap = read_gate_snapshot_file(sf) or {
         "capacity": 5, "max_waiting": 50, "held": [], "waiting": []}
+    _repair_gate_ws(snap.get("held", []))
+    _repair_gate_ws(snap.get("waiting", []))
+    return snap

@@ -192,6 +192,20 @@ def test_get_scan_gate_missing_file_empty(_authed_app):
     assert resp.json() == {"capacity": 5, "max_waiting": 50, "held": [], "waiting": []}
 
 
+def test_get_scan_gate_repairs_ws_from_workflow_id(_authed_app):
+    """旧快照里 ws=scan_id 的条目按 workflow_id 修回真实 workspace。"""
+    _write_gate_file(_authed_app, {
+        "capacity": 5, "max_waiting": 50,
+        "held": [{"workflow_id": "prod-s1-resume-1", "ws": "s1",
+                  "scan_id": "s1", "kind": "whitebox", "label": "a", "since": 1.0}],
+        "waiting": [{"workflow_id": "dev-s2-bb", "ws": "",
+                     "scan_id": "s2", "kind": "blackbox", "label": "b", "since": 2.0}]})
+    client = _authed_client(_authed_app)
+    body = client.get("/api/scan/gate").json()
+    assert body["held"][0]["ws"] == "prod"
+    assert body["waiting"][0]["ws"] == "dev"
+
+
 def test_get_scan_gate_visible_to_all_users(_authed_app):
     """全局透明（2026-09-09 用户裁定）：非 admin、非成员的普通用户也见完整快照——
     闸门是共享调度器，全员可见全局占用与自己的排队位次，不按 ws 成员过滤。"""

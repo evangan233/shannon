@@ -91,7 +91,7 @@ with workflow.unsafe.imports_passed_through():
     from supernova_core.services.settings_writer import sync_code_path_deny_rules, cleanup_settings
     from supernova_core.services.scan_gate import (
         acquire_gate_slot, release_gate_slot,
-        gate_scan_id_from_event_file, gate_ws_from_path)
+        gate_scan_id_from_event_file, gate_ws_for_descriptor)
     from supernova_core.models.retry import retry_for
     from supernova_core.models.errors import classify_error_for_temporal
 
@@ -177,7 +177,7 @@ class WhiteboxScanWorkflow:
         # （duration 不含排队）。MR 的白盒子 workflow 也走这里（mr_meta 非空 → kind=mr）。
         await acquire_gate_slot({
             "kind": "mr" if input.mr_meta else "whitebox",
-            "ws": input.workspace_name or gate_ws_from_path(input.event_file),
+            "ws": gate_ws_for_descriptor(input.workspace_name, input.event_file),
             "scan_id": gate_scan_id_from_event_file(input.event_file),
             "label": _gate_label(input),
         })

@@ -110,6 +110,19 @@ def test_gate_ws_from_path():
     assert gate_ws_from_path("") == ""
 
 
+def test_gate_ws_for_descriptor_prefers_event_file_workspace():
+    """web workspace_name=scan_id 不能当 ws 展示；event_file 路径才是权威来源。"""
+    from supernova_core.services.scan_gate import gate_ws_for_descriptor
+
+    assert gate_ws_for_descriptor(
+        "s1", "/app/workspaces/prod/scans/s1/events.ndjson") == "prod"
+    # CLI 的临时 event 路径不含 workspaces 段：不把文件名误判成 ws。
+    assert gate_ws_for_descriptor("cli-ws", "/tmp/cli/events.ndjson") == "cli-ws"
+    # CLI 无 event_file：workspace_name 本来就是真实 ws。
+    assert gate_ws_for_descriptor("cli-ws", None) == "cli-ws"
+    assert gate_ws_for_descriptor(None, None) == ""
+
+
 def test_activity_wrappers_delegate_to_gate():
     """activity 包装：workflow_id 取 activity.info()，逻辑委托进程级 gate。"""
     import asyncio

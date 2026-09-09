@@ -50,7 +50,8 @@ def has_correlation_results(corr_ws_deliverables: Path, vuln_classes: list[str])
 with workflow.unsafe.imports_passed_through():
     from . import activities
     from supernova_core.services.scan_gate import (
-        acquire_gate_slot, release_gate_slot, gate_scan_id_from_event_file)
+        acquire_gate_slot, release_gate_slot,
+        gate_scan_id_from_event_file, gate_ws_for_descriptor)
     from supernova_core.utils.progress import (
         AgentOutcome,
         exploit_result_to_outcome,
@@ -76,7 +77,7 @@ class BlackboxScanWorkflow:
         # 放最前：排队期间不推进任何 pipeline 逻辑，start_time 在放行后才记（duration 不含排队）。
         await acquire_gate_slot({
             "kind": "blackbox",
-            "ws": input.workspace_name or "",
+            "ws": gate_ws_for_descriptor(input.workspace_name, input.event_file),
             "scan_id": gate_scan_id_from_event_file(input.event_file),
             "label": input.web_url,
         })
