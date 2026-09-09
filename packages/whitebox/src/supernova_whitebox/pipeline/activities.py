@@ -624,15 +624,31 @@ async def log_phase_complete_activity(input: ActivityInput) -> None:
     await get_audit_session().log_phase_complete(phase)
 
 
-def _entry_points_brief(http_route_count: int, entry_point_total: int) -> str:
+def _entry_points_brief(
+    http_route_count: int, entry_point_total: int,
+    route_table: str | None = None, max_routes: int = 120,
+) -> str:
     """spec-1a T4: 格式化 entry_points_summary 给 explore prompt。
 
-    确定性层识别的入口点摘要（explore prompt 会提示此为「可能不全，自行 grep 补」）。
+    除计数外携带已识别路由表（METHOD route @ file:line），防止探索 agent 因缺少
+    起点而扫描 sibling repos/全局 registry（2026-09-09 identity 实证：30/33 routes
+    已识别，但 prompt 只有 count，agent 从 /root/.gitnexus/registry.json 开始跨仓）。
+    超大仓按输入序截断，同时保留计数说明。
     """
-    return (
+    header = (
         f"{http_route_count} http_route / {entry_point_total} total entry points"
         if (http_route_count or entry_point_total)
         else "0 http_route / 0 total (deterministic layer identified no entry points; grep routes yourself)"
+    )
+    if not route_table or route_table.startswith("("):
+        return header
+    lines = [line for line in route_table.splitlines() if line.strip()]
+    if len(lines) <= max_routes:
+        return f"{header}\n" + "\n".join(lines)
+    omitted = len(lines) - max_routes
+    return (
+        f"{header}\n" + "\n".join(lines[:max_routes]) + "\n"
+        f"- ... {omitted} more identified routes omitted; grep within the target repo for the rest"
     )
 
 
@@ -682,6 +698,23 @@ async def write_track_status_activity(input: ActivityInput) -> dict:
     _, deliverables, _ = _get_paths(input)
     write_track_status(deliverables, getattr(input, "track_statuses", {}))
     return {"written": True}
+
+
+def _verdict_agent_failure_reason(result) -> str | None:
+    """失败 verdict result 的统一可读原因。
+
+    max-turns 不抛异常，而是返回 success=False + error_code=ExecutionLimitError
+    （error 可能为 None）。caller 必须显式检查 success，否则空 text 会被当
+    parse warning 降级，且 step cache 误标成功。
+    """
+    if result.success:
+        return None
+    if result.error:
+        return str(result.error)
+    if result.error_code:
+        return str(result.error_code)
+    stop_reason = getattr(result, "stop_reason", None)
+    return f"verdict agent unsuccessful (stop_reason={stop_reason or 'unknown'})"
 
 
 def _parse_gitnexus_verdict_output(raw, id_prefix):
@@ -798,6 +831,7 @@ async def run_authz_gitnexus_judge(input: ActivityInput) -> dict:
                     "authz_gitnexus_judge",
                     variables={
                         "authz_gitnexus_candidates": md,
+                        "repo_root": str(repo),
                     },
                 )
                 try:
@@ -814,32 +848,41 @@ async def run_authz_gitnexus_judge(input: ActivityInput) -> dict:
                     logger.warning("authz gitnexus verdict agent failed: %s", exc)
                     vulnerabilities = []
                 else:
-                    raw = result.structured_output
-                    if raw is None and result.text:
-                        raw = result.text
-                    gn_vulns, gn_warnings = _parse_gitnexus_verdict_output(raw, "AUTHZ-GN-")
-                    for v in gn_vulns:
-                        data = v.model_dump()
-                        data["source_track"] = "gitnexus"
-                        if not data.get("evidence_chain"):
-                            data["evidence_chain"] = "gitnexus track candidate (dominance/framework)"
-                        vulnerabilities.append(data)
-                    if gn_warnings:
+                    fail_reason = _verdict_agent_failure_reason(result)
+                    if fail_reason:
+                        failed = True
+                        logger.warning(
+                            "authz gitnexus verdict agent failed: %s", fail_reason)
+                        vulnerabilities = []
+                    else:
+                        raw = result.structured_output
+                        if raw is None and result.text:
+                            raw = result.text
+                        gn_vulns, gn_warnings = _parse_gitnexus_verdict_output(
+                            raw, "AUTHZ-GN-")
+                        for v in gn_vulns:
+                            data = v.model_dump()
+                            data["source_track"] = "gitnexus"
+                            if not data.get("evidence_chain"):
+                                data["evidence_chain"] = (
+                                    "gitnexus track candidate (dominance/framework)")
+                            vulnerabilities.append(data)
+                        if gn_warnings:
+                            try:
+                                await get_audit_session().log_info(
+                                    f"authz GitNexus 轨：parse warnings (candidate>0): {gn_warnings}",
+                                    "warning",
+                                )
+                            except Exception:
+                                pass
+
                         try:
                             await get_audit_session().log_info(
-                                f"authz GitNexus 轨：parse warnings (candidate>0): {gn_warnings}",
-                                "warning",
+                                f"authz GitNexus 轨：产出 {len(vulnerabilities)} 条 verdict。",
+                                "info",
                             )
                         except Exception:
                             pass
-
-                    try:
-                        await get_audit_session().log_info(
-                            f"authz GitNexus 轨：产出 {len(vulnerabilities)} 条 verdict。",
-                            "info",
-                        )
-                    except Exception:
-                        pass
             else:
                 # spec-1a G2：0 候选不静默写空 queue——多轮 agent 自主探索仓库找 IDOR。
                 # 确定性层常因入口点未识别（语言误判/调用图未就绪/纯静态页）漏召回，
@@ -847,8 +890,10 @@ async def run_authz_gitnexus_judge(input: ActivityInput) -> dict:
                 explore_prompt = prompt_manager.load_sync(
                     "authz_gitnexus_explore",
                     variables={
+                        "repo_root": str(repo),
                         "entry_points_summary": _entry_points_brief(
-                            http_route_count, entry_point_total
+                            http_route_count, entry_point_total,
+                            route_table=_load_route_table(deliverables),
                         ),
                     },
                 )
@@ -866,34 +911,45 @@ async def run_authz_gitnexus_judge(input: ActivityInput) -> dict:
                     logger.warning("authz gitnexus explore agent failed: %s", exc)
                     vulnerabilities = []
                 else:
-                    raw = result.structured_output
-                    if raw is None and result.text:
-                        raw = result.text
-                    gn_vulns, gn_warnings = _parse_gitnexus_verdict_output(raw, "AUTHZ-GN-EXPLORE-")
-                    for v in gn_vulns:
-                        data = v.model_dump()
-                        data["source_track"] = "gitnexus"
-                        data["needs_review"] = True  # 探索发现，软候选（未经确定性 dominance 验证）
-                        if not data.get("evidence_chain"):
-                            data["evidence_chain"] = "gitnexus explore-discovered (0 deterministic candidates)"
-                        vulnerabilities.append(data)
-                    if gn_warnings:
+                    fail_reason = _verdict_agent_failure_reason(result)
+                    if fail_reason:
+                        failed = True
+                        logger.warning(
+                            "authz gitnexus explore agent failed: %s", fail_reason)
+                        vulnerabilities = []
+                    else:
+                        raw = result.structured_output
+                        if raw is None and result.text:
+                            raw = result.text
+                        gn_vulns, gn_warnings = _parse_gitnexus_verdict_output(
+                            raw, "AUTHZ-GN-EXPLORE-")
+                        for v in gn_vulns:
+                            data = v.model_dump()
+                            data["source_track"] = "gitnexus"
+                            # 探索发现，软候选（未经确定性 dominance 验证）。
+                            data["needs_review"] = True
+                            if not data.get("evidence_chain"):
+                                data["evidence_chain"] = (
+                                    "gitnexus explore-discovered "
+                                    "(0 deterministic candidates)")
+                            vulnerabilities.append(data)
+                        if gn_warnings:
+                            try:
+                                await get_audit_session().log_info(
+                                    f"authz GitNexus 轨（探索）：parse warnings: {gn_warnings}",
+                                    "warning",
+                                )
+                            except Exception:
+                                pass
+
                         try:
                             await get_audit_session().log_info(
-                                f"authz GitNexus 轨（探索）：parse warnings: {gn_warnings}",
-                                "warning",
+                                f"authz GitNexus 轨（探索）：0 确定性候选 → 自主探索产出 "
+                                f"{len(vulnerabilities)} 条软候选（needs_review=True）。",
+                                "info",
                             )
                         except Exception:
                             pass
-
-                    try:
-                        await get_audit_session().log_info(
-                            f"authz GitNexus 轨（探索）：0 确定性候选 → 自主探索产出 "
-                            f"{len(vulnerabilities)} 条软候选（needs_review=True）。",
-                            "info",
-                        )
-                    except Exception:
-                        pass
 
             atomic_write_json(
                 intermediate_path(deliverables, "authz_gitnexus_queue.json"),
@@ -3125,7 +3181,7 @@ async def run_gitnexus_verdict_agent(
             cost_usd=result.cost or 0.0,
             cost_currency=result.cost_currency,
             model=result.model,
-            error=result.error,
+            error=result.error or result.error_code,
             num_turns=result.turns,
             input_tokens=tokens.input_tokens if tokens else None,
             output_tokens=tokens.output_tokens if tokens else None,

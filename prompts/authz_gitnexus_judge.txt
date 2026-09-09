@@ -12,6 +12,11 @@ when ownership/role guard coverage is unclear, judge vulnerable (prefer
 over-reporting — the merge phase will reconcile with the LLM track).
 </objective>
 
+<target_scope>
+Repository root (the ONLY allowed analysis target): {{REPO_ROOT}}
+Do NOT read sibling repositories, parent directories, or global registry data.
+</target_scope>
+
 <input>
 {{AUTHZ_GITNEXUS_CANDIDATES}}
 </input>

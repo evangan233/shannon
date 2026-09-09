@@ -148,6 +148,89 @@ async def test_judge_skips_llm_when_no_candidates(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_judge_explore_prompt_has_repo_scope_and_routes(tmp_path):
+    """探索 prompt 必须钉死 repo 边界并携带已识别路由表。
+
+    2026-09-09 identity 实证：prompt 只给 route count 时，agent 会读全局
+    /root/.gitnexus/registry.json 并跨 repo 枚举，最终耗尽 max turns 且无 JSON。
+    """
+    dlv = tmp_path / "whitebox"
+    inter = dlv / "intermediate"
+    inter.mkdir(parents=True, exist_ok=True)
+    (inter / "code_index.json").write_text(json.dumps({
+        "repository": "r", "language": "typescript", "total_blocks": 0,
+        "total_entry_points": 1, "total_chains": 0, "blocks": [], "edges": [],
+        "entry_points": [], "chains": [],
+    }))
+    (inter / "entry_points.json").write_text(json.dumps({
+        "adjudicated_entry_points": [{
+            "entry_type": "http_route", "route": "/api/items/:id",
+            "http_method": "GET",
+            "func_block_id": "src/item.ts:getItem:42", "evidence": "GetMapping",
+        }],
+    }))
+
+    captured = {}
+
+    async def fake_run(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return type("R", (), {
+            "success": True, "structured_output": {"vulnerabilities": []},
+            "text": "{}",
+        })()
+
+    with patch.object(activities, "_get_paths", return_value=(tmp_path, dlv, tmp_path)):
+        with patch("supernova_whitebox.pipeline.activities.run_gitnexus_verdict_agent", new=fake_run):
+            with patch("supernova_whitebox.audit.session_registry.get_audit_session") as gs:
+                inst = gs.return_value
+                inst.track_step = _noop_cm_factory()
+                inst.log_info = AsyncMock()
+                await activities.run_authz_gitnexus_judge(_FakeInput(tmp_path))
+
+    prompt = captured["prompt"]
+    assert str(tmp_path) in prompt
+    assert "ONLY allowed analysis target" in prompt
+    assert "/root/.gitnexus/" in prompt
+    assert "GET /api/items/:id @ src/item.ts:getItem:42" in prompt
+    assert "{{REPO_ROOT}}" not in prompt
+    assert "{{ENTRY_POINTS_SUMMARY}}" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_judge_explore_failed_result_does_not_cache(tmp_path):
+    """max-turns 返回 success=False（不抛异常）时必须标 failed 且不写 step cache。
+
+    回归 identity/libs/app：结果为空 text 被当作 parse warning，activity 返回
+    failed=false，step cache 反而把这次失败缓存成成功。
+    """
+    dlv = tmp_path / "whitebox"
+    inter = dlv / "intermediate"
+    inter.mkdir(parents=True, exist_ok=True)
+    (inter / "code_index.json").write_text("{}")
+    (inter / "framework_analysis.json").write_text("{}")
+
+    async def fake_run(prompt, **kwargs):
+        return type("R", (), {
+            "success": False, "structured_output": None, "text": "",
+            "error": None, "error_code": "ExecutionLimitError",
+            "stop_reason": "max_turns", "turns": 0,
+        })()
+
+    with patch.object(activities, "_get_paths", return_value=(tmp_path, dlv, tmp_path)):
+        with patch("supernova_whitebox.pipeline.activities.run_gitnexus_verdict_agent", new=fake_run):
+            with patch("supernova_whitebox.audit.session_registry.get_audit_session") as gs:
+                inst = gs.return_value
+                inst.track_step = _noop_cm_factory()
+                inst.log_info = AsyncMock()
+                result = await activities.run_authz_gitnexus_judge(_FakeInput(tmp_path))
+
+    assert result["failed"] is True
+    assert result["fail_reason"] == "ExecutionLimitError"
+    assert result["verdict_count"] == 0
+    assert not (inter / ".step-cache" / "authz-gitnexus-judge.json").exists()
+
+
+@pytest.mark.asyncio
 async def test_judge_lenient_on_invalid_llm_output(tmp_path):
     """LLM returns non-JSON → parse_lenient absorbs, writes empty queue, no crash."""
     _write_index_with_candidate(tmp_path)
