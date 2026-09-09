@@ -15,13 +15,28 @@ import type { CorrFormState } from "@/lib/correlation-yaml";
 const REPOS_FIXTURE = [
   { name: "frontend", state: "ready", source: { kind: "git", url: "https://gitlab.example/frontend.git" } },
   { name: "order-svc", state: "ready", source: { kind: "git", url: "https://gitlab.example/order-svc.git" } },
+  { name: "pay-svc", state: "ready", source: { kind: "git", url: "https://gitlab.example/pay-svc.git" } },
 ];
 
 // 复用候选 fixture：order-svc 一条白盒（应命中）+ frontend 一条白盒（应被 repo 过滤掉）。
+// 智能默认（2026-09-09）补：order-svc 再挂更旧成功 + 更新失败（默认只认最新 completed）；
+// pay-svc 只有失败扫描（→ 默认现扫）。
 const WB_SCANS = [
   {
     scan_id: "20260801-120000", workflow_id: "ws1-order-20260801-120000", scan_type: "whitebox",
     repo: "order-svc", status: "completed", created_at: 1722400000, vuln_count: 1, is_running: false,
+  },
+  {
+    scan_id: "20260801-110000", workflow_id: "ws1-order-20260801-110000", scan_type: "whitebox",
+    repo: "order-svc", status: "completed", created_at: 1722300000, vuln_count: 1, is_running: false,
+  },
+  {
+    scan_id: "20260801-140000", workflow_id: "ws1-order-20260801-140000", scan_type: "whitebox",
+    repo: "order-svc", status: "failed", created_at: 1722400200, vuln_count: 0, is_running: false,
+  },
+  {
+    scan_id: "20260801-150000", workflow_id: "ws1-pay-20260801-150000", scan_type: "whitebox",
+    repo: "pay-svc", status: "failed", created_at: 1722400300, vuln_count: 0, is_running: false,
   },
   {
     scan_id: "20260801-999999", workflow_id: "ws1-front-20260801-999999", scan_type: "whitebox",
@@ -95,14 +110,47 @@ describe("CorrelationFormFields", () => {
     const card = screen.getByTestId("corr-repo-row");
     openRepoPicker(card);
     await pickRepo("order-svc");
-    // 切来源 → 复用历史
-    fireEvent.click(within(card).getByRole("button", { name: "复用历史" }));
+    // 智能默认（2026-09-09）：命名即预选最新成功扫描 120000——来源已是「复用历史」，
+    // trigger 显已选项而非占位文案；点开 trigger 手动改选更旧的 110000。
+    fireEvent.click(within(card).getByText(/20260801-120000/).closest("button")!);
     // 候选下拉：order-svc 的白盒在列；frontend 的白盒被 repo 过滤掉
-    fireEvent.click(screen.getByText("选择要复用的白盒扫描").closest("button")!);
-    fireEvent.click(await screen.findByRole("option", { name: /20260801-120000/ }));
+    fireEvent.click(await screen.findByRole("option", { name: /20260801-110000/ }));
     expect(screen.queryByRole("option", { name: /20260801-999999/ })).toBeNull();
     // 上抛 state 记录复用选择（formToYaml 语义：复用卡写 workspace: <scan_id>，页面级 YAML 测）
-    expect(lastState().repos[0].reuseScanId).toBe("20260801-120000");
+    expect(lastState().repos[0].reuseScanId).toBe("20260801-110000");
+  });
+
+  it("智能默认：有成功白盒的仓库命名即默认复用最新 completed；只有失败/未扫过 → 现扫", async () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "+ 添加仓库" }));
+    fireEvent.click(screen.getByRole("button", { name: "+ 添加仓库" }));
+    const cards = screen.getAllByTestId("corr-repo-row");
+    // order-svc：两条 completed（120000 新于 110000）+ 一条更新的 failed → 默认 120000
+    openRepoPicker(cards[0]);
+    await pickRepo("order-svc");
+    await waitFor(() => expect(lastState().repos[0].reuseScanId).toBe("20260801-120000"));
+    // pay-svc：只有 failed 扫描 → 保持现扫（null）
+    openRepoPicker(cards[1]);
+    await pickRepo("pay-svc");
+    await waitFor(() => expect(lastState().repos[1].repo).toBe("pay-svc"));
+    expect(lastState().repos[1].reuseScanId).toBeNull();
+  });
+
+  it("改名到别的仓库：携带的复用 id 不在新仓库候选 → 重置为新仓库智能默认", async () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "+ 添加仓库" }));
+    const card = screen.getByTestId("corr-repo-row");
+    openRepoPicker(card);
+    await pickRepo("order-svc");
+    await waitFor(() => expect(lastState().repos[0].reuseScanId).toBe("20260801-120000"));
+    // 改名 pay-svc（无成功扫描）→ 旧 id 重置为 null（现扫）
+    fireEvent.click(within(card).getByText("order-svc"));
+    await pickRepo("pay-svc");
+    await waitFor(() => expect(lastState().repos[0].reuseScanId).toBeNull());
+    // 改回 order-svc → 重新应用智能默认
+    fireEvent.click(within(card).getByText("pay-svc"));
+    await pickRepo("order-svc");
+    await waitFor(() => expect(lastState().repos[0].reuseScanId).toBe("20260801-120000"));
   });
 
   it("缺 entrypoint 提交校验拦截（唯一卡片切 backend → 显校验问题）", async () => {

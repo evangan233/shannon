@@ -105,10 +105,15 @@ export function effectiveRoles(node: Pick<TopologyNodeDraft, "roles">): CorrRole
   return ROLE_ORDER.filter((role) => node.roles.includes(role));
 }
 
+/** 新进入配置的仓库的来源智能默认解析器（2026-09-09）：返回复用 scan_id 或 null（现扫）。
+ *  只对「不在 existingSources / 图里尚无节点」的仓库生效——用户已配过（含显式现扫）原样保留。 */
+export type DefaultSourceResolver = (repo: string) => string | null;
+
 export function createTopologyDraft(
   selectedRepos: string[],
   analysis: CorrelationTopologyAnalysis | null,
   existingSources: SourceMap = {},
+  defaultSource?: DefaultSourceResolver,
 ): TopologyDraftState {
   const result = analysis?.result;
   const roleMap = new Map((result?.nodes ?? []).map((node) => [node.repo, node.roles] as const));
@@ -131,7 +136,9 @@ export function createTopologyDraft(
       repo,
       roles: roleMap.get(repo) ?? [],
       capabilities: capabilityMap.get(repo) ?? [],
-      reuseScanId: existingSources[repo] ?? null,
+      reuseScanId: existingSources[repo] !== undefined
+        ? existingSources[repo]
+        : (defaultSource?.(repo) ?? null),
       position: defaultPosition(roleMap.get(repo) ?? [], index),
     })),
     edges: (result?.edges ?? []).filter(
@@ -201,7 +208,9 @@ export function removeTopologyNode(state: TopologyDraftState, repo: string) {
   }));
 }
 
-export function updateTopologyRepositories(state: TopologyDraftState, repos: string[]) {
+export function updateTopologyRepositories(
+  state: TopologyDraftState, repos: string[], defaultSource?: DefaultSourceResolver,
+) {
   const selected = new Set(repos);
   const existing = new Map(state.draft.nodes.map((node) => [node.repo, node]));
   return semantic(state, (draft) => ({
@@ -210,7 +219,7 @@ export function updateTopologyRepositories(state: TopologyDraftState, repos: str
       repo,
       roles: [],
       capabilities: [],
-      reuseScanId: null,
+      reuseScanId: defaultSource?.(repo) ?? null,
       position: defaultPosition([], index),
     }),
     edges: draft.edges.filter((edge) => selected.has(edge.from) && selected.has(edge.to)),

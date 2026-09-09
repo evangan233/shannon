@@ -7,6 +7,7 @@ import { RepoCombobox } from "@/components/RepoCombobox";
 import { useRepos } from "@/api/useRepos";
 import { useScans } from "@/routes/WorkspaceDetail/useScans";
 import { validateForm, type CorrFormState, type CorrRepoDraft, type CorrRole, type CorrProtocol } from "@/lib/correlation-yaml";
+import { latestReusableScanId } from "@/lib/correlation-reuse";
 import { formatCorrIssue } from "./corr-issues-i18n";
 
 interface Props {
@@ -76,6 +77,10 @@ export function CorrelationFormFields({ state, onState, workspace }: Props) {
   // 复用候选：当前 ws 的 scans（useScans 共享 ["scans", ws] 缓存），按卡片仓库过滤 whitebox。
   const { scans } = useScans(workspace || undefined);
 
+  // 复用候选（brief）：当前 ws 的 whitebox 扫描 + repo === 卡片仓库名
+  const candidatesFor = (card: Pick<CorrRepoDraft, "repo">) =>
+    card.repo.trim() ? scans.filter((s) => s.scan_type === "whitebox" && s.repo === card.repo) : [];
+
   // —— 卡片操作（全部经 onState 上抛，父层三方扇出：图 + YAML 实时重建） ——
   function addRepo() {
     const next: CorrRepoDraft = {
@@ -100,9 +105,16 @@ export function CorrelationFormFields({ state, onState, workspace }: Props) {
 
   function setCardName(i: number, name: string) {
     const old = state.repos[i]?.repo ?? "";
+    const card = state.repos[i];
+    // 来源跟随命名（2026-09-09 智能默认）：首次命名 → 默认复用最新成功白盒（无则现扫）；
+    // 改名 → 携带的复用 id 不在新仓库候选（跨仓库携带提交会被后端拒）→ 重置为新仓库默认。
+    const carried = card?.reuseScanId;
+    const keepId = carried != null && name.trim()
+      && candidatesFor({ repo: name }).some((s) => s.scan_id === carried);
+    const reuseScanId = keepId ? carried : latestReusableScanId(scans, name);
     let s: CorrFormState = {
       ...state,
-      repos: state.repos.map((r, j) => (j === i ? { ...r, repo: name } : r)),
+      repos: state.repos.map((r, j) => (j === i ? { ...r, repo: name, reuseScanId } : r)),
       // 仓改名 → 同步改写引用旧名的边（保住已建的拓扑）
       relations: state.relations.map((e) => ({
         ...e,
@@ -143,10 +155,6 @@ export function CorrelationFormFields({ state, onState, workspace }: Props) {
         e.to === target && e.from === from ? { ...e, protocol } : e),
     });
   }
-
-  // 复用候选（brief）：当前 ws 的 whitebox 扫描 + repo === 卡片仓库名
-  const candidatesFor = (card: CorrRepoDraft) =>
-    card.repo.trim() ? scans.filter((s) => s.scan_type === "whitebox" && s.repo === card.repo) : [];
 
   const issues = validateForm(state);
 

@@ -37,6 +37,7 @@ import {
   topologyDraftToCorrForm, updateTopologyRepositories, validateTopologyDraft,
   type TopologyDraftState,
 } from "@/lib/correlation-topology-draft";
+import { latestReusableScanId } from "@/lib/correlation-reuse";
 
 /** 页面可达类型（D3）：白盒 | MR 增量 | 跨仓关联，顶部 segmented 切换（顺序=频率与
  *  表单复杂度，见下方 segmented 注释）。黑盒只读分支已删除——
@@ -529,6 +530,9 @@ export function ScanNewPage() {
   // MR 表单选中仓库对象（C 段快捷操作条 + state 显示）
   const mrSelectedRepo = mrRepos.find((r) => r.name === f.selectedRepo);
   const { scans } = useScans(type === "correlation" ? workspace : "");
+  // 来源智能默认（2026-09-09）：仓库首次进入跨仓配置时，默认复用该仓最新一次成功白盒
+  // 扫描（无成功/未扫过 → 现扫）。只在新进入时算一次；用户改过或已配置过的仓库不覆盖。
+  const defaultSourceFor = (repo: string) => latestReusableScanId(scans, repo);
   const setAuth = (patch: Partial<AuthFormState>) => setF((prev) => ({ ...prev, auth: { ...prev.auth, ...patch } }));
   const setHost = (patch: Partial<HostFormState>) => setF((prev) => ({ ...prev, host: { ...prev.host, ...patch } }));
 
@@ -611,7 +615,7 @@ export function ScanNewPage() {
     // 用户已在编辑（手贴 YAML / 手选仓库建过图）→ 恢复不覆盖其工作
     if (topologyState) return;
     const sources = Object.fromEntries(corrState.repos.map((repo) => [repo.repo, repo.reuseScanId]));
-    applyTopologyState(createTopologyDraft(selectedTopologyRepos, analysis, sources));
+    applyTopologyState(createTopologyDraft(selectedTopologyRepos, analysis, sources, defaultSourceFor));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysis, selectedTopologyRepos]);
 
@@ -693,7 +697,7 @@ export function ScanNewPage() {
     setSelectedTopologyRepos(repos);
     setAnalysisId(null); setAnalysis(null); setAnalysisError(null); resetLog();
     // Selector changes are table-compatible graph edits: preserve compatible nodes/edges/sources.
-    applyTopologyState(topologyState ? updateTopologyRepositories(topologyState, repos) : null);
+    applyTopologyState(topologyState ? updateTopologyRepositories(topologyState, repos, defaultSourceFor) : null);
   };
 
   const confirmCurrentTopology = () => {

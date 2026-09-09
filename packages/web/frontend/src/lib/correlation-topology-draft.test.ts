@@ -109,6 +109,30 @@ describe("topology draft graph semantics", () => {
     expect(undoTopology(state)).toBe(state);
   });
 
+  it("defaultSource 只默认新进入的仓库：existingSources 原样保留（含显式 null=现扫）", () => {
+    // order 未在 existingSources → 用 defaultSource；admin 在 existingSources 且显式 null（用户选了现扫）→ 不得被默认翻回复用
+    const sources: Record<string, string | null> = { web: "scan-web", admin: null };
+    const state = createTopologyDraft(
+      analysis.repos, analysis, sources,
+      (repo) => (repo === "order" ? "scan-order-latest" : null),
+    );
+    expect(state.draft.nodes.find((n) => n.repo === "web")?.reuseScanId).toBe("scan-web");
+    expect(state.draft.nodes.find((n) => n.repo === "admin")?.reuseScanId).toBeNull();
+    expect(state.draft.nodes.find((n) => n.repo === "order")?.reuseScanId).toBe("scan-order-latest");
+    expect(state.draft.nodes.find((n) => n.repo === "user")?.reuseScanId).toBeNull();
+  });
+
+  it("updateTopologyRepositories：新进 selection 的仓库应用 defaultSource，已有节点原样保留", () => {
+    let state = createTopologyDraft(analysis.repos, analysis, { web: "scan-web" });
+    state = updateTopologyRepositories(
+      state, ["web", "admin", "payment"],
+      (repo) => (repo === "payment" ? "scan-pay" : "should-not-apply"),
+    );
+    expect(state.draft.nodes.find((n) => n.repo === "payment")?.reuseScanId).toBe("scan-pay");
+    expect(state.draft.nodes.find((n) => n.repo === "web")?.reuseScanId).toBe("scan-web");
+    expect(state.draft.nodes.find((n) => n.repo === "admin")?.reuseScanId).toBeNull();
+  });
+
   it("preserves compatible draft state when repositories are added or removed", () => {
     let state = createTopologyDraft(analysis.repos, analysis, { web: "scan-web" });
     state = addTopologyNode(state, "payment");
