@@ -125,6 +125,12 @@ export const createRepo = (
   body: { git_url: string; branch?: string; commit?: string; name?: string; group?: string },
 ) => apiPost<{ name: string }>(`/workspaces/${encWs(ws)}/repos`, body);
 
+/** 批量克隆（2026-09-09）：贴多条 git URL 一次全下。202 立即返回汇总——
+ *  clone 均为后端后台任务（列表轮询可见 cloning → ready），撞并发上限的余量
+ *  由后端排队任务补位提交（queued），HTTP 不悬挂。 */
+export const batchClone = (ws: string, body: { urls: string[]; group?: string }) =>
+  apiPost<import("./types").BatchCloneResult>(`/workspaces/${encWs(ws)}/repos/batch-clone`, body);
+
 /** 统一链接解析（2026-09-03 仓库入口整合 A 段）：仓库/MR 链接 → 匹配工作区仓库
  *  （不存在则后端异步 clone，repo_state="cloning"）；MR 附 base/head refs。 */
 export const resolveLink = (ws: string, url: string) =>

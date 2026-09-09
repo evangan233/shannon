@@ -55,3 +55,50 @@ def test_clone_into_ws(_app, monkeypatch):
     tok = alice.get("/api/auth/csrf").json()["csrf_token"]
     r = alice.post("/api/workspaces/ws1/repos", json={"git_url": "https://x/y.git"}, headers={"X-CSRF-Token": tok})
     assert r.status_code == 202
+
+
+# ---- batch-clone（批量克隆，2026-09-09）----
+
+def _csrf(c):
+    return {"X-CSRF-Token": c.get("/api/auth/csrf").json()["csrf_token"]}
+
+
+def test_batch_clone_returns_summary(_app, monkeypatch):
+    async def _fake(ws, urls, group=None):
+        return {"submitted": ["a", "b"], "queued": ["c"],
+                "skipped": [{"url": "https://x/d.git", "reason": "exists"}]}
+    monkeypatch.setattr(_app.state.repo_manager, "clone_batch", _fake)
+    alice = _login(_app, "alice")
+    r = alice.post("/api/workspaces/ws1/repos/batch-clone",
+                   json={"urls": ["https://x/a.git", "https://x/b.git", "https://x/d.git"]},
+                   headers=_csrf(alice))
+    assert r.status_code == 202
+    assert r.json() == {"submitted": ["a", "b"], "queued": ["c"],
+                        "skipped": [{"url": "https://x/d.git", "reason": "exists"}]}
+
+
+def test_batch_clone_no_creds_503(_app, monkeypatch):
+    async def _fake(ws, urls, group=None):
+        raise PermissionError("no creds")
+    monkeypatch.setattr(_app.state.repo_manager, "clone_batch", _fake)
+    alice = _login(_app, "alice")
+    r = alice.post("/api/workspaces/ws1/repos/batch-clone",
+                   json={"urls": ["https://x/a.git"]}, headers=_csrf(alice))
+    assert r.status_code == 503
+
+
+def test_batch_clone_validation_422(_app, monkeypatch):
+    async def _fake(ws, urls, group=None):
+        raise ValueError("urls 不能为空")
+    monkeypatch.setattr(_app.state.repo_manager, "clone_batch", _fake)
+    alice = _login(_app, "alice")
+    r = alice.post("/api/workspaces/ws1/repos/batch-clone",
+                   json={"urls": []}, headers=_csrf(alice))
+    assert r.status_code == 422
+
+
+def test_batch_clone_non_member_forbidden(_app):
+    bob = _login(_app, "bob")
+    r = bob.post("/api/workspaces/ws1/repos/batch-clone",
+                 json={"urls": ["https://x/a.git"]}, headers=_csrf(bob))
+    assert r.status_code == 403

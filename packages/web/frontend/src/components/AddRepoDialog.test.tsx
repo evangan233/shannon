@@ -1,16 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import i18n from "@/i18n";
 import { AddRepoDialog } from "./AddRepoDialog";
 
 const mockCreateRepo = vi.fn();
 const mockLinkReposInDir = vi.fn();
 const mockUploadRepoZip = vi.fn();
+const mockBatchClone = vi.fn();
 const mockUseAuth = vi.fn();
 
 vi.mock("@/api/client", () => ({
   createRepo: (...a: any[]) => mockCreateRepo(...a),
   linkReposInDir: (...a: any[]) => mockLinkReposInDir(...a),
   uploadRepoZip: (...a: any[]) => mockUploadRepoZip(...a),
+  batchClone: (...a: any[]) => mockBatchClone(...a),
   ApiError: class ApiError extends Error {
     status: number;
     body: unknown;
@@ -41,8 +44,11 @@ function props(overrides: Record<string, unknown> = {}) {
 
 describe("AddRepoDialog", () => {
   beforeEach(() => {
+    // 断言用了翻译文案（分支(可选)/第 N 行…），固定 zh 防 CI navigator 语言漂移
+    i18n.changeLanguage("zh");
     mockCreateRepo.mockReset();
     mockLinkReposInDir.mockReset();
+    mockBatchClone.mockReset();
     mockUseAuth.mockReturnValue({ user: { id: 1, username: "tester", role: "admin" } });
   });
 
@@ -92,6 +98,60 @@ describe("AddRepoDialog", () => {
     fireEvent.click(screen.getByTestId("submit"));
     await waitFor(() => expect(mockCreateRepo).toHaveBeenCalled());
     expect(onCreated).toHaveBeenCalledWith("foo");
+  });
+
+  // ---- 批量克隆（多行 textarea，2026-09-09）----
+
+  /** 在 URL 多行框输入（fireEvent.change 传整段多行文本）。 */
+  function pasteUrls(text: string) {
+    fireEvent.change(screen.getByPlaceholderText("https://gitlab.example/foo.git"),
+      { target: { value: text } });
+  }
+
+  it("批量克隆：多行输入走 batchClone，onCreated 回调首个仓库名", async () => {
+    mockBatchClone.mockResolvedValue({ submitted: ["foo", "bar"], queued: [], skipped: [] });
+    const onCreated = vi.fn();
+    const onOpenChange = vi.fn();
+    render(<AddRepoDialog {...props({ onCreated, onOpenChange })} />);
+    pasteUrls("https://x/foo.git\nhttps://x/bar.git\n");
+    fireEvent.click(screen.getByTestId("submit"));
+    await waitFor(() => expect(mockBatchClone).toHaveBeenCalledWith(
+      "ws1", { urls: ["https://x/foo.git", "https://x/bar.git"], group: undefined }));
+    expect(onCreated).toHaveBeenCalledWith("foo");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(mockCreateRepo).not.toHaveBeenCalled();
+  });
+
+  it("批量克隆：多行时隐藏 branch/commit（批量无意义），单行保留", async () => {
+    render(<AddRepoDialog {...props()} />);
+    await screen.findByPlaceholderText("https://gitlab.example/foo.git");
+    // 单行：branch/commit 可见（现有单条精确定位路径不动）
+    pasteUrls("https://x/foo.git");
+    expect(screen.getByPlaceholderText("分支(可选)")).toBeTruthy();
+    // 多行：branch/commit 不渲染
+    pasteUrls("https://x/foo.git\nhttps://x/bar.git");
+    expect(screen.queryByPlaceholderText("分支(可选)")).toBeNull();
+    expect(screen.queryByPlaceholderText("commit(可选)")).toBeNull();
+  });
+
+  it("批量克隆：任一行非法 → 行内报错 + 提交禁用", async () => {
+    render(<AddRepoDialog {...props()} />);
+    await screen.findByPlaceholderText("https://gitlab.example/foo.git");
+    pasteUrls("https://x/foo.git\nnot-a-url\n");
+    expect(screen.getByText(/第 2 行不是合法 git URL/)).toBeTruthy();
+    expect((screen.getByTestId("submit") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("批量克隆：group 共享透传", async () => {
+    mockBatchClone.mockResolvedValue({ submitted: ["frontend/foo", "frontend/bar"], queued: [], skipped: [] });
+    render(<AddRepoDialog {...props()} />);
+    await screen.findByPlaceholderText("https://gitlab.example/foo.git");
+    pasteUrls("https://x/foo.git\nhttps://x/bar.git");
+    fireEvent.change(screen.getByPlaceholderText("如 frontend / backend，留空则放顶层"),
+      { target: { value: "frontend" } });
+    fireEvent.click(screen.getByTestId("submit"));
+    await waitFor(() => expect(mockBatchClone).toHaveBeenCalledWith(
+      "ws1", { urls: ["https://x/foo.git", "https://x/bar.git"], group: "frontend" }));
   });
 
   // ---- 上传模式（upload）：拖拽/选择 zip → uploadRepoZip ----

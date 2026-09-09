@@ -498,6 +498,84 @@ class RepoManager:
         self._jobs[(ws, final_name)] = task
         return final_name
 
+    # ---- batch clone（批量克隆，2026-09-09）----
+    # 单次批量上限（防超大请求体遍历过久，对齐 batch-delete 的 200 上限思路但
+    # clone 是重操作，收紧到 50）；排队轮询间隔与单条等位上限防 jobs 卡死时无限转。
+    BATCH_CLONE_MAX_URLS = 50
+    BATCH_SLOT_POLL_S = 1.0
+    BATCH_SLOT_MAX_WAIT_S = 600.0
+
+    async def clone_batch(self, ws: str, urls: list[str], group: str | None = None) -> dict:
+        """批量克隆：同步预检立即定局，撞并发上限的余量后台排队补位。
+
+        返回 ``{"submitted": [name], "queued": [name], "skipped": [{"url","reason"}]}``：
+        - 凭据缺失 → PermissionError（整批 fail-fast，端点 503）
+        - 去重保序，重复条目 skipped(reason=duplicate)
+        - 已存在（ValueError）→ skipped(reason=exists)，不中断整批
+        - TooManyClones → 余量打包成一个后台任务逐条补位（queued），本方法立即
+          返回——批量条数 > 并发上限时 HTTP 不悬挂（避免反代读超时掐断长请求），
+          每条仍是独立 clone 任务，仓库列表逐个出现 cloning 态。
+        """
+        if not self._git.available(ws):
+            raise PermissionError("未配置 git 凭证（GITLAB_USER/TOKEN）")
+        if not urls:
+            raise ValueError("urls 不能为空")
+        if len(urls) > self.BATCH_CLONE_MAX_URLS:
+            raise ValueError(f"单次最多 {self.BATCH_CLONE_MAX_URLS} 条 URL")
+        seen: set[str] = set()
+        ordered: list[str] = []
+        skipped: list[dict] = []
+        for u in urls:
+            if u in seen:
+                skipped.append({"url": u, "reason": "duplicate"})
+                continue
+            seen.add(u)
+            ordered.append(u)
+
+        submitted: list[str] = []
+        pending: list[str] = []
+        for u in ordered:
+            try:
+                submitted.append(await self.clone(ws, u, None, None, None, group))
+            except ValueError:        # 已存在（含空目录占位）→ 跳过收集
+                skipped.append({"url": u, "reason": "exists"})
+            except TooManyClones:
+                pending.append(u)
+        queued: list[str] = [self._batch_name(u, group) for u in pending]
+        if pending:
+            asyncio.create_task(self._batch_submit_task(ws, pending, group))
+        return {"submitted": submitted, "queued": queued, "skipped": skipped}
+
+    def _batch_name(self, url: str, group: str | None) -> str:
+        name = self._git.repo_name(url)
+        return f"{group}/{name}" if group else name
+
+    async def _batch_submit_task(self, ws: str, urls: list[str], group: str | None) -> None:
+        """排队补位：逐条等空位提交（clone_batch 的后台半段）。
+
+        等位条件看「未完成 job 数」——done-but-not-popped 的 entry 不计数
+        （_clone_task finally pop 前的窗口不构成真实占位）。排队期间重名（用户
+        手动加了同名仓）→ 放弃该条；凭据中途失效 → 放弃剩余（均后台静默：
+        仓库列表里不会出现该仓，用户重贴即可）。
+        """
+        for u in urls:
+            waited = 0.0
+            while True:
+                if sum(1 for t in self._jobs.values() if not t.done()) < self._max_concurrent:
+                    try:
+                        await self.clone(ws, u, None, None, None, group)
+                        break
+                    except ValueError:
+                        break            # 排队期间重名 → 放弃该条
+                    except PermissionError:
+                        return           # 凭据失效 → 放弃剩余
+                    except TooManyClones:
+                        pass             # 竞态丢槽（检查与提交间被抢先）→ 重试
+                if waited >= self.BATCH_SLOT_MAX_WAIT_S:
+                    break                # 单条等位超上限 → 放弃该条
+                await asyncio.sleep(self.BATCH_SLOT_POLL_S)
+                waited += self.BATCH_SLOT_POLL_S
+
     async def _clone_task(self, ws: str, name: str, url: str, branch: str | None,
                           commit: str | None, target: Path) -> None:
         try:

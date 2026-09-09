@@ -3,9 +3,10 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { createRepo, linkReposInDir, uploadRepoZip, ApiError } from "@/api/client";
+import { createRepo, batchClone, linkReposInDir, uploadRepoZip, ApiError } from "@/api/client";
 import { useAuth } from "@/auth/AuthContext";
 import { FileSystemPicker } from "@/components/FileSystemPicker";
 import { cn } from "@/lib/utils";
@@ -38,7 +39,15 @@ export function AddRepoDialog({ ws, open, onOpenChange, onCreated }: Props) {
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const urlOk = /^(https?:|git@|ssh:)/.test(url.trim());
+  // 批量克隆（2026-09-09）：一行一条 URL——1 条 = 现有单条路径（branch/commit 保留），
+  // ≥2 条 = 批量（branch/commit 隐藏，group 共享，提交走 batchClone）
+  const urlLines = url.split("\n").map((l) => l.trim()).filter(Boolean);
+  const isBatch = urlLines.length > 1;
+  const badLineNos = urlLines
+    .map((l, i) => ({ l, n: i + 1 }))
+    .filter(({ l }) => !/^(https?:|git@|ssh:)/.test(l))
+    .map(({ n }) => n);
+  const urlOk = urlLines.length > 0 && badLineNos.length === 0;
   const linkDirOk = linkDirPath.trim() !== "";
   const derivedName = files.length === 1 ? files[0].name.replace(/\.zip$/i, "") : "";
   const canSubmit = mode === "clone" ? urlOk : mode === "linkdir" ? linkDirOk : files.length > 0;
@@ -59,7 +68,17 @@ export function AddRepoDialog({ ws, open, onOpenChange, onCreated }: Props) {
   async function submit() {
     try {
       setBusy(true);
-      if (mode === "clone") {
+      if (mode === "clone" && isBatch) {
+        // 批量：urls + 共享 group；clone 均为后端后台任务（列表轮询可见），
+        // queued（撞并发上限排队补位）与 skipped 汇总 toast。
+        const r = await batchClone(ws, {
+          urls: urlLines,
+          group: group.trim() || undefined,
+        });
+        toast.success(t("repos.addDialog.batchResult",
+          { submitted: r.submitted.length, queued: r.queued.length, skipped: r.skipped.length }));
+        onCreated(r.submitted[0] ?? r.queued[0] ?? "");
+      } else if (mode === "clone") {
         const r = await createRepo(ws, {
           git_url: url.trim(),
           branch: branch.trim() || undefined,
@@ -150,17 +169,35 @@ export function AddRepoDialog({ ws, open, onOpenChange, onCreated }: Props) {
           <div className="space-y-3">
             <div className="space-y-1">
               <Label htmlFor="repo-url">{t("repos.addDialog.urlLabel")}</Label>
-              <Input id="repo-url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder={t("repos.addDialog.urlPlaceholder")} />
-              {!urlOk && url && <div className="text-xs text-destructive">{t("repos.addDialog.urlError")}</div>}
+              <Textarea
+                id="repo-url" data-testid="repo-urls" rows={4}
+                value={url} onChange={(e) => setUrl(e.target.value)}
+                placeholder={t("repos.addDialog.urlPlaceholder")}
+                className="font-mono min-h-0"
+              />
+              {badLineNos.length > 0 && (
+                <div className="text-xs text-destructive">
+                  {t("repos.addDialog.urlLinesError", { lines: badLineNos.join(", ") })}
+                </div>
+              )}
+              {!urlOk && urlLines.length > 0 && badLineNos.length === 0 && (
+                <div className="text-xs text-destructive">{t("repos.addDialog.urlError")}</div>
+              )}
+              {isBatch && (
+                <div className="text-[11px] text-muted-foreground">{t("repos.addDialog.batchHint")}</div>
+              )}
             </div>
             <div className="space-y-1">
               <Label htmlFor="repo-group">{t("repos.addDialog.groupLabel")}</Label>
               <Input id="repo-group" value={group} onChange={(e) => setGroup(e.target.value)} placeholder={t("repos.addDialog.groupPlaceholder")} />
             </div>
-            <div className="flex gap-2">
-              <Input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder={t("repos.addDialog.branchPlaceholder")} />
-              <Input value={commit} onChange={(e) => setCommit(e.target.value)} placeholder={t("repos.addDialog.commitPlaceholder")} />
-            </div>
+            {/* branch/commit 是单仓库精确定位字段——多行批量时无意义，隐藏 */}
+            {!isBatch && (
+              <div className="flex gap-2">
+                <Input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder={t("repos.addDialog.branchPlaceholder")} />
+                <Input value={commit} onChange={(e) => setCommit(e.target.value)} placeholder={t("repos.addDialog.commitPlaceholder")} />
+              </div>
+            )}
           </div>
         ) : mode === "upload" ? (
           <div className="space-y-3">

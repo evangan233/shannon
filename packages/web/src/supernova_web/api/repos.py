@@ -298,6 +298,29 @@ async def batch_delete_repos(ws: str, body: BatchDeleteBody, request: Request,
     return {"deleted": deleted, "unlinked": unlinked, "skipped": skipped}
 
 
+# ---- batch-clone（批量克隆，2026-09-09）----
+
+class BatchCloneBody(BaseModel):
+    urls: list[str]
+    group: str | None = None
+
+
+@router.post("/{ws}/repos/batch-clone", status_code=202)
+async def batch_clone_repos(ws: str, body: BatchCloneBody, request: Request,
+                            _: User = Depends(workspace_member)):
+    """批量克隆（贴多条 git URL 一次全下）：同步预检立即定局（submitted/skipped），
+    撞并发上限的余量由 RepoManager 后台排队补位（queued）——202 立即返回，HTTP
+    不悬挂。错误语义对齐单条 clone：503 凭据缺失 / 422 空列表·超上限。
+    声明在 ``{name:path}`` 路由之前（贪婪匹配会吞掉 /batch-clone 后缀）。"""
+    rm = request.app.state.repo_manager
+    try:
+        return await rm.clone_batch(ws, body.urls, body.group)
+    except PermissionError:
+        raise HTTPException(503, "未配置 git 凭据（GITLAB_USER/TOKEN）")
+    except ValueError as e:        # 空列表 / 超 BATCH_CLONE_MAX_URLS
+        raise HTTPException(422, str(e))
+
+
 # 仓库名可为 group/repo（含 '/'），故用 {name:path} 吃整段路径。带后缀的具体路由
 # （events/pull/checkout）必须声明在 GET /{name:path} 之前——{name:path} 贪婪匹配
 # 否则会吞掉后缀（/api/workspaces/{ws}/repos/foo/events 被当 name="foo/events"）。

@@ -1030,3 +1030,13 @@ export interface ResolveLinkResult {
 export interface RepoDetail extends Repo {
   recent_events?: Array<Record<string, unknown>>;
 }
+
+/** 批量克隆结果（POST /workspaces/{ws}/repos/batch-clone，2026-09-09）：
+ *  submitted=已提交后台 clone 的仓库名；queued=撞并发上限、由后端排队任务
+ *  补位提交的仓库名（稍后出现在列表 cloning 态）；skipped=跳过明细
+ *  （reason: exists=目录已存在 / duplicate=输入重复）。 */
+export interface BatchCloneResult {
+  submitted: string[];
+  queued: string[];
+  skipped: Array<{ url: string; reason: "exists" | "duplicate" | string }>;
+}
