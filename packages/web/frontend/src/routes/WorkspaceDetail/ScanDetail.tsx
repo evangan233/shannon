@@ -156,7 +156,7 @@ function CombinedDetailTimeline({
   );
 }
 
-// 白盒编排顺序（对齐后端 whitebox_resume._AGENT_ORDER）：断点详情卡据此渲染
+// 白盒编排顺序（对齐后端 whitebox_resume._AGENT_ORDER）：续跑详情卡据此渲染
 // 全量 agent 三态（✅ 已完成 / ▶ 将从此继续 / ⏳ 未跑到）——preview 响应只带
 // completed/interrupted 两集合，全序由前端静态持有（agent 集稳定）。
 const BREAKPOINT_AGENT_ORDER = [
@@ -169,9 +169,11 @@ const BREAKPOINT_STEP_LABEL: Record<string, string> = {
   missing: "workspaceDetail.scans.breakpointStepMissing",
 };
 
-/** 断点详情卡（spec 2026-08-27-web-resume-breakpoint §4.6）：非 completed/running
- *  的白盒行展示 agent 三态 + 步骤缓存简表 + warnings + 续跑按钮（确认流与列表页
- *  同款：摘要弹窗 → POST resume → 跳 live）。resumable:false 直示原因（引导重跑）。 */
+/** 续跑详情卡（spec 2026-08-27-web-resume-breakpoint §4.6；2026-09-09 由「断点详情」
+ *  改名——全程阶段到哪了已由常驻 ScanPhaseRail 承担，本卡专注续跑细节）：非
+ *  completed/running 的白盒行展示 agent 三态 + 步骤缓存简表 + warnings + 续跑按钮
+ *  （确认流与列表页同款：摘要弹窗 → POST resume → 跳 live）。resumable:false 直示
+ *  原因（引导重跑）。 */
 function ResumeBreakpointCard({ ws, scanId, onResumed }: {
   ws: string; scanId: string; onResumed: () => void;
 }) {
@@ -478,7 +480,7 @@ export default function ScanDetail() {
           />
         </div>
       )}
-      {/* 断点详情卡（spec 2026-08-27 §4.6）：非 completed/running 白盒行（含组合）
+      {/* 续跑详情卡（spec 2026-08-27 §4.6）：非 completed/running 白盒行（含组合）
           展示 agent 三态 + 步骤缓存 + 续跑入口；correlation/blackbox 无此区块。 */}
       {!loading && meta && meta.scan_type === "whitebox"
         && !["completed", "done", "running"].includes(status) && (
@@ -538,6 +540,7 @@ export default function ScanDetail() {
           <ScanProgressOverview
             ws={workspace!} scanId={scanId!} runsCount={runs.length}
             onScanEnd={() => load()}
+            scanType={meta.scan_type}
           />
         )}
         <Tabs value={current} onValueChange={(v) => navigate(v)}>

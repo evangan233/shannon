@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { setupServer } from "msw/node";
 import { http, HttpResponse, delay } from "msw";
@@ -312,9 +312,10 @@ describe("DefaultScanTab correlation 默认概览", () => {
   });
 });
 
-// ── 断点详情卡（spec 2026-08-27-web-resume-breakpoint §4.6）──────────────────
+// ── 续跑详情卡（spec 2026-08-27-web-resume-breakpoint §4.6；2026-09-09 由
+// 「断点详情」改名——全程阶段进度已常驻 ScanPhaseRail，本卡专注续跑细节）──────
 
-describe("断点详情卡", () => {
+describe("续跑详情卡", () => {
   it("failed 白盒行：agent 状态列表 + 步骤缓存简表 + 续跑确认流", async () => {
     const resumeCalls: string[] = [];
     server.use(
@@ -335,8 +336,10 @@ describe("断点详情卡", () => {
     );
     renderAt("/p/ws/scans/s1/live");
     // 卡片：标题 + 已完成 agent + 继续点 + 步骤缓存条目
-    expect(await screen.findByText("断点详情")).toBeInTheDocument();
-    expect(screen.getByText(/pre-recon/)).toBeInTheDocument();
+    expect(await screen.findByText("续跑详情")).toBeInTheDocument();
+    // agent 名限定在卡内断言——全程阶段轨道（scan-phase-rail）也有同名 chip
+    const card = screen.getByTestId("resume-breakpoint");
+    expect(within(card).getByText(/pre-recon/)).toBeInTheDocument();
     expect(screen.getByText(/将从此继续/)).toBeInTheDocument();
     expect(screen.getByText(/gitnexus-chain-verdict/)).toBeInTheDocument();
     // 续跑 → 确认弹窗（摘要）→ POST resume
@@ -364,9 +367,9 @@ describe("断点详情卡", () => {
     expect(screen.queryByRole("button", { name: "续跑" })).not.toBeInTheDocument();
   });
 
-  it("running 行不渲染断点详情卡", async () => {
+  it("running 行不渲染续跑详情卡", async () => {
     renderAt("/p/ws/scans/s1/live");
     await waitFor(() => expect(screen.getByText("whitebox")).toBeInTheDocument());
-    expect(screen.queryByText("断点详情")).not.toBeInTheDocument();
+    expect(screen.queryByText("续跑详情")).not.toBeInTheDocument();
   });
 });

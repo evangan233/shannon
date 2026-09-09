@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { mergedScanEventsUrl } from "@/api/client";
 import { useEventSource } from "@/api/useEventSource";
 import { dashboardReducer, emptyState, type DashboardState } from "@/state/dashboardReducer";
+import { ScanPhaseRail } from "./ScanPhaseRail";
 
 /**
  * 详情页进度概览（spec 2026-08-14 进度两层粒度 · 详情页细粒度）。
@@ -78,10 +79,14 @@ export interface ScanProgressOverviewProps {
   /** events 流出现 scan_end 时回调一次（ScanDetail 用于重拉 meta——失败横幅/状态徽章
    *  随失败实时出现，不必等用户刷新）。复用本组件已有 SSE，不再开第三条连接。 */
   onScanEnd?: () => void;
+  /** 扫描类型（meta.scan_type）：驱动全程阶段轨道（ScanPhaseRail）的计划序——
+   *  whitebox/combined→白盒 7 阶段、blackbox→黑盒 4 阶段、correlation/缺省→
+   *  不渲染（见 ScanPhaseRail）。缺省不渲染保证既有调用方/测试零变化。 */
+  scanType?: string | null;
 }
 
 export function ScanProgressOverview({
-  ws, scanId, runsCount, onScanEnd,
+  ws, scanId, runsCount, onScanEnd, scanType,
 }: ScanProgressOverviewProps): ReactElement {
   const { t } = useTranslation();
   const eventsUrl = mergedScanEventsUrl(ws, scanId, runsCount);
@@ -105,9 +110,11 @@ export function ScanProgressOverview({
   return (
     <TooltipProvider>
       <div
-        className="flex min-w-0 items-center gap-3 rounded-md border border-border bg-card p-2.5 shadow-[var(--shadow-card)]"
+        className="rounded-md border border-border bg-card p-2.5 shadow-[var(--shadow-card)]"
         data-testid="scan-progress-overview"
       >
+        {/* 主行：当前阶段 + 步级分段 + 计数 + Agent 芯片 + 连接态 + 详情浮层 */}
+        <div className="flex min-w-0 items-center gap-3">
         {/* 当前阶段（coral 主角） */}
         <span className="shrink-0 truncate font-sans text-base font-semibold leading-tight text-primary">
           {state.current_phase ?? "—"}
@@ -263,6 +270,9 @@ export function ScanProgressOverview({
             )}
           </PopoverContent>
         </Popover>
+        </div>
+        {/* 全程阶段轨道：所有阶段走到哪了（计划序常驻 + SSE 实时状态），见 ScanPhaseRail */}
+        <ScanPhaseRail state={state} scanType={scanType} />
       </div>
     </TooltipProvider>
   );

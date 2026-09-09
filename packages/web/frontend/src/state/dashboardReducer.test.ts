@@ -317,6 +317,63 @@ describe("dashboardReducer — 对齐 core DashboardState.apply", () => {
     expect(s.total_units).toBe(0);
     expect(s.completed_units).toBe(0);
   });
+
+  // === phase_status（全程阶段轨道 fold，2026-09-09 详情页阶段进度）===
+  // PhaseEvent 序列折叠成 name→status（core DashboardState 无此字段，前端扩展——
+  // 先例 gitnexus_progress）。渲染侧（ScanPhaseRail）与前端静态计划序（白盒 7 阶段）
+  // 合并出「到哪个阶段了」；phase_units 是单阶段步级、每阶段重置，回答不了这个问题。
+  it("PhaseEvent start/complete → phase_status 记录（不随下一阶段重置）", () => {
+    let s = dashboardReducer(emptyState(), ev({ type: "PhaseEvent", phase: "setup", event: "start" }));
+    expect(s.phase_status["setup"]).toBe("running");
+    s = dashboardReducer(s, ev({ type: "PhaseEvent", phase: "setup", event: "complete" }));
+    expect(s.phase_status["setup"]).toBe("done");
+    s = dashboardReducer(s, ev({ type: "PhaseEvent", phase: "pre-recon", event: "start", steps: [], step_intents: [] }));
+    expect(s.phase_status["pre-recon"]).toBe("running");
+    expect(s.phase_status["setup"]).toBe("done"); // 前序阶段保留
+  });
+
+  it("新阶段 start 隐式完成前一 running 阶段（complete 事件丢失兜底）", () => {
+    let s = dashboardReducer(emptyState(), ev({ type: "PhaseEvent", phase: "setup", event: "start" }));
+    s = dashboardReducer(s, ev({ type: "PhaseEvent", phase: "pre-recon", event: "start" }));
+    expect(s.phase_status["setup"]).toBe("done");
+  });
+
+  it("同名阶段重启（组合扫描黑盒 reporting 复用白盒阶段名）→ done 重开为 running", () => {
+    let s = dashboardReducer(emptyState(), ev({ type: "PhaseEvent", phase: "reporting", event: "start" }));
+    s = dashboardReducer(s, ev({ type: "PhaseEvent", phase: "reporting", event: "complete" }));
+    s = dashboardReducer(s, ev({ type: "PhaseEvent", phase: "reporting", event: "start" }));
+    expect(s.phase_status["reporting"]).toBe("running");
+  });
+
+  it("running 中重复 start 同名 → 幂等无副作用", () => {
+    let s = dashboardReducer(emptyState(), ev({ type: "PhaseEvent", phase: "recon", event: "start" }));
+    s = dashboardReducer(s, ev({ type: "PhaseEvent", phase: "recon", event: "start" }));
+    expect(s.phase_status["recon"]).toBe("running");
+  });
+
+  it("终态收敛：completed → running 标 done；failed → running 标 failed（保留失败现场，未观察阶段不动）", () => {
+    let s = dashboardReducer(emptyState(), ev({ type: "PhaseEvent", phase: "setup", event: "start" }));
+    s = dashboardReducer(s, ev({ type: "PhaseEvent", phase: "setup", event: "complete" }));
+    s = dashboardReducer(s, ev({ type: "PhaseEvent", phase: "recon", event: "start" }));
+    s = dashboardReducer(s, ev({ type: "scan_end", category: "CONTROL", status: "completed" }));
+    expect(s.phase_status["recon"]).toBe("done");
+    let f = dashboardReducer(emptyState(), ev({ type: "PhaseEvent", phase: "recon", event: "start" }));
+    f = dashboardReducer(f, ev({ type: "scan_end", category: "CONTROL", status: "failed" }));
+    expect(f.phase_status["recon"]).toBe("failed");
+  });
+
+  it("ResumeEvent → resumed_completed 累积合并（多次续跑去重）", () => {
+    let s = dashboardReducer(emptyState(), ev({
+      type: "ResumeEvent", category: "RESUME", previous_workflow_id: "x",
+      new_workflow_id: "y", checkpoint_hash: "h", completed_agents: ["pre-recon", "recon"],
+    }));
+    expect(s.resumed_completed).toEqual(["pre-recon", "recon"]);
+    s = dashboardReducer(s, ev({
+      type: "ResumeEvent", category: "RESUME", previous_workflow_id: "y",
+      new_workflow_id: "z", checkpoint_hash: "h", completed_agents: ["recon", "injection-vuln"],
+    }));
+    expect(s.resumed_completed).toEqual(["pre-recon", "recon", "injection-vuln"]);
+  });
 });
 
 // === correlation_progress（跨仓关联主行编排事件，D6，spec 2026-08-24）===

@@ -34,6 +34,14 @@ export interface DashboardState {
   phase_units: string[];
   unit_status: Record<string, string>;
   unit_intent: Record<string, string>;
+  /** 全程阶段轨道（前端扩展，core 无此字段——gitnexus_progress 先例，2026-09-09）：
+   *  PhaseEvent 序列折叠成 阶段名→running/done/failed，不随下一阶段 start 重置
+   *  （phase_units 是单阶段步级、每阶段重置）。ScanPhaseRail 与前端静态计划序
+   *  （白盒 7 阶段）合并渲染「到哪个阶段了」。 */
+  phase_status: Record<string, "running" | "done" | "failed">;
+  /** ResumeEvent.completed_agents 累积（多次续跑合并去重）：resume 时 pre-recon/
+   *  recon 等已完成 agent 不重发 PhaseEvent，渲染侧用此种子把对应阶段标 done。 */
+  resumed_completed: string[];
   /** GitNexus 深判聚合进度（前端扩展，core 无此字段——correlation_progress 先例）；
    *  null = 本流尚无 chain-verdict 事件。PhaseEvent start 不清（终态跨 phase 保留）。 */
   gitnexus_progress: GitnexusProgress | null;
@@ -49,6 +57,7 @@ export interface DashboardState {
 export function emptyState(): DashboardState {
   return {
     current_phase: null, agents: {}, phase_units: [], unit_status: {}, unit_intent: {},
+    phase_status: {}, resumed_completed: [],
     gitnexus_progress: null,
     completed_count: 0, total_cost: 0, cost_currency: "USD", total_units: 0, completed_units: 0, running_units: [],
   };
@@ -93,6 +102,11 @@ export function dashboardReducer(state: DashboardState, event: NdjsonEvent): Das
 
   switch (event.type) {
     case "PhaseEvent": {
+      // 阶段轨道 fold（前端扩展，见 DashboardState.phase_status 注释）：start 把其余
+      // running 阶段隐式收成 done（complete 事件丢失/乱序兜底——白盒 phase 严格串行，
+      // 下一阶段 start 即前序完结的证据），本阶段置 running（done 后重启=同名重开，
+      // 组合扫描黑盒 reporting 复用白盒阶段名场景）；complete 置 done。running 中重复
+      // start 幂等（不新建对象，避免无谓渲染）。
       if (event.event === "start") {
         // 对齐 core：intents = {n: i for n,i in zip(steps, step_intents) if i}
         // 守卫：steps/step_intents 可能缺失（畸形/降级事件），裸 [..undefined] 会抛
@@ -104,16 +118,32 @@ export function dashboardReducer(state: DashboardState, event: NdjsonEvent): Das
           const it = stepIntents[i];
           if (it) intents[steps[i]] = it;
         }
+        let ps = state.phase_status;
+        let psChanged = false;
+        for (const [k, v] of Object.entries(ps)) {
+          if (v === "running" && k !== event.phase) {
+            if (!psChanged) { ps = { ...ps }; psChanged = true; }
+            ps[k] = "done";
+          }
+        }
+        if (ps[event.phase] !== "running") {
+          if (!psChanged) { ps = { ...ps }; psChanged = true; }
+          ps[event.phase] = "running";
+        }
         next = {
           ...state,
           current_phase: event.phase,
           phase_units: [...steps],
           unit_status: {},
           unit_intent: intents,
+          phase_status: ps,
         };
       } else {
         // complete: keep units（对齐 core）
-        next = { ...state, current_phase: event.phase };
+        const ps = state.phase_status[event.phase] === "done"
+          ? state.phase_status
+          : { ...state.phase_status, [event.phase]: "done" as const };
+        next = { ...state, current_phase: event.phase, phase_status: ps };
       }
       break;
     }
@@ -133,7 +163,13 @@ export function dashboardReducer(state: DashboardState, event: NdjsonEvent): Das
       for (const name of event.completed_agents) {
         agents[name] = { ...row(name), status: "done" };
       }
-      next = { ...state, agents };
+      // resumed_completed 累积合并（保序去重）：多次续跑各自带增量 completed_agents。
+      const merged = state.resumed_completed.filter((n) => !event.completed_agents.includes(n));
+      next = {
+        ...state,
+        agents,
+        resumed_completed: [...merged, ...event.completed_agents],
+      };
       break;
     }
 
@@ -203,6 +239,20 @@ export function dashboardReducer(state: DashboardState, event: NdjsonEvent): Das
         next = { ...state, unit_status };
       } else {
         next = state;
+      }
+      // 阶段轨道终态收敛（同语义）：completed → running 阶段收 done；failed/killed/
+      // crashed → running 阶段标 failed（停在出事阶段，保留失败现场）；未观察阶段
+      // 不动（未跑到就是未跑到，不粉饰）。
+      const conv: "done" | "failed" | null =
+        event.status === "completed" ? "done"
+        : ["failed", "killed", "crashed"].includes(String(event.status)) ? "failed"
+        : null;
+      if (conv !== null && Object.values(next.phase_status).some((v) => v === "running")) {
+        const phase_status: DashboardState["phase_status"] = {};
+        for (const [k, v] of Object.entries(next.phase_status)) {
+          phase_status[k] = v === "running" ? conv : v;
+        }
+        next = { ...next, phase_status };
       }
       break;
     }

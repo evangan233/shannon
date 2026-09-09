@@ -115,6 +115,22 @@ describe("ScanProgressOverview", () => {
     expect(screen.getByTestId("scan-progress-overview")).toBeInTheDocument();
   });
 
+  // === 全程阶段轨道（scanType prop → ScanPhaseRail 第二行）===
+  it("scanType=whitebox → 轨道常驻且随 events 更新；缺省 scanType → 不渲染", () => {
+    eventsState.events = [
+      phaseStart("setup"),
+      phaseStart("pre-recon", ["pre-recon"], ["扫描架构"]),
+    ];
+    const { rerender } = render(<ScanProgressOverview ws="ws" scanId="s1" scanType="whitebox" />);
+    const rail = screen.getByTestId("scan-phase-rail");
+    expect(rail.querySelector('[data-phase="setup"]')).toHaveAttribute("data-status", "done");
+    expect(rail.querySelector('[data-phase="pre-recon"]')).toHaveAttribute("data-status", "running");
+    expect(rail.querySelector('[data-phase="reporting"]')).toHaveAttribute("data-status", "pending");
+    // 缺省 scanType（既有调用方/测试）→ 轨道不渲染，主行为零变化
+    rerender(<ScanProgressOverview ws="ws" scanId="s1" />);
+    expect(screen.queryByTestId("scan-phase-rail")).not.toBeInTheDocument();
+  });
+
   // === GitNexus 深判聚合行（2026-08-28 实时页 Agent 盲区修复，读侧）===
   // 30+ 个 chain-verdict-* 短命 agent 的形态是一行聚合（GitnexusLlmEvent fold），
   // 非平铺；running 明细仍走下方 Agent 区（写侧补 start 后自然出现）。
