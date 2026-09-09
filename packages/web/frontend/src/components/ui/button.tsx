@@ -28,6 +28,14 @@ const buttonVariants = cva(
         // 任意值输出在具名值之后，覆盖基类 rounded-md 生效）。
         cta:
           "bg-primary text-primary-foreground font-medium shadow-[var(--shadow-cta)] hover:shadow-[var(--shadow-cta-hover)] hover:-translate-y-px active:translate-y-0 transition-all [border-radius:var(--radius-cta,calc(var(--radius)_-_2px))]",
+        // ai · AI 辅助动作按钮（扫描页三按钮家族 2026-09-09）：主命令（提交扫描）恒走
+        // cta 实色胶囊，AI 辅助（自动关联分析等，产物是须确认的草稿）走 primary 轻染
+        // 描边 + 同款 hover 微浮——层级编码在容器，动作语义在图标。不实色：与 cta 同为
+        // bg-primary 会两个实色按钮争层级，用户可能把「分析」当「扫描」点。
+        // 图标色放调用处染（primary / 取消态 destructive），不在 variant 里 [&_svg] 锁死：
+        // 父级 arbitrary-variant 选择器 specificity 高于图标自身类，锁死会染不进语义色。
+        ai:
+          "border border-primary/35 bg-primary/5 text-foreground shadow-sm hover:-translate-y-px hover:border-primary/50 hover:bg-primary/10 active:translate-y-0",
         // toolbar · 工作区页操作条按钮（切换工作区/成员/仓库/认证/HOST/置顶）：card 表面
         // 浮于页面 + hover 上浮 -2px + 暖色柔阴影 + 图标染 coral（与 cta 同一浮动语言）。
         // 图标默认 muted，hover 跟随按钮整体上浮后点亮，给出可点击反馈。

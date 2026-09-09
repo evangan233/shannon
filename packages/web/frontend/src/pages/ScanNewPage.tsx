@@ -20,7 +20,7 @@ import { CorrelationGatewayFields } from "../components/correlation/CorrelationG
 import { TopologyConfirmBar } from "../components/correlation/TopologyConfirmBar";
 import { YamlPanel } from "../components/correlation/YamlPanel";
 import type { CredentialDraft } from "../components/auth/CredentialRows";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -1032,9 +1032,12 @@ export function ScanNewPage() {
           )}
         </div>
 
-        {/* 底部操作栏 */}
+        {/* 底部操作栏：主命令按钮（三按钮家族 2026-09-09）——Play 图标是「启动」的
+            动词符号，三种类型（白盒/MR/跨仓）共用同一按钮节点与图标，label 区分宾语
+            （开始扫描 / 启动跨仓扫描）；实色胶囊只属于发射时刻，AI 辅助见 ai variant。 */}
         <div className="flex items-center justify-between px-5 py-3.5 border-t border-border bg-card">
           <Button variant="cta" onClick={onSubmit} disabled={!isValid || submitting}>
+            <Play aria-hidden />
             {submitLabel}
           </Button>
           <span className="text-xs text-muted-foreground">{footerHint}</span>
