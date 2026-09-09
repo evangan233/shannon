@@ -33,14 +33,19 @@ describe("ScanGatePanel", () => {
     expect(container.querySelector("[data-testid=scan-gate-panel]")).toBeNull();
   });
 
-  it("默认收起一行：槽位条自描述——谁的仓占槽/多久/空闲格/排队位次都可见", () => {
+  it("默认摘要自描述：谁的仓/开始或入队时刻/历时/空闲格/排队顺序都可见", () => {
     renderPanel(<ScanGatePanel snapshot={snap} />);
     const panel = screen.getByTestId("scan-gate-panel");
-    // 占用芯片带 ws + 时长（不展开也答「谁在跑」）
+    // 占用芯片带 ws + 时刻·历时（不展开也答「谁在跑/何时/多久」）
     expect(screen.getByText("prod")).toBeInTheDocument();
-    // 排队芯片带位次 + ws
+    // 排队芯片只按顺序展示 ws/时刻，不逐项标 #N
     expect(screen.getByText("dev")).toBeInTheDocument();
-    expect(screen.getAllByText(/#/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^#\d+$/)).not.toBeInTheDocument();
+    const chipTimes = screen.getAllByTestId("gate-chip-time");
+    expect(chipTimes).toHaveLength(2);
+    for (const el of chipTimes) {
+      expect(el.textContent).toMatch(/\d{2}:\d{2} · .+[mhd<]/);
+    }
     // 空闲槽：capacity 5 - held 1 = 4 格
     expect(screen.getAllByTestId("gate-free")).toHaveLength(4);
     expect(panel).toHaveTextContent("1/5");
@@ -49,13 +54,14 @@ describe("ScanGatePanel", () => {
     expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("手动点开：任务名明细 + 位次 + 启动/入队时刻语义提示", () => {
+  it("手动点开：任务名明细 + 启动/入队时刻语义提示", () => {
     renderPanel(<ScanGatePanel snapshot={snap} />);
     fireEvent.click(screen.getByRole("button"));
     const panel = screen.getByTestId("scan-gate-panel");
     expect(panel).toHaveTextContent("payment-svc@main");
     expect(panel).toHaveTextContent("user-svc!12");
-    expect(panel).toHaveTextContent("第 1 位");
+    // 队列按快照顺序渲染，不逐项显示「第 N 位」
+    expect(panel).not.toHaveTextContent("第 1 位");
     // 段标行右侧微提示：两段时刻列语义不同（since=acquired_at vs first_seen）
     expect(panel).toHaveTextContent("启动 · 已运行");
     expect(panel).toHaveTextContent("入队 · 已等待");
@@ -72,18 +78,21 @@ describe("ScanGatePanel", () => {
     expect(screen.getByText("白盒")).toBeInTheDocument();
   });
 
-  it("槽位条芯片计数：占用=held、排队=waiting、超 3 个排队以 +N 收", () => {
+  it("摘要条长队列：全量渲染并横向滚动（不折叠 +N）", () => {
     const waiting = Array.from({ length: 9 }, (_, i) => ({
       ws: "dev", scan_id: `s${i}`, kind: "mr", label: `q-${i}`, since: 2,
     }));
     renderPanel(<ScanGatePanel snapshot={{ capacity: 5, max_waiting: 50, held: [], waiting }} />);
     expect(screen.queryAllByTestId("gate-slot")).toHaveLength(0);
     expect(screen.getAllByTestId("gate-free")).toHaveLength(5);
-    expect(screen.getAllByTestId("gate-waiting")).toHaveLength(3);
-    expect(screen.getByText("+6")).toBeInTheDocument();
+    expect(screen.getAllByTestId("gate-waiting")).toHaveLength(9);
+    expect(screen.queryByText("+6")).not.toBeInTheDocument();
+    const scroll = screen.getByTestId("gate-waiting-chips-scroll");
+    expect(scroll.className).toContain("overflow-x-auto");
+    expect(scroll.className).toContain("overscroll-x-contain");
   });
 
-  it("长排队全量渲染在限高滚动容器内（全局透明不截断，面板高度仍有界）", () => {
+  it("展开后长排队全量渲染在限高滚动容器内（全局透明不截断，面板高度仍有界）", () => {
     const waiting = Array.from({ length: 7 }, (_, i) => ({
       ws: "dev", scan_id: `s${i}`, kind: "mr", label: `user-svc!${i}`, since: 2,
     }));
