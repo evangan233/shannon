@@ -50,6 +50,38 @@ describe("ScanPhaseRail", () => {
     expect(chip!.querySelector(".supernova-spinner")).not.toBeNull();
   });
 
+  it("scan_end interrupted/cancelled → 停在半路阶段标 halted：‖ 符号替代 spinner（2026-09-09 中断体感修复）", () => {
+    // 现场复刻 chatbot-20260909-030342：心跳丢失 orphan 写 scan_end(interrupted)，
+    // 修复前 phase_status 停 running → recon 转圈永转像还在跑
+    const state = foldState([
+      ev({ type: "PhaseEvent", phase: "setup", event: "start" }),
+      ev({ type: "PhaseEvent", phase: "pre-recon", event: "start" }),
+      ev({ type: "PhaseEvent", phase: "recon", event: "start" }),
+      ev({ type: "scan_end", category: "CONTROL", status: "interrupted" }),
+    ]);
+    render(<ScanPhaseRail state={state} scanType="whitebox" />);
+    const rail = screen.getByTestId("scan-phase-rail");
+    const recon = rail.querySelector('[data-phase="recon"]');
+    expect(recon).toHaveAttribute("data-status", "halted");
+    expect(recon!.querySelector(".supernova-spinner")).toBeNull(); // 不再转圈
+    expect(recon!.textContent).toContain("‖"); // 暂停双竖线
+    expect(recon!.querySelector(".text-yellow")).not.toBeNull(); // 与 live 中断横幅同色
+    // 已完成阶段不粉饰、后续阶段不虚构
+    expect(rail.querySelector('[data-phase="pre-recon"]')).toHaveAttribute("data-status", "done");
+    expect(rail.querySelector('[data-phase="risk-scoring"]')).toHaveAttribute("data-status", "pending");
+  });
+
+  it("scan_end cancelled → 同 halted 语义（所有阶段通用）", () => {
+    const state = foldState([
+      ev({ type: "PhaseEvent", phase: "preflight", event: "start" }),
+      ev({ type: "scan_end", category: "CONTROL", status: "cancelled" }),
+    ]);
+    render(<ScanPhaseRail state={state} scanType="blackbox" />);
+    const chip = screen.getByTestId("scan-phase-rail").querySelector('[data-phase="preflight"]');
+    expect(chip).toHaveAttribute("data-status", "halted");
+    expect(chip!.querySelector(".supernova-spinner")).toBeNull();
+  });
+
   it("scan_end failed → 停在出事阶段标 failed（保留失败现场）", () => {
     const state = foldState([
       ev({ type: "PhaseEvent", phase: "setup", event: "start" }),

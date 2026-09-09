@@ -46,6 +46,11 @@ async def build_scan_events_response(request: Request, scan_dir: Path) -> Stream
     # 测试/CI 可调小）。env 读取在请求期——monkeypatch 即时生效。
     import os
     grace = float(os.environ.get("SUPERNOVA_EVENTS_CLOSE_GRACE_SECONDS", "10"))
+    if not is_running:
+        # 已终态扫描免宽限：源文件不再增长、新 run 目录不会再出现，宽限防的竞态
+        # 不存在，纯属延迟——「中断扫描打开 live 页 spinner 空转 ~10s 才变 ‖」即此
+        # （2026-09-09 中断体感 follow-up）。min 保住测试 env 调更小的值。
+        grace = min(grace, 0.5)
     # run 源空闲兜底窗口（默认 300s：黑盒 workflow 未 finalize 且 web 收口缺失时合成
     # run_end 关流的最后防线；run 仍在写则不触发。负值禁用）。
     run_idle = float(os.environ.get("SUPERNOVA_EVENTS_RUN_IDLE_SECONDS", "300"))

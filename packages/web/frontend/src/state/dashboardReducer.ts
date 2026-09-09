@@ -35,10 +35,15 @@ export interface DashboardState {
   unit_status: Record<string, string>;
   unit_intent: Record<string, string>;
   /** 全程阶段轨道（前端扩展，core 无此字段——gitnexus_progress 先例，2026-09-09）：
-   *  PhaseEvent 序列折叠成 阶段名→running/done/failed，不随下一阶段 start 重置
-   *  （phase_units 是单阶段步级、每阶段重置）。ScanPhaseRail 与前端静态计划序
-   *  （白盒 7 阶段）合并渲染「到哪个阶段了」。 */
-  phase_status: Record<string, "running" | "done" | "failed">;
+   *  PhaseEvent 序列折叠成 阶段名→running/done/failed/halted，不随下一阶段 start
+   *  重置（phase_units 是单阶段步级、每阶段重置）。ScanPhaseRail 与前端静态计划序
+   *  （白盒 7 阶段）合并渲染「到哪个阶段了」。halted = 非自然中止（interrupted/
+   *  cancelled，2026-09-09）：≠ failed（不盗红✗）≠ done，渲染 ‖ 黄。 */
+  phase_status: Record<string, "running" | "done" | "failed" | "halted">;
+  /** 终态事件（SummaryEvent/scan_end）的 status；null = 流未见终态（前端扩展，core
+   *  无此字段）。呈现层据此重解释 running 语义：非完成终态后 running agent 的
+   *  spinner 换中止符号、running 分段条静止（ScanProgressOverview），不再假装在跑。 */
+  end_status: string | null;
   /** ResumeEvent.completed_agents 累积（多次续跑合并去重）：resume 时 pre-recon/
    *  recon 等已完成 agent 不重发 PhaseEvent，渲染侧用此种子把对应阶段标 done。 */
   resumed_completed: string[];
@@ -57,7 +62,7 @@ export interface DashboardState {
 export function emptyState(): DashboardState {
   return {
     current_phase: null, agents: {}, phase_units: [], unit_status: {}, unit_intent: {},
-    phase_status: {}, resumed_completed: [],
+    phase_status: {}, end_status: null, resumed_completed: [],
     gitnexus_progress: null,
     completed_count: 0, total_cost: 0, cost_currency: "USD", total_units: 0, completed_units: 0, running_units: [],
   };
@@ -137,6 +142,10 @@ export function dashboardReducer(state: DashboardState, event: NdjsonEvent): Das
           unit_status: {},
           unit_intent: intents,
           phase_status: ps,
+          // 新阶段启动 = 流复活：清终态（归并流全量重放时，上一 run 的 SummaryEvent/
+          // scan_end 之后会跟续跑 run 的 PhaseEvent，不清则新 run 的 running agent
+          // 被误判中止态）。
+          end_status: null,
         };
       } else {
         // complete: keep units（对齐 core）
@@ -241,11 +250,14 @@ export function dashboardReducer(state: DashboardState, event: NdjsonEvent): Das
         next = state;
       }
       // 阶段轨道终态收敛（同语义）：completed → running 阶段收 done；failed/killed/
-      // crashed → running 阶段标 failed（停在出事阶段，保留失败现场）；未观察阶段
-      // 不动（未跑到就是未跑到，不粉饰）。
-      const conv: "done" | "failed" | null =
+      // crashed → running 阶段标 failed（停在出事阶段，保留失败现场）；interrupted/
+      // cancelled → 标 halted（非自然中止≠失败≠完成，2026-09-09 中断体感修复：
+      // 心跳丢失/orphan 写 interrupted、用户取消写 cancelled，此前漏网致 spinner 永转）；
+      // 未观察阶段不动（未跑到就是未跑到，不粉饰）。end_status 记录终态（呈现层消费）。
+      const conv: "done" | "failed" | "halted" | null =
         event.status === "completed" ? "done"
         : ["failed", "killed", "crashed"].includes(String(event.status)) ? "failed"
+        : ["interrupted", "cancelled"].includes(String(event.status)) ? "halted"
         : null;
       if (conv !== null && Object.values(next.phase_status).some((v) => v === "running")) {
         const phase_status: DashboardState["phase_status"] = {};
@@ -254,6 +266,7 @@ export function dashboardReducer(state: DashboardState, event: NdjsonEvent): Das
         }
         next = { ...next, phase_status };
       }
+      if (event.status) next = { ...next, end_status: String(event.status) };
       break;
     }
 

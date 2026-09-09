@@ -8,7 +8,7 @@ import type { DashboardState } from "../state/dashboardReducer";
 const state: DashboardState = {
   current_phase: "vulnerability-analysis", agents: {}, phase_units: ["Injection", "Xss"],
   unit_status: { Injection: "done", Xss: "running" }, unit_intent: {},
-  phase_status: {}, resumed_completed: [],
+  phase_status: {}, end_status: null, resumed_completed: [],
   gitnexus_progress: null,
   completed_count: 1, total_cost: 0.5, total_units: 2, completed_units: 1, running_units: ["Xss"],
 };

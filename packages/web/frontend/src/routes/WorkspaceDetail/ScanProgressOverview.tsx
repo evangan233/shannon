@@ -35,18 +35,34 @@ const UNIT_STATUS_CLS: Record<string, string> = {
   running: "text-cyan",
   done: "text-green",
   failed: "text-red",
+  halted: "text-yellow",
 };
 
-// 进度条分段底色（与列表状态色同源：绿=完成 / 青=运行 / 红=失败 / muted=未开始）。
+// 进度条分段底色（与列表状态色同源：绿=完成 / 青=运行 / 红=失败 / muted=未开始 /
+// 黄=中止——非自然终态后 running 段静止转黄，不 pulse 假装在跑，2026-09-09）。
 const SEGMENT_CLS: Record<string, string> = {
   running: "bg-cyan motion-reduce:animate-none animate-pulse",
   done: "bg-green",
   failed: "bg-red",
+  halted: "bg-yellow/70",
   pending: "bg-muted",
 };
 
 function unitGlyph(st: string | undefined): string {
-  return st === "running" ? "○" : st === "done" ? "✓" : st === "failed" ? "✗" : "·";
+  return st === "running" ? "○" : st === "done" ? "✓" : st === "failed" ? "✗" : st === "halted" ? "‖" : "·";
+}
+
+const HALTED_GLYPH = "‖";
+
+/** 运行指示 glyph：流真在跑 → braille spinner（primary）；非自然终态（interrupted/
+ *  cancelled）后仍停 running 的 agent → ‖ 黄（与 ScanPhaseRail halted、live 中断
+ *  横幅同语言）——spinner 只属于真在跑的流。w-[1ch] 对齐 spinner 的 1ch 槽位。 */
+function AgentGlyph({ halted }: { halted: boolean }): ReactElement {
+  return halted ? (
+    <span aria-hidden className="inline-block w-[1ch] text-yellow">{HALTED_GLYPH}</span>
+  ) : (
+    <span className="supernova-spinner" aria-hidden />
+  );
 }
 
 /** 计数组：进度 X/Y · Agent N/M · ✗F（有失败才显，红色）。单行常驻与 Popover 头部共用。 */
@@ -103,6 +119,10 @@ export function ScanProgressOverview({
     }
   }, [events, eventsUrl, onScanEnd]);
   const running = Object.values(state.agents).filter((a) => a.status === "running");
+  // 非自然终态（interrupted/cancelled/failed…非 completed）：流已死，running 语义
+  // 在呈现层重解释为 halted（spinner→‖、pulse 分段静止），不再假装在跑。
+  // 续跑时 PhaseEvent start 复位 end_status（reducer），spinner 自然回归。
+  const halted = state.end_status !== null && state.end_status !== "completed";
   const agentTotal = Object.keys(state.agents).length;
   const showProgress = state.total_units > 0;
   const sm = STATUS_MAP[status] ?? STATUS_MAP.closed;
@@ -127,7 +147,10 @@ export function ScanProgressOverview({
             data-testid="progress-strip"
           >
             {state.phase_units.map((unit) => {
-              const st = state.unit_status[unit] ?? "pending";
+              const raw = state.unit_status[unit] ?? "pending";
+              // unit_status 是事实层（core 1:1 对齐，非完成终态保留现场不收敛）；
+              // 呈现层按终态上下文重解释：中止后 running 段 → halted（静止黄）。
+              const st = halted && raw === "running" ? "halted" : raw;
               return (
                 <Tooltip key={unit}>
                   <TooltipTrigger asChild>
@@ -163,7 +186,7 @@ export function ScanProgressOverview({
               <Tooltip key={a.name}>
                 <TooltipTrigger asChild>
                   <span className="flex shrink-0 items-center gap-1 rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs">
-                    <span className="supernova-spinner" aria-hidden /> {a.name}{" "}
+                    <AgentGlyph halted={halted} /> {a.name}{" "}
                     <span className="text-muted-foreground">t{a.turn}</span>
                   </span>
                 </TooltipTrigger>
@@ -215,7 +238,8 @@ export function ScanProgressOverview({
             {state.phase_units.length > 0 && (
               <div className="mt-2 space-y-0.5 text-xs">
                 {state.phase_units.map((unit) => {
-                  const st = state.unit_status[unit];
+                  const raw = state.unit_status[unit];
+                  const st = halted && raw === "running" ? "halted" : raw;
                   return (
                     <div key={unit} className="flex gap-2">
                       <span className={UNIT_STATUS_CLS[st ?? ""] ?? "text-muted-foreground"}>
@@ -261,7 +285,7 @@ export function ScanProgressOverview({
               <div className="mt-2 space-y-1 border-t border-border pt-2">
                 {running.map((a) => (
                   <div key={a.name} className="break-all font-mono text-xs">
-                    <span className="supernova-spinner" aria-hidden /> {a.name}{" "}
+                    <AgentGlyph halted={halted} /> {a.name}{" "}
                     <span className="text-muted-foreground">t{a.turn}</span>{" "}
                     {a.last_action_detail ?? a.last_action ?? ""}
                   </div>

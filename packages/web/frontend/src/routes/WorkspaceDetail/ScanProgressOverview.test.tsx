@@ -71,6 +71,32 @@ describe("ScanProgressOverview", () => {
     expect(screen.getByText("- 路由图")).toBeInTheDocument();
   });
 
+  it("中断（scan_end interrupted）→ 转圈换 ‖ 黄：agent 芯片/Popover 行不再 spinner，running 分段静止黄", () => {
+    // 现场复刻 chatbot-20260909-030342：recon agent 无 end 事件停 running，spinner 永转
+    eventsState.events = [
+      phaseStart("recon", ["route-map", "deep-recon"]),
+      { ts: TS, category: "STEP", type: "StepEvent", name: "route-map", phase: "recon", event: "start" },
+      agentStart("recon-agent"),
+      toolCall("recon-agent", "Task", { description: "auth analysis" }),
+      { ts: TS, category: "CONTROL", type: "scan_end", status: "interrupted" },
+    ];
+    render(<ScanProgressOverview ws="ws" scanId="s1" />);
+    // 主行芯片仍在（最后现场）但 spinner → ‖ 黄（不再假装在跑）
+    const chips = screen.getByTestId("progress-agents");
+    expect(chips.querySelector(".supernova-spinner")).toBeNull();
+    expect(chips.textContent).toContain("‖");
+    expect(chips.querySelector(".text-yellow")).not.toBeNull();
+    // running 分段重解释 halted：静止黄段（不 pulse）
+    const seg = screen.getByTestId("progress-strip").querySelector('[data-unit="route-map"]');
+    expect(seg).toHaveAttribute("data-status", "halted");
+    expect(seg!.className).not.toContain("animate-pulse");
+    // Popover 内 agent 行同样 ‖ 非 spinner；步级 ○ → ‖
+    fireEvent.click(screen.getByTestId("progress-details-trigger"));
+    const details = screen.getByTestId("progress-details");
+    expect(details.querySelector(".supernova-spinner")).toBeNull();
+    expect(details.textContent).toContain("‖");
+  });
+
   it("渲染正在跑的 Agent 芯片，详情在 Popover 内", () => {
     eventsState.events = [
       phaseStart("recon", ["pre-recon"]),

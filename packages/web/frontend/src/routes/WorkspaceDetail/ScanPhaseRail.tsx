@@ -41,7 +41,7 @@ const RESUME_SEED_PHASE: Record<string, string> = {
   "recon": "recon",
 };
 
-export type PhaseMark = "pending" | "running" | "done" | "failed";
+export type PhaseMark = "pending" | "running" | "done" | "failed" | "halted";
 
 /** 阶段状态合成：观察序 phase_status 优先；无观察时用 Resume 种子（续跑跳过
  *  的已完成阶段不重发 PhaseEvent）；都无 → pending（计划内未跑到）。 */
@@ -55,15 +55,21 @@ function phaseMark(state: DashboardState, phase: string): PhaseMark {
 
 // 轨道 glyph：与步级明细（unitGlyph）/进度条分段同色系——绿✓/红✗/muted·，
 // running 用 supernova-spinner + primary（与运行 Agent 芯片、当前阶段主角同语言）。
+// halted（interrupted/cancelled 非自然中止，2026-09-09）= ‖ 暂停双竖线 + 黄——
+// ≠ failed（不盗红✗的「出错」语义）≠ done，黄与 live 页中断横幅（endInterrupted）
+// 同语言；spinner 只属于真在跑的流。所有阶段通用（phaseMark 不区分阶段）。
 const MARK_GLYPH_CLS: Record<Exclude<PhaseMark, "running">, string> = {
   done: "text-green",
   failed: "text-red",
+  halted: "text-yellow",
   pending: "text-muted-foreground/50",
 };
+const HALTED_GLYPH = "‖";
 const NAME_CLS: Record<PhaseMark, string> = {
   done: "text-muted-foreground",
   running: "font-medium text-primary",
   failed: "text-foreground",
+  halted: "text-foreground",
   pending: "text-muted-foreground/60",
 };
 
@@ -99,7 +105,7 @@ export function ScanPhaseRail({
                 <span className="supernova-spinner" aria-hidden />
               ) : (
                 <span aria-hidden className={MARK_GLYPH_CLS[mark]}>
-                  {mark === "done" ? "✓" : mark === "failed" ? "✗" : "·"}
+                  {mark === "done" ? "✓" : mark === "failed" ? "✗" : mark === "halted" ? HALTED_GLYPH : "·"}
                 </span>
               )}
               <span className={NAME_CLS[mark]}>{phase}</span>

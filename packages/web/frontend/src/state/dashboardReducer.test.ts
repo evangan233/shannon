@@ -195,7 +195,7 @@ describe("dashboardReducer — 对齐 core DashboardState.apply", () => {
     expect(s.completed_count).toBe(2);
   });
 
-  it("ErrorEvent/SummaryEvent/WorkflowHeader: 无状态变化", () => {
+  it("ErrorEvent/SummaryEvent/WorkflowHeader: 无状态变化（SummaryEvent 仅记 end_status）", () => {
     const s0 = emptyState();
     const s1 = dashboardReducer(s0, ev({ type: "ErrorEvent", category: "ERROR", error_type: "X", message: "m" }));
     const s2 = dashboardReducer(s1, ev({ type: "SummaryEvent", category: "SUMMARY", status: "completed" }));
@@ -203,7 +203,7 @@ describe("dashboardReducer — 对齐 core DashboardState.apply", () => {
       type: "WorkflowHeader", category: "HEADER", workflow_id: "w", target_url: "u",
       repo_path: "/", mode: "whitebox", web_ui_url: "", logs_cmd: "", workspace: "ws",
     }));
-    expect(s3).toEqual(s0);
+    expect(s3).toEqual({ ...s0, end_status: "completed" });
   });
 
   it("apply is immutable: original state unchanged", () => {
@@ -360,6 +360,45 @@ describe("dashboardReducer — 对齐 core DashboardState.apply", () => {
     let f = dashboardReducer(emptyState(), ev({ type: "PhaseEvent", phase: "recon", event: "start" }));
     f = dashboardReducer(f, ev({ type: "scan_end", category: "CONTROL", status: "failed" }));
     expect(f.phase_status["recon"]).toBe("failed");
+  });
+
+  // 2026-09-09 中断体感修复：心跳丢失/orphan 写 scan_end(interrupted)、用户取消写
+  // (cancelled)——此前两者不在收敛名单，phase_status 永停 running → 阶段轨道 spinner
+  // 永转（recon 转圈让用户以为还在跑）。非自然中止 ≠ 失败（不盗 ✗红）≠ 完成：收敛为
+  // halted（渲染层 ‖ 黄，见 ScanPhaseRail）。end_status 记录终态供呈现层重解释
+  // running agent/分段条（ScanProgressOverview）。
+  it("终态收敛：interrupted/cancelled → running 阶段标 halted + end_status 记录", () => {
+    let s = dashboardReducer(emptyState(), ev({ type: "PhaseEvent", phase: "pre-recon", event: "start" }));
+    s = dashboardReducer(s, ev({ type: "PhaseEvent", phase: "pre-recon", event: "complete" }));
+    s = dashboardReducer(s, ev({ type: "PhaseEvent", phase: "recon", event: "start" }));
+    expect(s.end_status).toBeNull();
+    s = dashboardReducer(s, ev({ type: "scan_end", category: "CONTROL", status: "interrupted" }));
+    expect(s.phase_status["recon"]).toBe("halted");
+    expect(s.phase_status["pre-recon"]).toBe("done"); // 已完成阶段不粉饰
+    expect(s.end_status).toBe("interrupted");
+    // 用户取消同语义
+    let c = dashboardReducer(emptyState(), ev({ type: "PhaseEvent", phase: "exploitation", event: "start" }));
+    c = dashboardReducer(c, ev({ type: "scan_end", category: "CONTROL", status: "cancelled" }));
+    expect(c.phase_status["exploitation"]).toBe("halted");
+    expect(c.end_status).toBe("cancelled");
+  });
+
+  it("end_status：SummaryEvent 同样记录；无终态事件保持 null", () => {
+    let s = dashboardReducer(emptyState(), ev({ type: "PhaseEvent", phase: "recon", event: "start" }));
+    expect(s.end_status).toBeNull();
+    s = dashboardReducer(s, ev({ type: "SummaryEvent", category: "SUMMARY", status: "completed" }));
+    expect(s.end_status).toBe("completed");
+  });
+
+  it("end_status 续跑复位：终态后新 PhaseEvent start → null（running agent 不被误判中止）", () => {
+    let s = dashboardReducer(emptyState(), ev({ type: "PhaseEvent", phase: "recon", event: "start" }));
+    s = dashboardReducer(s, ev({ type: "AgentEvent", agent_name: "recon", event: "start" }));
+    s = dashboardReducer(s, ev({ type: "scan_end", category: "CONTROL", status: "interrupted" }));
+    expect(s.end_status).toBe("interrupted");
+    // 归并流全量重放：上一 run 终态事件之后跟续跑 run 的 PhaseEvent start
+    s = dashboardReducer(s, ev({ type: "PhaseEvent", phase: "recon", event: "start" }));
+    expect(s.end_status).toBeNull();
+    expect(s.phase_status["recon"]).toBe("running"); // halted 重开为 running
   });
 
   it("ResumeEvent → resumed_completed 累积合并（多次续跑去重）", () => {

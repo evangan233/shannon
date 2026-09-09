@@ -83,7 +83,10 @@ export interface LogEventEvent {
   exc_txt?: string;
 }
 export interface ScanEndEvent extends CommonFields {
-  type: "scan_end"; status: "completed" | "failed" | "killed" | "crashed";
+  // 后端编排层实际终态全集（scan_manager/orphan_reconciler）：completed / failed /
+  // killed / crashed / interrupted（心跳丢失 orphan）/ cancelled（用户取消）——
+  // 前两者外的非自然终态曾漏出联合类型（2026-09-09 中断体感修复顺带补齐）。
+  type: "scan_end"; status: "completed" | "failed" | "killed" | "crashed" | "interrupted" | "cancelled";
   returncode?: number; stderr_tail?: string;
 }
 /** 黑盒 run 级收尾（归并流把 run 的 scan_end 改写为 run_end 转发：对全量流非终态）。 */
