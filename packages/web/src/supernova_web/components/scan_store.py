@@ -463,17 +463,21 @@ class ScanStore:
     # ---- 创建 ----
     def create_scan(self, ws: str, web_url: str, repo_path: str,
                     scan_type: str = "whitebox",
-                    lineage: str | None = None) -> tuple[str, Path]:
+                    lineage: str | None = None,
+                    id_label: str | None = None) -> tuple[str, Path]:
         """在 ws 内建新 scan_id 目录 + session.json（不复位 resume；重扫=新 scan）。
 
         返回 (scan_id, scan_dir)。
         - whitebox/correlation: scan_id = <repo>-YYYYMMDD-HHMMSS，同秒碰撞 -2/-3。
+          ``id_label`` 可把任务名前缀和 ``repo_path`` 展示名解耦（如跨仓主任务用
+          ``cross-repo``，避免占用某个仓库现扫任务的命名空间）。
         - blackbox: scan_id = <wb_scan_id>~<N>（lineage=白盒 scan_id，N=该白盒已有黑盒序号，
           per-ws 单调）。lineage 仅 blackbox 用，白盒忽略。
         """
         ws_dir = self._dir / ws
         scans_dir = ws_dir / "scans"
-        scan_id = self._gen_scan_id(scans_dir, repo_path, scan_type, lineage)
+        scan_id = self._gen_scan_id(
+            scans_dir, repo_path, scan_type, lineage, id_label=id_label)
         # SessionManager(scans_dir) 复用 create_workspace：建 scans/<scan_id>/session.json。
         # core 零改动；幂等（session.json 已存在则不覆盖），但 scan_id 经碰撞规避保证新。
         mgr = SessionManager(scans_dir)
@@ -621,7 +625,8 @@ class ScanStore:
 
     def _gen_scan_id(self, scans_dir: Path, repo_path: str,
                      scan_type: str = "whitebox",
-                     lineage: str | None = None) -> str:
+                     lineage: str | None = None,
+                     id_label: str | None = None) -> str:
         """生成 scan_id。
 
         blackbox: <wb_scan_id>~<N>（整段白盒 scan_id 作血缘前缀 + per-ws 单调序号；
@@ -629,6 +634,7 @@ class ScanStore:
           此处 while-exists 兜底防同序号目录竞态。
         whitebox/correlation（默认）: <repo>-YYYYMMDD-HHMMSS（仓库名前缀 + 本地时区紧凑秒级）；
           同秒碰撞 -2/-3。仓库名前缀让扫描目录一眼可辨（对齐 legacy NodeGoat_<ts> 可读性）。
+          ``id_label`` 只改任务名前缀，不改 session.repo_path 的仓库展示语义。
         """
         if scan_type == "blackbox":
             if not lineage:
@@ -639,7 +645,7 @@ class ScanStore:
                 n += 1
                 scan_id = f"{lineage}~{n}"
             return scan_id
-        base = f"{_repo_label(repo_path)}-{_now_local().strftime('%Y%m%d-%H%M%S')}"
+        base = f"{_repo_label(id_label or repo_path)}-{_now_local().strftime('%Y%m%d-%H%M%S')}"
         scan_id = base
         i = 2
         while (scans_dir / scan_id / "session.json").exists():

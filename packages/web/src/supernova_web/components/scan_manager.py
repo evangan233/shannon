@@ -353,12 +353,13 @@ class ScanManager:
                 scan_id, scan_dir = self._store.create_scan(
                     ws, req.url or "", target or "", req.type, lineage=lineage)
         elif req.type == "correlation":
-            # 主行（C3）：repo 字段填 entrypoint 服务名做展示锚（scan_id 前缀即该名，
-            # 对齐白盒的 <repo>-<ts> 可读性）。
+            # 主行（C3）：repo 保留 entrypoint 作展示锚；但任务名显式用 cross-repo。
+            # 若主行也用 <entrypoint>-<ts>，同一秒创建的子仓 <entrypoint>-<ts> 会被迫
+            # 变成 -2，用户看到的“主任务”就冒充了仓库扫描名。
             entry_svc = next((svc for svc, spec in corr_config.repos.items()
                               if spec.role == "entrypoint"), "")
             scan_id, scan_dir = self._store.create_scan(
-                ws, req.url or "", entry_svc, "correlation")
+                ws, req.url or "", entry_svc, "correlation", id_label="cross-repo")
         else:
             scan_id, scan_dir = self._store.create_scan(
                 ws, req.url or "", target or "", req.type)

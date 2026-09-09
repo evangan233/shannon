@@ -411,6 +411,24 @@ def test_create_scan_whitebox_format_unchanged(tmp_path):
     assert "~" not in sid
 
 
+def test_create_scan_id_label_avoids_repo_task_namespace(monkeypatch, tmp_path):
+    """id_label 只改 scan_id 前缀，不改 session.repo_path。
+
+    回归场景：跨仓主行先创建，同秒 frontend 子仓不应被迫变成 frontend-...-2。
+    """
+    import supernova_web.components.scan_store as mod
+    fixed = datetime(2026, 9, 9, 18, 0, 0)
+    monkeypatch.setattr(mod, "_now_local", lambda: fixed)
+    store = ScanStore(tmp_path)
+    main_id, main_dir = store.create_scan(
+        "WS", "u", "/code/frontend", "correlation", id_label="cross-repo")
+    child_id, _ = store.create_scan("WS", "u", "/code/frontend")
+    assert main_id == "cross-repo-20260909-180000"
+    assert child_id == "frontend-20260909-180000"
+    data = json.loads((main_dir / "session.json").read_text())
+    assert data["repo_path"] == "/code/frontend"
+
+
 def test_create_scan_blackbox_requires_lineage(tmp_path):
     """黑盒无 lineage → ValueError(黑盒恒复用白盒,lineage 必填,防御性校验)。"""
     store = ScanStore(tmp_path)

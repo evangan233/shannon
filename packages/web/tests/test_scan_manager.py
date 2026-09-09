@@ -849,6 +849,8 @@ async def test_start_correlation_creates_main_and_children(tmp_path, monkeypatch
     main = next(s for s in scans if s.scan_id == scan_id)
     assert main.is_correlation  # R3：真实 ScanSummary 字段（scan_type 派生）
     assert main.scan_type == "correlation"
+    # 主任务名显式带 cross-repo 前缀，不和同秒创建的仓库子任务同名/同名 -2。
+    assert scan_id.startswith("cross-repo-")
     assert len(main.corr_children) == 2
     assert {c["service"] for c in main.corr_children} == {"frontend", "order-svc"}
     assert all(c["reused"] is False for c in main.corr_children)
@@ -860,6 +862,7 @@ async def test_start_correlation_creates_main_and_children(tmp_path, monkeypatch
     # 现扫子仓提交 2 次，target = ws 内仓库路径（repo 名语义解析）
     assert len(submitted["wb"]) == 2
     assert {Path(t).name for (_w, _sid, t) in submitted["wb"]} == {"frontend", "order-svc"}
+    assert scan_id not in child_ids
     # 接力同步段已跑（fake await 即时完成）：corr 提交 1 次、paths 覆盖两子仓
     assert submitted["corr"] == 1
     assert set(submitted["corr_paths"]) == {"frontend", "order-svc"}
