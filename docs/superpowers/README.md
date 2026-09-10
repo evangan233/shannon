@@ -95,6 +95,7 @@
 - [poc-accuracy-speed-overhaul](specs/2026-08-19-poc-accuracy-speed-overhaul-design.md) — PoC 准确性+速度治理 P0+P1（witness 解析/路由 join/lint/authz 鉴别力/auth 并行/checkpoint v2）🔧
 - [whitebox-report-readability](specs/2026-08-25-whitebox-report-readability-design.md) — 白盒报告可读性改造（四要素卡/接口级归并/速查表/风格指南/severity 数据化）🔧
 - [vuln-card-consolidation](specs/2026-08-26-vuln-card-consolidation-design.md) — 漏洞卡片信息归并 + 双轨呈现一致性（细节区收敛/问题点三要素/接口+参数/LLM 配对归并/GN-only 补全）📐
+- [api-evidence-matrix](specs/2026-09-10-api-evidence-matrix-design.md) — 接口证据页（接口级倒排证据矩阵：白盒/黑盒两栏独立 + coverage 标注 + 独立 web tab + 旧扫描 lazy 回填）📐
 
 ### 认证档案 auth-profile
 - [auth-profile-vault](specs/2026-08-05-auth-profile-vault-design.md) — per-ws 加密档案库 + 独立验证 + 黑盒扫描复用 🔧
