@@ -368,6 +368,100 @@ async def test_ensure_repository_idempotent(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_ensure_repository_holds_git_lock(tmp_path: Path, monkeypatch):
+    """ensure_repository 的 init+initial commit 必须全程持 _git_lock。
+
+    固化生产 bug(2026-09-10 cross-repo-20260910-054739):多个 edge agent 并发
+    execute 时,首个协程的 ensure_repository initial commit(曾不持锁)与第二个
+    协程的 create_checkpoint commit(持锁)在 git 层并发——输家读到 unborn HEAD
+    走 create 语义,ref 阶段撞上赢家已建的 refs/heads/master →
+    "fatal: cannot lock ref 'HEAD': reference already exists" → 该 edge fail。
+    """
+    deliverables = tmp_path / "deliverables"
+    deliverables.mkdir()
+    original = GitManager._run_git
+    lock_states: list[bool] = []
+
+    async def spy_run_git(repo_path: Path, *args: str):
+        lock_states.append(GitManager._git_lock.locked())
+        return await original(repo_path, *args)
+
+    monkeypatch.setattr(GitManager, "_run_git", staticmethod(spy_run_git))
+
+    await GitManager.ensure_repository(deliverables)
+
+    assert lock_states, "ensure_repository should run git commands on init path"
+    assert all(lock_states), (
+        f"git commands ran without holding _git_lock: {lock_states}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cannot_lock_ref_text_recognized_as_lock_error():
+    """'cannot lock ref' 文本本质是锁冲突(并发 create 同一 ref),必须进重试名单。
+
+    固化生产 bug:该文本曾不在 _GIT_LOCK_PATTERNS → 不重试直接 PentestError。
+    重试即可自愈——第二次跑时 ref 已存在,走 update 语义成功。
+    """
+    from supernova_core.git_manager import _is_git_lock_error
+
+    assert _is_git_lock_error(
+        "fatal: cannot lock ref 'HEAD': reference already exists"
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_on_cannot_lock_ref_error(git_repo: Path, monkeypatch):
+    """cannot lock ref 错误须触发重试(对齐 test_retry_on_lock_error 的注入模式)。"""
+    call_count = 0
+    original_run_git = GitManager._run_git
+
+    async def mock_run_git(repo_path: Path, *args: str):
+        nonlocal call_count
+        result = await original_run_git(repo_path, *args)
+        if args and args[0] == "commit":
+            call_count += 1
+            if call_count == 1:
+                result = subprocess.CompletedProcess(
+                    args=["git", *args],
+                    returncode=1,
+                    stdout="",
+                    stderr="fatal: cannot lock ref 'HEAD': reference already exists",
+                )
+        return result
+
+    monkeypatch.setattr(GitManager, "_run_git", staticmethod(mock_run_git))
+
+    result = await GitManager.create_checkpoint(git_repo, "retry-agent")
+    assert result.success is True
+    assert call_count >= 2  # Initial call + at least 1 retry
+
+
+@pytest.mark.asyncio
+async def test_ensure_and_checkpoint_concurrent_no_conflict(tmp_path: Path):
+    """复刻跨仓首扫时序:ensure_repository 与多个 create_checkpoint 同时 gather。
+
+    修复后 ensure 持锁,三个操作与 checkpoint 串行,不出现 unborn-HEAD 并发
+    create ref 竞态(修复前为概率性 git 竞态,非确定性红灯,靠上面的锁观察
+    测试锁定根因;此测试做整合护栏)。"""
+    deliverables = tmp_path / "deliverables"
+    deliverables.mkdir()
+
+    results = await asyncio.gather(
+        GitManager.ensure_repository(deliverables),
+        GitManager.create_checkpoint(deliverables, "edge-a", attempt=1),
+        GitManager.create_checkpoint(deliverables, "edge-b", attempt=1),
+    )
+
+    assert all(r.success for r in results)
+    # 仓库结构健康:HEAD 可解析、master 存在
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=deliverables, capture_output=True, text=True,
+    )
+    assert head.returncode == 0
+
+
+@pytest.mark.asyncio
 async def test_ensure_repository_dotgit_is_inside_not_parent(tmp_path: Path):
     """关键:.git 必须直接在 deliverables 内,而非沿用父仓库的 .git(这是原 bug 根源)。"""
     parent = tmp_path / "parent"

@@ -18,6 +18,10 @@ _GIT_LOCK_PATTERNS: list[str] = [
     "Another git process",
     "fatal: Unable to create",
     "fatal: index file",
+    # 并发对同一 unborn ref 走 create 语义,输家到 ref 阶段撞上赢家已建的 ref
+    # (2026-09-10 cross-repo 首扫:ensure 的 initial commit 与并发 edge 的
+    # checkpoint commit 竞态)。重试即自愈——第二次 ref 已存在,走 update 语义。
+    "cannot lock ref",
 ]
 
 
@@ -71,18 +75,28 @@ class GitManager:
         刻意不用 is_git_repository(后者用 rev-parse,会匹配父仓库的 .git,
         正是迁移后 deliverables 污染主仓库的 bug 根源)。不存在则 git init +
         设 local 身份(避免无全局 git config 的环境 commit 失败)+ 首次空 commit。
+
+        init+initial commit 全程持 _git_lock(对齐 commit_index 的锁内自查
+        init):多个 agent 并发 execute 时,首个协程的 initial commit 若不持锁,
+        会与后续协程持锁的 create_checkpoint 在 git 层并发——unborn HEAD 上
+        双方同走 create 语义,输家报 "cannot lock ref 'HEAD': reference
+        already exists"(2026-09-10 cross-repo 首扫生产事故)。快检在锁外,
+        拿锁后双检(等锁期间可能已被并发协程 init)。
         """
         dot_git = repo_path / ".git"
         if dot_git.exists():
             return GitResult(success=True)
 
-        await GitManager._run_git(repo_path, "init")
-        # local 身份:TS 依赖全局 config,这里设 local 以在 CI/容器等无全局环境稳健
-        await GitManager._run_git(repo_path, "config", "user.email", "shannon-deliverables@local")
-        await GitManager._run_git(repo_path, "config", "user.name", "shannon-deliverables")
-        await GitManager._run_git_with_retry(
-            repo_path, "commit", "--allow-empty", "-m", "Initial deliverables checkpoint",
-        )
+        async with GitManager._git_lock:
+            if dot_git.exists():
+                return GitResult(success=True)
+            await GitManager._run_git(repo_path, "init")
+            # local 身份:TS 依赖全局 config,这里设 local 以在 CI/容器等无全局环境稳健
+            await GitManager._run_git(repo_path, "config", "user.email", "shannon-deliverables@local")
+            await GitManager._run_git(repo_path, "config", "user.name", "shannon-deliverables")
+            await GitManager._run_git_with_retry(
+                repo_path, "commit", "--allow-empty", "-m", "Initial deliverables checkpoint",
+            )
         return GitResult(success=True)
 
     @staticmethod
