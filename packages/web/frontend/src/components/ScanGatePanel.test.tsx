@@ -72,6 +72,18 @@ describe("ScanGatePanel", () => {
     expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "true");
   });
 
+  it("展开态摘要条让位收起（drill-down 去重：明细是芯片信息超集），再收起恢复", () => {
+    renderPanel(<ScanGatePanel snapshot={snap} />);
+    expect(screen.getByTestId("scan-gate-rail")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.queryByTestId("scan-gate-rail")).toBeNull();
+    // 计数与明细仍在（「空几格」语义由 x/capacity 接管）
+    expect(screen.getByTestId("scan-gate-panel")).toHaveTextContent("1/5");
+    expect(screen.getByText("payment-svc@main")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.getByTestId("scan-gate-rail")).toBeInTheDocument();
+  });
+
   it("kind 徽章 i18n（whitebox→白盒）", () => {
     renderPanel(<ScanGatePanel snapshot={snap} />);
     fireEvent.click(screen.getByRole("button"));

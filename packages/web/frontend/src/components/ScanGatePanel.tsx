@@ -56,9 +56,12 @@ function SlotChip({ e, queued, own }: { e: ScanGateEntry; queued?: boolean; own?
 }
 
 /** 闸门槽位条（本面板的签名）：容量=物理槽位，每格自描述——占用槽=带 ws+时刻·历时
- *  的芯片（青点）、空闲槽=虚线空格；阈值线之后=排队芯片（黄点，按 FIFO 顺序渲染，
+ *  的芯片（青点）、空闲槽=虚线空格；阈值刻度之后=排队芯片（黄点，按 FIFO 顺序渲染，
  *  与本工作区 ws coral 标记）。长队列在摘要条内横向滚动，不折叠成 +N。一条槽位条同时
- *  回答：谁占着哪个槽 / 何时开始或入队 / 已过多久 / 空几格 / 完整队列。 */
+ *  回答：谁占着哪个槽 / 何时开始或入队 / 已过多久 / 空几格 / 完整队列。
+ *  布局纪律（2026-09-10 修「| 与 · 粘连 + 竖线悬空」）：容量段与溢出段各自成组——
+ *  阈值刻度是溢出段的前缀而非游离子项，换行时随队列整体下移，永不悬空掉队；刻度
+ *  h-4 居中短于芯片行高（仪表刻度感，非分隔墙），两侧留 ≥10px/8px 呼吸距。 */
 function GateRail({ held, capacity, waiting, currentWs }: {
   held: ScanGateEntry[]; capacity: number; waiting: ScanGateEntry[]; currentWs?: string;
 }) {
@@ -70,20 +73,25 @@ function GateRail({ held, capacity, waiting, currentWs }: {
       data-testid="scan-gate-rail"
       title={t("scanGate.usage", { held: held.length, capacity })
         + (waiting.length > 0 ? ` · ${t("scanGate.waiting", { n: waiting.length })}` : "")}
-      className="flex min-w-0 flex-1 flex-wrap items-center gap-1"
+      className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1.5"
     >
-      {held.map((e) => (
-        <SlotChip key={e.workflow_id ?? e.scan_id} e={e}
-                  own={!!currentWs && e.ws === currentWs} />
-      ))}
-      {Array.from({ length: free }, (_, i) => (
-        <span key={i} data-testid="gate-free" aria-hidden
-              className="w-3 self-stretch rounded-[2px] border border-dashed border-border" />
-      ))}
+      {/* 容量段：占用芯片 + 空闲虚线格（本段内部可换行） */}
+      <div className="flex flex-wrap items-center gap-1">
+        {held.map((e) => (
+          <SlotChip key={e.workflow_id ?? e.scan_id} e={e}
+                    own={!!currentWs && e.ws === currentWs} />
+        ))}
+        {Array.from({ length: free }, (_, i) => (
+          <span key={i} data-testid="gate-free" aria-hidden
+                className="w-3 self-stretch rounded-[2px] border border-dashed border-border" />
+        ))}
+      </div>
       {waiting.length > 0 && (
-        <>
-          {/* 阈值线：容量段与溢出段之间的「闸门」本体 */}
-          <span aria-hidden className="mx-0.5 w-px self-stretch bg-border" />
+        /* 溢出段：阈值刻度 + 队列滚动条，整段不可分（刻度永远带队列）。
+           pl-1.5 + rail gap = 刻度与容量段 ~10px，刻度与队列 gap-2 = 8px。 */
+        <div className="flex min-w-0 items-center gap-2 pl-1.5">
+          {/* 阈值刻度：容量段与溢出段之间的「闸门」本体 */}
+          <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
           {/* 摘要条不截断队列：全部排队芯片渲染，宽度超出时横向滚动。 */}
           <div data-testid="gate-waiting-chips-scroll"
                className="flex min-w-0 items-center gap-1 overflow-x-auto overscroll-x-contain pb-0.5">
@@ -92,7 +100,7 @@ function GateRail({ held, capacity, waiting, currentWs }: {
                         own={!!currentWs && e.ws === currentWs} />
             ))}
           </div>
-        </>
+        </div>
       )}
     </div>
   );
@@ -166,7 +174,8 @@ function EntryRow({ e, running, own }: {
  *  空间纪律（2026-09-09 用户反馈）：默认摘要条自描述——槽位条每格带 ws+时刻·历时，
  *  不展开也答「谁/何时/多久」；排队按快照顺序渲染，不逐项标位次（当前工作区首个
  *  排队位置仍可在标题旁提示）；长队列在摘要条内横向滚动，展开为任务名明细
- *  （drill-down，纯手动，无自动展开特例）。
+ *  （drill-down，纯手动，无自动展开特例）。展开态摘要条让位收起（2026-09-10：
+ *  明细列表是芯片信息超集，两份同屏即重复；「空几格」由 x/capacity 计数接管）。
  *  currentWs（所在工作区详情页）非空时，本工作区条目以 coral 标出。 */
 export function ScanGatePanel({ snapshot, currentWs }: {
   snapshot: ScanGateSnapshot | null; currentWs?: string;
@@ -181,8 +190,10 @@ export function ScanGatePanel({ snapshot, currentWs }: {
     ? waiting.findIndex((e) => e.ws === currentWs) : -1;
   return (
     <Card data-testid="scan-gate-panel" className="space-y-2 p-3">
-      {/* 摘要行（常驻）：[开关+标题+本区位次] [槽位条（自描述）] [x/5]。
-          槽位条与开关分离——芯片可点进扫描详情，不与展开按钮嵌套交互。 */}
+      {/* 摘要行（收起态常驻，展开态降级为标题+计数）：[开关+标题+本区位次] [槽位条] [x/5]。
+          槽位条与开关分离——芯片可点进扫描详情，不与展开按钮嵌套交互。展开=drill-down
+          明细模式（任务名列表是芯片信息超集），摘要条让位收起、画面聚焦两段列表；
+          「空几格」语义由右侧 x/capacity 计数接管（2026-09-10）。 */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         <button
           type="button"
@@ -201,8 +212,10 @@ export function ScanGatePanel({ snapshot, currentWs }: {
             </span>
           )}
         </button>
-        <GateRail held={held} capacity={capacity} waiting={waiting} currentWs={currentWs} />
-        <span className="ml-auto shrink-0 font-mono text-[12px] tabular-nums text-muted-foreground">
+        {!userOpen && (
+          <GateRail held={held} capacity={capacity} waiting={waiting} currentWs={currentWs} />
+        )}
+        <span className={`${userOpen ? "ml-auto" : ""} shrink-0 font-mono text-[12px] tabular-nums text-muted-foreground`}>
           {t("scanGate.usage", { held: held.length, capacity })}
         </span>
       </div>
