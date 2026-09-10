@@ -61,6 +61,9 @@ class ScanGate:
                     "position": self.max_waiting}
         if workflow_id not in self.waiting:
             self.waiting[workflow_id] = _Waiter(dict(descriptor), time.time())
+            self._persist()  # 入列即落盘：web queued 档 + 面板 waiting 吃快照
+            # （granted/release/reap/preload 之外唯一的状态变化路径，曾漏——
+            # 快照停在旧状态致排队任务误显已中断、面板看不到排队队列）
         earliest = next(iter(self.waiting))
         if len(self.held) < self.capacity and workflow_id == earliest:
             self.held[workflow_id] = _Holder(

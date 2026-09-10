@@ -85,6 +85,21 @@ def test_snapshot_written_atomically(tmp_path):
     assert not sf.with_suffix(".json.tmp").exists()  # 原子写无残留 tmp
 
 
+def test_snapshot_includes_waiter_on_enqueue(tmp_path):
+    """新 waiter 入列也要落盘：web queued 档判定 + 面板 waiting 都吃快照。
+    修「排队任务 120s 提交宽限后误显已中断、扫描并发面板看不到排队」——
+    try_acquire 的 not-granted 路径曾漏 _persist，快照停留在最后一次
+    granted/release 的状态（waiting 永不出现，直到有人 release 才刷新）。"""
+    sf = tmp_path / "gate_state.json"
+    g = _mk(capacity=1, state_path=sf)
+    g.try_acquire("w1", {"kind": "whitebox", "ws": "prod",
+                         "scan_id": "s1", "label": "repo@main"})
+    g.try_acquire("w2", {"kind": "whitebox", "ws": "prod",
+                         "scan_id": "s2", "label": "repo2@main"})
+    data = json.loads(sf.read_text())
+    assert [w["scan_id"] for w in data["waiting"]] == ["s2"]
+
+
 def test_snapshot_state_path_none_is_noop(tmp_path):
     g = _mk(state_path=None)
     g.try_acquire("w1", {})  # 不应抛错
