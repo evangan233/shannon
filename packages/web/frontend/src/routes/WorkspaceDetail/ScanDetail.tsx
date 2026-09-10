@@ -27,6 +27,7 @@ const SCAN_TABS = [
   { value: "evidence", labelKey: "workspaceDetail.tabs.evidence" },
   { value: "deliverables", labelKey: "workspaceDetail.tabs.deliverables" },
   { value: "dataflow", labelKey: "workspaceDetail.tabs.dataflow" },
+  { value: "adversarial", labelKey: "workspaceDetail.tabs.adversarialReview" },
   { value: "logs", labelKey: "workspaceDetail.tabs.logs" },
   { value: "live", labelKey: "workspaceDetail.tabs.live" },
 ] as const;

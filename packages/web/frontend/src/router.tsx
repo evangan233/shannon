@@ -21,6 +21,7 @@ const ReportTab = lazyWithRetry(() => import("./routes/WorkspaceDetail/ReportTab
 const DeliverablesTab = lazyWithRetry(() => import("./routes/WorkspaceDetail/DeliverablesTab").then(m => ({ default: m.DeliverablesTab })));
 const DataFlowTab = lazyWithRetry(() => import("./routes/WorkspaceDetail/DataFlowTab").then(m => ({ default: m.DataFlowTab })));
 const EvidenceTab = lazyWithRetry(() => import("./routes/WorkspaceDetail/EvidenceTab").then(m => ({ default: m.EvidenceTab })));
+const AdversarialReviewTab = lazyWithRetry(() => import("./routes/WorkspaceDetail/AdversarialReviewTab").then(m => ({ default: m.AdversarialReviewTab })));
 // 跨仓关联结果 tab（D5 组件收 {ws, scanId} props——与兄弟 tab 的 useParams 自取不同，
 // 由 CorrelationTabRoute 包装注入；ReportTab 独立 chunk 同理，MarkdownView 栈不进主包）。
 const CorrelationTab = lazyWithRetry(() => import("./routes/WorkspaceDetail/CorrelationTab").then(m => ({ default: m.CorrelationTab })));
@@ -135,6 +136,8 @@ export const router = createBrowserRouter([
           { path: "evidence", element: <EvidenceTab /> },
           { path: "deliverables", element: <DeliverablesTab /> },
           { path: "dataflow", element: <DataFlowTab /> },
+          // 对抗性审查视图（spec 2026-09-10 对抗审查阶段；命名对齐兄弟 tab 的单词段约定）
+          { path: "adversarial", element: <AdversarialReviewTab /> },
           // 跨仓关联结果视图（D6 路由接线；命名对齐兄弟 tab 的单词段约定）
           { path: "correlation", element: <CorrelationTabRoute /> },
           { path: "logs", element: <LogsTab /> },

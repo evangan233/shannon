@@ -895,6 +895,7 @@
       "evidence": "Evidence",
       "deliverables": "Deliverables",
       "dataflow": "Data flow",
+      "adversarialReview": "Adversarial review",
       "correlation": "Correlation",
       "logs": "Logs",
       "live": "Live",
@@ -1239,6 +1240,18 @@
       "viewCorrelation": "View correlation",
       "phaseWhitebox": "Whitebox phase",
       "phaseBlackbox": "Blackbox · {{run}}"
+    },
+    "adversarialReview": {
+      "emptyHint": "No adversarial review records for this scan",
+      "loading": "Loading…",
+      "total": "Total",
+      "refuted": "Refuted",
+      "survived": "Survived",
+      "unreviewed": "Unreviewed",
+      "all": "All",
+      "noMatch": "No matching records",
+      "verdictLabel": "Filter by verdict",
+      "dimensionLabel": "Filter by failed dimension"
     }
   },
   "vuln": {

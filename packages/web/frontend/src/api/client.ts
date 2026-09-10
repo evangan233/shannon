@@ -1,6 +1,6 @@
 import type {
-  BlackboxRunSummary, CorrelationDetail, DataflowView, EvidenceMatrix, FsBrowseResult,
-  MultiConfigSummary, Repo, RepoDetail, ScanRequest, ScanSummary, SessionData,
+  AdversarialReview, BlackboxRunSummary, CorrelationDetail, DataflowView, EvidenceMatrix,
+  FsBrowseResult, MultiConfigSummary, Repo, RepoDetail, ScanRequest, ScanSummary, SessionData,
   CorrelationTopologyAnalysis, TopologyAuditTail,
 } from "./types";
 
@@ -373,6 +373,12 @@ export const fetchDataflowView = (ws: string, scanId: string) =>
 //（写时组装 + web lazy 重建；404 = 该扫描无证据产物）。
 export const fetchEvidenceMatrix = (ws: string, scanId: string) =>
   apiGet<EvidenceMatrix>(`/workspaces/${encWs(ws)}/scans/${encWs(scanId)}/evidence-matrix`);
+
+// GET /workspaces/{ws}/scans/{id}/adversarial-review → 对抗性审查产物
+//（spec 2026-09-10 对抗审查阶段；404 = 未开启或未生成，消费方据此显空态）。
+export const fetchAdversarialReview = (ws: string, scanId: string) =>
+  apiGet<AdversarialReview>(
+    `/workspaces/${encWs(ws)}/scans/${encWs(scanId)}/adversarial-review`);
 
 // ── 跨仓关联视图（spec 2026-08-24，Task C5 后端）───────────────────────────────
 // GET /workspaces/{ws}/scans/{id}/correlation → assemble_correlation_detail 产物。

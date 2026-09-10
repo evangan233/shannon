@@ -701,6 +701,30 @@ export interface DataflowView {
   safe_vectors: SafeVector[];
 }
 
+// ── 对抗性审查（spec 2026-09-10 对抗审查阶段；core adversarial_review 产物）──
+
+export interface ReviewEvidence { location: string; snippet?: string; note?: string }
+export interface DimensionResult {
+  dimension: string; rebutted: boolean; reason?: string | null;
+  evidence?: ReviewEvidence[];
+}
+export interface ReviewRecord {
+  vuln_class: string; finding_id: string; reviewed_at?: string;
+  before?: Record<string, unknown>;
+  review_verdict: "refuted" | "survived" | "unreviewed";
+  dimension_results: DimensionResult[];
+  failed_dimensions: string[];
+  rebuttal_reason?: string | null;
+  survival_reason?: string | null;
+  evidence?: ReviewEvidence[];
+  confidence?: string | null;
+  after?: { action?: string } | null;
+}
+export interface AdversarialReview {
+  summary: { total: number; refuted: number; survived: number; unreviewed: number };
+  records: ReviewRecord[];
+}
+
 // ── 接口证据矩阵（spec 2026-09-10 §4；core api_evidence_matrix.py 产物）──
 
 export interface EvidenceFinding {

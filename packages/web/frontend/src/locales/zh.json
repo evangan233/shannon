@@ -895,6 +895,7 @@
       "evidence": "证据",
       "deliverables": "产物",
       "dataflow": "数据流",
+      "adversarialReview": "对抗审查",
       "correlation": "跨仓关联",
       "logs": "日志",
       "live": "实时",
@@ -1239,6 +1240,18 @@
       "viewCorrelation": "查看关联结果",
       "phaseWhitebox": "白盒阶段",
       "phaseBlackbox": "黑盒 · {{run}}"
+    },
+    "adversarialReview": {
+      "emptyHint": "该扫描无对抗审查记录（未开启或未生成）",
+      "loading": "加载中…",
+      "total": "总计",
+      "refuted": "已驳回",
+      "survived": "无法反驳",
+      "unreviewed": "未审成",
+      "all": "全部",
+      "noMatch": "无匹配记录",
+      "verdictLabel": "按裁决筛选",
+      "dimensionLabel": "按失败维度筛选"
     }
   },
   "vuln": {
