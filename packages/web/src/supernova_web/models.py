@@ -215,5 +215,111 @@ class ScanAccepted(BaseModel):
     bb_phase: str | None = None
 
 
+# —— 批量白盒扫描（spec 2026-09-11-batch-whitebox-scan）——
+# 一次请求对 N 个仓库各发起一条独立白盒扫描（无批次实体；并发由 worker ScanGate 排队）。
+# 字段与白盒 ScanRequest 分支同义（url/认证/HOST/delete_repo_on_finish 共享给每个仓库），
+# source 换为 repos: list[str]。校验移植自 ScanRequest 的三条互斥校验
+# （_validate_auth_fields 家族 / _host_profile_xor_url），语义与单发白盒一致。
+
+
+class BatchScanResultItem(BaseModel):
+    repo: str
+    ok: bool
+    scan_id: str | None = None
+    error: str | None = None
+
+
+class BatchScanAccepted(BaseModel):
+    workspace: str
+    submitted: int
+    failed: int
+    results: list[BatchScanResultItem]
+
+
+class BatchScanRequest(BaseModel):
+    """POST /api/scan/batch 请求体（spec §3.1）。
+
+    repos 上限 50（BATCH_SCAN_MAX_REPOS，对齐批量克隆的 BATCH_CLONE_MAX_URLS）。
+    """
+
+    workspace: str
+    repos: list[str]
+    url: str | None = None
+    authentication: dict | None = None
+    auth_accounts: list[dict] | None = None
+    auth_profile_id: str | None = None
+    auth_credential_ids: list[str] | None = None
+    host_profile_id: str | None = None
+    host_url: str | None = None
+    delete_repo_on_finish: bool = False
+
+    @field_validator("host_profile_id", "host_url", mode="before")
+    @classmethod
+    def _normalize_host_source(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise TypeError("HOST source must be a string")
+        return value.strip()
+
+    @field_validator("repos")
+    @classmethod
+    def _dedup_repos(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("repos 不能为空——请至少选择一个仓库")
+        # 保序去重（用户重复提交同名的容错）；上限检查在去重之后——重复项不占额度
+        seen: set[str] = set()
+        out: list[str] = []
+        for name in value:
+            if name not in seen:
+                seen.add(name)
+                out.append(name)
+        if len(out) > 50:
+            raise ValueError("单次批量扫描最多 50 个仓库（BATCH_SCAN_MAX_REPOS）")
+        return out
+
+    def _validate_auth_fields(self) -> None:
+        """与 ScanRequest._validate_auth_fields 同规则（复制而非继承——两条 body 契约独立演进）。"""
+        has_profile = self.auth_profile_id is not None
+        has_cred_ids = self.auth_credential_ids is not None
+        has_inline = self.authentication is not None
+        has_accounts = self.auth_accounts is not None
+        if has_accounts and not has_inline:
+            raise ValueError("auth_accounts 必须与 authentication 同时提供（内联多角色附加账号）")
+        if (has_profile or has_cred_ids) and (has_inline or has_accounts):
+            raise ValueError("登录配置不能同时指定认证档案与内联登录配置")
+        if has_cred_ids and not has_profile:
+            raise ValueError("选认证档案角色时必须同时指定 auth_profile_id")
+
+    @model_validator(mode="after")
+    def _combined_auth_rules(self) -> "BatchScanRequest":
+        """移植 _whitebox_combined_optional：带 url=组合模式（认证可选，有时校验互斥）；
+        无 url=纯白盒禁认证字段。"""
+        if self.url:
+            self._validate_auth_fields()
+        else:
+            has_any_auth = (self.authentication is not None or self.auth_accounts is not None
+                            or self.auth_profile_id is not None or self.auth_credential_ids is not None)
+            if has_any_auth:
+                raise ValueError("纯白盒扫描不支持认证字段；如需登录扫描请填 url 走组合模式")
+        return self
+
+    @model_validator(mode="after")
+    def _host_profile_xor_url(self) -> "BatchScanRequest":
+        """移植 ScanRequest._host_profile_xor_url（组合模式段）。"""
+        if self.url:
+            if self.host_profile_id == "":
+                raise ValueError("host_profile_id 不能为空；启用 HOST 后必须选择档案")
+            if self.host_url == "":
+                raise ValueError("host_url 不能为空；启用 HOST 后必须填写 URL")
+            if self.host_profile_id is not None and self.host_url is not None:
+                raise ValueError("host_profile_id 与 host_url 互斥，不能同时指定（HOST 档案二选一）")
+            if self.host_url is not None:
+                scheme = (urlparse(self.host_url).scheme or "").lower()
+                if scheme not in ("http", "https"):
+                    raise ValueError("host_url 仅允许 http/https URL")
+        return self
+
+
 class ErrorOut(BaseModel):
     detail: str
