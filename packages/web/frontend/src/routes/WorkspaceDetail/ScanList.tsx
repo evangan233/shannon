@@ -501,10 +501,11 @@ function ScanRow({ ws, scan, scansById, onChanged }: {
             </button>
           )}
         </TableCell>
-        {/* 状态徽标：correlation 主行追加 🔗 类型标记（StatusBadge correlation prop，D4 接回） */}
+        {/* 状态徽标：所有行同构（类型归属在类型列徽标，2026-09-10 起状态列不再
+            追加 🔗——emoji 基线漂移且撑爆 112px 列宽致换行） */}
         <TableCell>
           <div className="flex items-center gap-1">
-            <StatusBadge status={scan.status} correlation={isCorr} />
+            <StatusBadge status={scan.status} />
             {scan.status === "queued" && (() => {
               const pos = gateSnap?.waiting.findIndex((e) => e.scan_id === scan.scan_id) ?? -1;
               return pos >= 0

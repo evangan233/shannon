@@ -159,11 +159,10 @@ export function DevComponentsPage() {
         <ReachableBadge reachable={false} />
       </Section>
 
-      <Section title="StatusBadge（升级后·五状态语义色）">
-        {["running", "completed", "failed", "killed", "crashed"].map((s) => (
+      <Section title="StatusBadge（lucide 图标·状态语义色）">
+        {["running", "completed", "failed", "killed", "crashed", "interrupted", "queued", "weird-state"].map((s) => (
           <StatusBadge key={s} status={s} />
         ))}
-        <StatusBadge status="running" correlation />
         <StatusBadge status="done" />
       </Section>
 

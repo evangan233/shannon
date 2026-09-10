@@ -762,12 +762,18 @@ describe("ScanList correlation 主行 + 嵌套子行（D4）", () => {
     expect(within(reused).getByText("复用")).toBeInTheDocument();
   });
 
-  it("corr 主行状态徽标带 🔗（StatusBadge correlation prop 接回）", async () => {
+  it("corr 主行状态徽标与普通行同构（无 🔗 后缀）；跨仓类型归属在类型列徽标", async () => {
     server.use(http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([corrMain])));
     renderList();
     await waitFor(() => expect(screen.getByText("ws-corr-1")).toBeInTheDocument());
-    // 状态徽标文本 = 「已完成 🔗」（非 corr 行无 🔗）
-    expect(screen.getByText("已完成 🔗")).toBeInTheDocument();
+    // 2026-09-10 状态图标统一：状态徽标 = 图标 + 状态文案（无 🔗 后缀——曾撑爆
+    // 112px 状态列致换行挤两行）；「跨仓关联」类型徽标在类型列承载归属。
+    // 「已完成」与过滤器分段按钮同名，用 title 精确定位状态徽标本体
+    const badge = screen.queryByTitle("completed");
+    expect(badge).toBeInTheDocument();
+    expect(badge?.textContent).toBe("已完成");
+    expect(screen.queryByText(/🔗/)).not.toBeInTheDocument();
+    expect(screen.getByText("跨仓关联")).toBeInTheDocument();
   });
 
   it("类型过滤「跨仓关联」档：关联行入选；combined=True 也不漏进「组合」档", async () => {

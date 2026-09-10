@@ -79,6 +79,20 @@
   50% { box-shadow: var(--shadow-cta-hover); }
 }
 
+/* 状态徽标 running 呼吸（2026-09-10 soft-tint 状态灯）：底色在静息与活跃 tint
+   间缓慢起伏——「正在跑」的引擎感；比涟漪扩散（dash-live-pulse）安静，扫描列表
+   多行 running 同屏不炸。token 间起伏模式同 cta-breathe（主题自适应——各主题
+   --c-cyan 不同也能正确呼吸）；reduce 下静止回 class 静息 tint（同 supernova-spinner
+   的自包含禁用 idiom，不依赖消费处 motion-safe 前缀）。 */
+@keyframes status-breathe {
+  0%, 100% { background-color: hsl(var(--c-cyan) / 0.07); }
+  50% { background-color: hsl(var(--c-cyan) / 0.16); }
+}
+.status-breathe { animation: status-breathe 2.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .status-breathe { animation: none; }
+}
+
 /* Card 可达性变体 .card-reachable 已删（2026-08-27 spec 警报语义层 §2.1：
    「可达性=红左边」与 severity 双重编码冲突，且全库零使用——只留测试保活的死 CSS）。 */
 

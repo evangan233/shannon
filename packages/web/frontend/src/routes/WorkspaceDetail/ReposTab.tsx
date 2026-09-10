@@ -34,15 +34,17 @@ function fmtSize(b?: number) {
 // 状态 -> 徽章 i18n key/色/图标（对齐 StatusBadge 的 DSF token 配色）。
 // 状态符号用 lucide 图标（非 emoji），文本在 i18n repos.states.*（就绪/失败/未完成）；
 // cloning/pulling 走 CloneProgress（含进度条 + "clone 中"），不经此 Badge。
+// 2026-09-10 容器同步 StatusBadge soft-tint 状态灯（tint 底 + 全主题胶囊 + sans
+// font-medium——状态=语义层，与类型列 mono 技术层分层），扫描列表/仓库页同一套语言。
 const STATE_BADGE: Record<RepoState, { key: string; cls: string; Icon: LucideIcon }> = {
-  ready:   { key: "repos.states.ready",   cls: "border-green/40 text-green",   Icon: CheckCircle2 },
-  failed:  { key: "repos.states.failed",  cls: "border-red/40 text-red",       Icon: XCircle },
-  stale:   { key: "repos.states.stale",   cls: "border-yellow/40 text-yellow", Icon: AlertTriangle },
-  cloning: { key: "repos.states.cloning", cls: "border-cyan/40 text-cyan",     Icon: AlertTriangle },
-  pulling: { key: "repos.states.pulling", cls: "border-cyan/40 text-cyan",     Icon: AlertTriangle },
-  extracting: { key: "repos.states.extracting", cls: "border-cyan/40 text-cyan", Icon: AlertTriangle },
+  ready:   { key: "repos.states.ready",   cls: "border-green/25 bg-green/10 text-green",   Icon: CheckCircle2 },
+  failed:  { key: "repos.states.failed",  cls: "border-red/25 bg-red/10 text-red",         Icon: XCircle },
+  stale:   { key: "repos.states.stale",   cls: "border-yellow/25 bg-yellow/10 text-yellow", Icon: AlertTriangle },
+  cloning: { key: "repos.states.cloning", cls: "border-cyan/25 bg-cyan/10 text-cyan",      Icon: AlertTriangle },
+  pulling: { key: "repos.states.pulling", cls: "border-cyan/25 bg-cyan/10 text-cyan",      Icon: AlertTriangle },
+  extracting: { key: "repos.states.extracting", cls: "border-cyan/25 bg-cyan/10 text-cyan", Icon: AlertTriangle },
   // 空壳目录（占名挡 clone 的空目录残留）：安静的中性配色——非异常、非就绪，仅待清理
-  empty:   { key: "repos.states.empty",   cls: "border-border text-muted-foreground", Icon: FolderX },
+  empty:   { key: "repos.states.empty",   cls: "border-border bg-muted/40 text-muted-foreground", Icon: FolderX },
 };
 
 function StateBadge({ ws, repo }: { ws: string; repo: Repo }) {
@@ -58,8 +60,8 @@ function StateBadge({ ws, repo }: { ws: string; repo: Repo }) {
   }
   const m = STATE_BADGE[repo.state];
   return (
-    <Badge variant="outline" className={cn("gap-1 font-mono", m.cls)}>
-      <m.Icon className="size-3" aria-hidden />
+    <Badge variant="outline" className={cn("gap-1.5 whitespace-nowrap rounded-full px-2 font-medium", m.cls)}>
+      <m.Icon className="size-3.5" aria-hidden />
       {t(m.key)}
     </Badge>
   );

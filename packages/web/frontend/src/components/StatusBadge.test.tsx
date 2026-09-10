@@ -7,27 +7,49 @@ import { StatusBadge } from "./StatusBadge";
 // 现有断言依赖中文渲染,逐测试钉回 zh(同 ReposPage.test 模式)。
 beforeEach(() => i18n.changeLanguage("zh"));
 
+// 2026-09-10 状态图标语言统一：Unicode 字符/emoji → lucide svg（跨字体基线一致）。
+// 断言口径：图标 = Badge 内自身带 aria-hidden 的 <svg>（lucide 把 aria-hidden 直接
+// 落在 svg 上，无包裹 span）。
 describe("StatusBadge", () => {
-  it("running → ● + 文案(Badge 渲染)", () => {
+  it("running → spinner 图标 + 文案(Badge 渲染)", () => {
     const { container } = render(<StatusBadge status="running" />);
     expect(screen.getByText("运行中")).toBeInTheDocument();
-    // shadcn Badge 渲染为外层 <div>(含 text-* 语义色),内含 <span aria-hidden> 承载图标
+    // shadcn Badge 渲染为外层 <div>(含 text-* 语义色),内含 aria-hidden svg 承载图标
     const badge = container.querySelector("[class*='text-cyan']");
     expect(badge).not.toBeNull();
-    expect(badge?.querySelector("[aria-hidden]")?.textContent).toBe("●");
+    const icon = badge?.querySelector("svg[aria-hidden='true']");
+    expect(icon).not.toBeNull();
+    // running 是全表唯一动效：spin + motion-reduce 尊重减动效
+    expect(icon?.getAttribute("class")).toMatch(/animate-spin/);
+    expect(icon?.getAttribute("class")).toMatch(/motion-reduce:animate-none/);
   });
-  it("completed 渲染 Badge + green 语义色", () => {
+  it("completed 渲染 Badge + green 语义色（非 spinner）", () => {
     render(<StatusBadge status="completed" />);
     // 拒绝 weak `??` 兜底:直接断言承载 completed 文案的 Badge 带 text-green
     const node = screen.getByText("已完成").closest("[class*='text-green']");
     expect(node).not.toBeNull();
     expect(node).toBeInTheDocument();
+    expect(node?.querySelector("svg[aria-hidden='true']")?.getAttribute("class") ?? "").not.toMatch(/animate-spin/);
   });
-  it("correlation → 🔗", () => {
-    const { container } = render(<StatusBadge status="running" correlation />);
-    expect(container.textContent).toContain("🔗");
+  it("徽标不换行（whitespace-nowrap）——112px 状态列任何 locale 不挤两行", () => {
+    const { container } = render(<StatusBadge status="running" />);
+    const badge = container.querySelector("[title='running']");
+    expect(badge?.className).toMatch(/whitespace-nowrap/);
   });
-  it("a11y:title 属性 = status 字符串(符号 ●✓✗⚠ 不应是唯一信号)", () => {
+  it("soft-tint 状态灯：胶囊形 + 同色系柔和底（2026-09-10 美观升级）", () => {
+    const { container } = render(<StatusBadge status="completed" />);
+    const badge = container.querySelector("[title='completed']");
+    expect(badge?.className).toMatch(/rounded-full/);
+    expect(badge?.className).toMatch(/bg-green\/10/);
+    // 状态=语义层：不再用 mono（类型列 Badge 保持 mono 技术层，形状+字体双重分层）
+    expect(badge?.className).not.toMatch(/font-mono/);
+  });
+  it("running 叠底色呼吸（status-breathe），其余状态静止", () => {
+    const { container } = render(<><StatusBadge status="running" /><StatusBadge status="queued" /></>);
+    expect(container.querySelector("[title='running']")?.className).toMatch(/status-breathe/);
+    expect(container.querySelector("[title='queued']")?.className).not.toMatch(/status-breathe/);
+  });
+  it("a11y:title 属性 = status 字符串(图标不应是唯一信号)", () => {
     const { container } = render(<StatusBadge status="running" />);
     const badge = container.querySelector("[title='running']");
     expect(badge?.getAttribute("title")).toBe("running");
@@ -37,12 +59,12 @@ describe("StatusBadge", () => {
     const badge = container.querySelector("[title='weird-state']");
     expect(badge?.getAttribute("title")).toBe("weird-state");
   });
-  it("未知 status 走 warn 色 + ? 图标", () => {
+  it("未知 status 走 warn 色 + help 图标", () => {
     const { container } = render(<StatusBadge status="weird" />);
     expect(screen.getByText(/weird/)).toBeInTheDocument();
     const badge = container.querySelector("[class*='text-yellow']");
     expect(badge?.className).toMatch(/text-yellow/);
-    expect(badge?.querySelector("[aria-hidden]")?.textContent).toBe("?");
+    expect(badge?.querySelector("svg[aria-hidden='true']")).not.toBeNull();
   });
 });
 
@@ -60,7 +82,7 @@ describe("StatusBadge i18n", () => {
     expect(screen.getByText("Running")).toBeInTheDocument();
   });
 
-  it("queued → ⏳ + 排队中", () => {
+  it("queued → 时钟图标 + 排队中", () => {
     render(<StatusBadge status="queued" />);
     expect(screen.getByText("排队中")).toBeInTheDocument();
   });
