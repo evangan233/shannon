@@ -498,7 +498,21 @@
     "type": {
       "whitebox": "Whitebox",
       "correlation": "Correlation",
-      "mr": "MR Incremental Scan"
+      "mr": "MR Incremental Scan",
+      "blackbox": "Blackbox Verify"
+    },
+    "blackbox": {
+      "subtitle": "Run blackbox verification against a finished whitebox scan to close the loop",
+      "footerHint": "Pick a whitebox scan, confirm the target, then submit",
+      "scanSelectLabel": "Whitebox scan",
+      "scanSelectPlaceholder": "Pick a whitebox scan to verify",
+      "noScansOption": "No whitebox scan ready for blackbox verification",
+      "loadingScans": "Loading scans…",
+      "selectScanRequired": "Select a whitebox scan",
+      "urlRequired": "Target URL is required",
+      "urlLabel": "Target URL",
+      "urlPlaceholder": "http://target.example.com",
+      "urlHint": "Reachable entry of the app under test; pre-filled from the previous blackbox target and editable."
     },
     "correlation": {
       "subtitle": "Chain calls across repositories and run a cross-repo correlation analysis",
@@ -981,6 +995,7 @@
         "statusCancelled": "Cancelled",
         "statusCompleted": "Completed",
         "addBlackbox": "Add blackbox scan",
+        "verifyBlackbox": "Blackbox Verify",
         "addBlackboxDesc": "Create a new blackbox run for this whitebox result",
         "addedSuccess": "Blackbox run created",
         "addedFailed": "Failed to create blackbox run: {{error}}",

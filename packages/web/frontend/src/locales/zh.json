@@ -498,7 +498,21 @@
     "type": {
       "whitebox": "白盒扫描",
       "correlation": "跨仓关联",
-      "mr": "MR 增量扫描"
+      "mr": "MR 增量扫描",
+      "blackbox": "黑盒验证"
+    },
+    "blackbox": {
+      "subtitle": "对已完成的白盒任务发起黑盒验证，复用白盒发现补全验证闭环",
+      "footerHint": "选择白盒任务并确认目标后提交",
+      "scanSelectLabel": "白盒任务",
+      "scanSelectPlaceholder": "选择要验证的白盒任务",
+      "noScansOption": "暂无可加黑盒的白盒任务",
+      "loadingScans": "加载任务中…",
+      "selectScanRequired": "请选择白盒任务",
+      "urlRequired": "请填写目标 URL",
+      "urlLabel": "目标 URL",
+      "urlPlaceholder": "http://target.example.com",
+      "urlHint": "黑盒验证的可达目标（应用入口）；自动预填原黑盒目标，可修改。"
     },
     "correlation": {
       "subtitle": "串联多个仓库的调用链，发起跨仓关联分析",
@@ -981,6 +995,7 @@
         "statusCancelled": "已取消",
         "statusCompleted": "已完成",
         "addBlackbox": "加黑盒扫描",
+        "verifyBlackbox": "黑盒验证",
         "addBlackboxDesc": "为该白盒结果新建一次黑盒 run",
         "addedSuccess": "黑盒 run 已创建",
         "addedFailed": "创建黑盒 run 失败：{{error}}",

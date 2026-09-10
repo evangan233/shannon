@@ -4,9 +4,10 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { toast } from "sonner";
 import type { CorrelationTopologyAnalysis, ScanRequest, ScanResponse, TopologyAuditLine, Workspace, ScanAuthentication } from "../api/types";
-import { apiGet, apiPost, ApiError, cancelCorrelationTopologyAnalysis, deleteCorrelationTopologyAnalysis, getCorrelationTopologyAnalysis, getLatestTopologyAnalysis, getTopologyAnalysisLog, listCorrelationTopologyAnalyses, startCorrelationTopologyAnalysis } from "../api/client";
+import { apiGet, apiPost, ApiError, addBlackboxToWhitebox, cancelCorrelationTopologyAnalysis, deleteCorrelationTopologyAnalysis, getCorrelationTopologyAnalysis, getLatestTopologyAnalysis, getTopologyAnalysisLog, listCorrelationTopologyAnalyses, startCorrelationTopologyAnalysis } from "../api/client";
 import { useScans } from "../routes/WorkspaceDetail/useScans";
 import { ScanFormFields } from "../components/ScanFormFields";
+import { BlackboxFormFields } from "../components/BlackboxFormFields";
 import { RepoCombobox } from "../components/RepoCombobox";
 import { LinkResolveBox } from "../components/LinkResolveBox";
 import { RefRangeInput } from "../components/RefRangeInput";
@@ -41,10 +42,11 @@ import {
 } from "@/lib/correlation-topology-draft";
 import { latestReusableScanId } from "@/lib/correlation-reuse";
 
-/** 页面可达类型（D3）：白盒 | MR 增量 | 跨仓关联，顶部 segmented 切换（顺序=频率与
- *  表单复杂度，见下方 segmented 注释）。黑盒只读分支已删除——
- *  黑盒一律是组合任务的嵌套 run 或经 ScanDetail addBlackboxToWhitebox，无独立创建入口。 */
-type ScanType = "whitebox" | "correlation" | "mr";
+/** 页面可达类型：白盒 | MR 增量 | 跨仓关联 | 黑盒验证，顶部 segmented 切换（顺序=频率与
+ *  表单复杂度，见下方 segmented 注释）。黑盒验证（2026-09-10 D3 入口回归）= 对已完成
+ *  白盒任务 add-run（addBlackboxToWhitebox），非 D3 前的「独立黑盒扫描」（后者须
+ *  reuse_whitebox_scan_id 新建 scan，已被 run 模式取代）。 */
+type ScanType = "whitebox" | "correlation" | "mr" | "blackbox";
 
 /** 跨仓关联三视图子页（2026-09-04 tabs 重组）：图 | 表单 | YAML——同一拓扑的三个透镜，
  *  实时三方同步；原 auto/manual 模式分页删除。 */
@@ -142,7 +144,7 @@ export function authFromPayload(auth: ScanAuthentication): AuthFormState {
 }
 
 /** 重跑预填数据（ScanList.onRerun 经 location.state 传入，优先于 query param）。
- *  D3：黑盒只读分支已删——type:"blackbox" 的历史 preset 落到白盒渲染（不触发黑盒表单）。 */
+ *  2026-09-10 黑盒验证入口回归：type:"blackbox" + reuseScanId 直落黑盒表单（D3 期间曾落白盒渲染）。 */
 export interface RerunPreset {
   type?: "whitebox" | "blackbox" | "correlation" | "mr";
   workspace?: string;
@@ -400,6 +402,17 @@ export function buildBody(type: ScanType, f: FormState, workspace: string, corrY
   return body;
 }
 
+/** 黑盒验证 add-run 提交 body（2026-09-10 D3 入口回归）：端点 POST /scans/{id}/blackbox-runs
+ *  收「组合模式 ScanRequest」（type=whitebox + url + 认证）——认证/HOST 字段映射与组合扫描
+ *  共用 assignAuthToBody/assignHostToBody，两条入口字段恒一致。不带 source/workspace/
+ *  reuse（任务由 URL 路径决定）。认证可选（无认证直连，body 仅 type+url）。 */
+export function buildBlackboxRunBody(f: FormState): ScanRequest {
+  const body: ScanRequest = { type: "whitebox", url: f.url.trim() };
+  if (f.auth.enabled) assignAuthToBody(body, f.auth);
+  assignHostToBody(body, f.host);
+  return body;
+}
+
 function renderError(e: ApiError, t: TFunction): string {
   if (e.status === 400) return t("scan.errors.temporal");
   if (e.status === 422) {
@@ -446,11 +459,16 @@ export function ScanNewPage() {
   const presetWs = params.get("workspace");
   // 重跑预填：ScanList.onRerun 经 location.state 传入原扫描配置（优先于 query param）。
   const preset = (useLocation().state ?? {}) as RerunPreset;
-  // 类型切换（D3）：白盒 | 跨仓关联 segmented。黑盒只读分支已删——历史黑盒 preset
-  // （location.state.type="blackbox"，ScanList 旧入口）落到白盒渲染；correlation preset
-  // 直达跨仓表单；mr preset（ScanList MR 行重跑）直达 MR 表单并预填 refs。
+  // 类型切换（D3 + 2026-09-10 黑盒验证回归）：白盒 | MR | 跨仓关联 | 黑盒验证 segmented。
+  // 黑盒验证 = 选已完成白盒任务 + 补填目标 → add-run（语义不再是 D3 前的独立黑盒扫描，
+  // 而是 ScanDetail「加黑盒」的全页表单形态）；历史黑盒 preset（location.state.type=
+  // "blackbox"，ScanList 旧入口）恢复直落黑盒表单（reuseScanId 预选，2026-09-10 前曾落白盒渲染）；
+  // correlation preset 直达跨仓表单；mr preset（ScanList MR 行重跑）直达 MR 表单并预填 refs。
   const [type, setType] = useState<ScanType>(
-    preset.type === "correlation" ? "correlation" : preset.type === "mr" ? "mr" : "whitebox");
+    preset.type === "correlation" ? "correlation"
+      : preset.type === "mr" ? "mr"
+      : preset.type === "blackbox" ? "blackbox"
+      : "whitebox");
   const [f, setF] = useState<FormState>({
     selectedRepo: preset.repo ?? presetRepo ?? "",
     url: preset.url ?? "",
@@ -762,18 +780,21 @@ export function ScanNewPage() {
   };
 
   // 校验：白盒 = repo + url(可选) + ws；correlation = validateForm(corrState) 空 + 无
-  // YAML 错 + ws（gateway url 可选，开了才纳入 url/auth/host 校验——同白盒组合扫描）。
+  // YAML 错 + ws（gateway url 可选，开了才纳入 url/auth/host 校验——同白盒组合扫描）；
+  // 黑盒验证 = 任务必选 + url 必填（无目标无黑盒）+ 认证/HOST 可选（开了才校验）。
   const combined = type === "whitebox" && !!f.combined;
   const corrGatewayOn = type === "correlation" && !!f.url.trim();
   const sourceErr = type === "whitebox" || type === "mr" ? validateSource(f.selectedRepo, t) : null;
   const mrRefsErr = type === "mr"
     ? (f.mrBaseRef?.trim() && f.mrHeadRef?.trim() ? null : t("scan.errors.selectRefs"))
     : null;
-  const urlErr = combined
-    ? (f.url.trim() ? (/^https?:\/\//.test(f.url.trim()) ? null : t("scan.errors.urlScheme")) : t("scan.errors.urlEmpty"))
+  const urlErr = combined || type === "blackbox"
+    ? (f.url.trim() ? (/^https?:\/\//.test(f.url.trim()) ? null : t("scan.errors.urlScheme")) : t(type === "blackbox" ? "scan.blackbox.urlRequired" : "scan.errors.urlEmpty"))
     : validateUrl(f.url, t);
-  const authErr = (combined || corrGatewayOn) ? validateAuth(f.auth, t) : null;
-  const hostErr = (combined || corrGatewayOn) ? validateHost(f.host, t) : null;
+  // 黑盒验证任务必选（reuseScanId 即所选白盒任务——沿用历史 FormState 字段承载）。
+  const bbScanErr = type === "blackbox" && !f.reuseScanId ? t("scan.blackbox.selectScanRequired") : null;
+  const authErr = (combined || corrGatewayOn || type === "blackbox") ? validateAuth(f.auth, t) : null;
+  const hostErr = (combined || corrGatewayOn || type === "blackbox") ? validateHost(f.host, t) : null;
   const corrIssues = type === "correlation" ? validateForm(corrState) : [];
   const confirmedTopologyYaml = topologyState?.confirmation.yaml ?? null;
   // 确认门禁跟拓扑来源（2026-09-04 tabs 重组）：拓扑带 AI 分析来源（analysis 非 null，
@@ -787,12 +808,22 @@ export function ScanNewPage() {
     // 变化已由「文本→图重建重置确认」拦下，这里只放行语义等价的文本抖动。
     && (confirmedTopologyYaml === null || canonicalYaml(corrYaml) === canonicalYaml(confirmedTopologyYaml))
   );
-  const isValid = !sourceErr && !urlErr && !authErr && !hostErr && !mrRefsErr && !!workspace
-    && (type === "mr" || type === "whitebox" || (corrIssues.length === 0 && !yamlErr && topologyConfirmed));
+  const isValid = !sourceErr && !urlErr && !authErr && !hostErr && !mrRefsErr && !bbScanErr && !!workspace
+    && (type === "mr" || type === "whitebox" || type === "blackbox"
+      || (corrIssues.length === 0 && !yamlErr && topologyConfirmed));
 
   async function onSubmit() {
     try {
       setSubmitting(true);
+      // 黑盒验证（2026-09-10 D3 入口回归）：对所选白盒任务 add-run（POST blackbox-runs），
+      // 与详情页「加黑盒」按钮同后端路径；组合模式 body（type=whitebox+url+认证）。
+      // 成功跳该任务 live 跟踪进度（?run= 定位新 run）。422 文案经 renderError 透传
+      // （「白盒产物未就绪」「run 在跑」等后端 ValueError 原文）。
+      if (type === "blackbox") {
+        const r = await addBlackboxToWhitebox(workspace, f.reuseScanId, buildBlackboxRunBody(f));
+        nav(`/p/${r.workspace}/scans/${r.scan_id}/live?run=${r.run_id}`);
+        return;
+      }
       // 提交 payload（2026-09-04 tabs 重组统一）：带分析来源 → 确认快照原文（锁定确认
       // 那一刻的文本）；纯手工 → 当前 corrYaml（实时文本即所想即所得）。
       const submissionYaml = topologyNeedsConfirm
@@ -814,12 +845,16 @@ export function ScanNewPage() {
   }
 
   const subtitleKey = type === "correlation" ? "scan.correlation.subtitle"
-    : type === "mr" ? "scan.subtitleMr" : "scan.subtitleWhitebox";
+    : type === "mr" ? "scan.subtitleMr"
+    : type === "blackbox" ? "scan.blackbox.subtitle"
+    : "scan.subtitleWhitebox";
   // 提交按钮文案统一「开始扫描」（2026-09-09 v3，用户点名）：扫描类型由顶部
   // segmented 表达（白盒/MR 增量/跨仓关联），按钮只说动词——三类同一动作同一名。
   const submitLabel = t("scan.submit");
   const footerHint = type === "correlation" ? t("scan.correlation.footerHint")
-    : type === "mr" ? t("scan.mrBaseHeadHint") : t("scan.footerHintWhitebox");
+    : type === "mr" ? t("scan.mrBaseHeadHint")
+    : type === "blackbox" ? t("scan.blackbox.footerHint")
+    : t("scan.footerHintWhitebox");
   // ws 空态判定（mr 表单 ws 下拉 + 提示共用；与 CorrelationFormFields/ScanFormFields 同式）
   const wsEmpty = !wsLoading && wsList.length === 0;
 
@@ -831,16 +866,17 @@ export function ScanNewPage() {
       {/* 整张卡片：类型 segmented + 单栏表单 + 底部操作 */}
       <Card className="overflow-hidden">
         <div className="p-5 space-y-4">
-          {/* 类型切换 segmented（D3）：白盒 | MR 增量 | 跨仓关联（黑盒无独立入口——组合任务的嵌套 run）。
-              顺序即频率与复杂度（2026-09-04 重排）：MR 增量（spec 2026-09-03，base..head、纯白盒
-              语义）是日常高频且表单最简，紧跟白盒成「单仓检测」组；跨仓关联（多仓拓扑/YAML/编辑器）
-              是低频深度分析、表单最重，殿后。
+          {/* 类型切换 segmented（D3 + 2026-09-10 黑盒验证回归）：白盒 | MR 增量 | 跨仓关联 |
+              黑盒验证。顺序即频率与复杂度（2026-09-04 重排）：MR 增量（spec 2026-09-03，
+              base..head、纯白盒语义）是日常高频且表单最简，紧跟白盒成「单仓检测」组；跨仓关联
+              （多仓拓扑/YAML/编辑器）是低频深度分析、表单最重殿后；黑盒验证（选白盒任务+补填
+              目标 → add-run）是验证闭环的追加动作、依赖已有白盒产物，居末。
               跨仓关联的 ws 在来源轨道首字段（2026-09-09 重排；2026-09-04 曾挂本行右端——
-              控制远离效果域，未选 ws 的提示与下拉分离视线跳跃）。三种类型 IA 统一：ws 恒为
-              表单首字段（白盒/MR 在 ① 工作区列，跨仓在来源轨道顶）。 */}
+              控制远离效果域，未选 ws 的提示与下拉分离视线跳跃）。四种类型 IA 统一：ws 恒为
+              表单首字段（白盒/MR/黑盒验证在 ① 工作区列，跨仓在来源轨道顶）。 */}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/40 p-1">
-              {(["whitebox", "mr", "correlation"] as const).map((v) => (
+              {(["whitebox", "mr", "correlation", "blackbox"] as const).map((v) => (
                 <button
                   key={v}
                   type="button"
@@ -858,8 +894,24 @@ export function ScanNewPage() {
           </div>
 
           {/* 表单区：白盒由 ScanFormFields 内 lg:grid-cols-2 把 ① 工作区 / ② 仓库 并排铺满，③ 满宽；
-              跨仓关联 = 三视图 tabs（图|表单|YAML，同一拓扑三透镜实时同步）。 */}
-          {type === "whitebox" ? (
+              黑盒验证 = BlackboxFormFields（① 工作区 ② 白盒任务并排 + ③ 目标 URL + 认证/HOST 满宽，
+              2026-09-10 D3 入口回归）；跨仓关联 = 三视图 tabs（图|表单|YAML，同一拓扑三透镜实时同步）。 */}
+          {type === "blackbox" ? (
+            <BlackboxFormFields
+              f={f}
+              set={set}
+              setAuth={setAuth}
+              setHost={setHost}
+              scanErr={bbScanErr}
+              urlErr={urlErr}
+              authErr={authErr}
+              hostErr={hostErr}
+              workspace={workspace}
+              wsList={wsList}
+              onWorkspaceChange={setWorkspace}
+              wsLoading={wsLoading}
+            />
+          ) : type === "whitebox" ? (
             <ScanFormFields
               type="whitebox"
               f={f}

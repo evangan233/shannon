@@ -6,7 +6,7 @@ import { setupServer } from "msw/node";
 import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
 import i18n from "@/i18n";
-import { ScanNewPage, buildBody, buildAuthPayload, validateAuth, presetToAuthState, presetToHostState, type AuthFormState, type FormState, type RerunPreset } from "./ScanNewPage";
+import { ScanNewPage, buildBody, buildAuthPayload, buildBlackboxRunBody, validateAuth, presetToAuthState, presetToHostState, DEFAULT_AUTH, DEFAULT_HOST, type AuthFormState, type FormState, type RerunPreset } from "./ScanNewPage";
 
 // 空态提示按 role 切文案 → useAuth 可控（同 DashboardPage.test 模式）。
 const { mockUseAuth } = vi.hoisted(() => ({ mockUseAuth: vi.fn() }));
@@ -413,13 +413,13 @@ describe("ScanNewPage 重跑预填（location.state）", () => {
   });
 
   // D3 分支删除回归：黑盒只读分支已删——黑盒 preset 到达 ScanNewPage 落到白盒渲染。
-  it("黑盒预填 preset 不再触发黑盒表单（渲染白盒）", async () => {
+  it("黑盒预填 preset 直落黑盒验证表单（2026-09-10 D3 入口回归，D3 期间曾渲染白盒）", async () => {
     renderPage("/scan/new", { type: "blackbox", workspace: "ws1" });
-    // PageHeader subtitle 为白盒（黑盒文案已不可达）
-    expect(screen.getByText(/启动一次白盒安全审计/)).toBeInTheDocument();
-    // 白盒表单（仓库步骤）在；黑盒 url 输入与跨仓表单不在
-    expect(screen.getByText("仓库")).toBeInTheDocument();
-    expect(screen.queryByPlaceholderText(/http:\/\/example\.com/)).toBeNull();
+    // PageHeader subtitle 为黑盒验证（不再是白盒兜底）
+    expect(screen.getByText(/对已完成的白盒任务发起黑盒验证/)).toBeInTheDocument();
+    // 黑盒验证表单在；白盒仓库步骤不在
+    expect(screen.getByTestId("blackbox-form")).toBeInTheDocument();
+    expect(screen.queryByText("仓库")).toBeNull();
     expect(screen.queryByTestId("corr-yaml-panel")).toBeNull();
   });
 
@@ -1831,5 +1831,132 @@ describe("ScanNewPage 链接解析（resolve-link 回填，2026-09-03 仓库入�
     await waitFor(() => expect(captured).toBeDefined());
     expect(captured!.head_commit).toBeUndefined();
     expect(captured!.base_commit).toBeUndefined();
+  });
+});
+
+// —— 黑盒验证（D3 入口回归 2026-09-10）：segmented 第四项 + 历史入口恢复 + add-run 提交 ——
+
+describe("buildBlackboxRunBody 黑盒验证提交 body", () => {
+  const baseF: FormState = {
+    selectedRepo: "", url: "http://t.example.com", reuseScanId: "wb-1",
+    auth: DEFAULT_AUTH, host: DEFAULT_HOST, yaml: "",
+  };
+
+  it("产组合模式 body：type=whitebox + url + inline 认证映射，不带 source/workspace", () => {
+    const f: FormState = {
+      ...baseF,
+      auth: {
+        ...DEFAULT_AUTH, enabled: true, source: "inline",
+        loginUrl: "http://t/login",
+        accounts: [{ role: "admin", username: "u", password: "p" }],
+      },
+    };
+    const body = buildBlackboxRunBody(f);
+    expect(body.type).toBe("whitebox");
+    expect(body.url).toBe("http://t.example.com");
+    // add-run 端点语义：任务由路径决定——body 不携带 source/workspace/reuse。
+    expect(body.source).toBeUndefined();
+    expect(body.workspace).toBeUndefined();
+    expect((body as unknown as Record<string, unknown>).reuse_whitebox_scan_id).toBeUndefined();
+    expect(body.authentication?.credentials.username).toBe("u");
+  });
+
+  it("认证关 / HOST 关 → 不发认证与 host 字段（无认证直连）", () => {
+    const body = buildBlackboxRunBody(baseF);
+    expect(body.authentication).toBeUndefined();
+    expect(body.auth_profile_id).toBeUndefined();
+    expect(body.host_url).toBeUndefined();
+    expect(body.host_profile_id).toBeUndefined();
+  });
+
+  it("profile 认证 + HOST url 模式映射到对应字段", () => {
+    const body = buildBlackboxRunBody({
+      ...baseF,
+      auth: { ...DEFAULT_AUTH, enabled: true, source: "profile", profileId: "ap-1", credentialIds: ["c1"] },
+      host: { ...DEFAULT_HOST, enabled: true, mode: "url", hostUrl: "http://h/hosts.txt" },
+    });
+    expect(body.auth_profile_id).toBe("ap-1");
+    expect(body.auth_credential_ids).toEqual(["c1"]);
+    expect(body.host_url).toBe("http://h/hosts.txt");
+  });
+});
+
+describe("ScanNewPage 黑盒验证表单（D3 入口回归）", () => {
+  beforeEach(() => i18n.changeLanguage("zh"));
+
+  function renderPageFresh(state?: unknown) {
+    return render(
+      <MemoryRouter initialEntries={[state ? { pathname: "/scan/new", state } : "/scan/new"]}>
+        <SWRConfig value={{ provider: () => new Map() }}>
+          <ScanNewPage />
+        </SWRConfig>
+      </MemoryRouter>,
+    );
+  }
+
+  const WB_SCANS = () =>
+    http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([
+      { scan_id: "wb-s1", scan_type: "whitebox", status: "completed", created_at: 1000,
+        completed_at: 2000, vuln_count: 3, is_running: false, workflow_id: "ws1-wb-s1", repo: "foo" },
+    ]));
+  const WB_DETAIL = () =>
+    http.get("/api/workspaces/:ws/scans/:scanId", ({ params }) =>
+      HttpResponse.json({
+        web_url: "", scan_type: "whitebox", workflow_id: String(params.scanId),
+        bb_url: "http://target.example.com",
+      }));
+
+  async function selectBlackboxScan(optionName: RegExp | string) {
+    const trigger = screen.getByText("选择要验证的白盒任务").closest("button")!;
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("option", { name: optionName }));
+  }
+
+  it("segmented 第四项「黑盒验证」：点击切换出黑盒表单，未选任务时提交禁用", async () => {
+    renderPageFresh();
+    fireEvent.click(screen.getByRole("button", { name: "黑盒验证" }));
+    await waitFor(() => expect(screen.getByTestId("blackbox-form")).toBeInTheDocument());
+    await selectWorkspace("ws1");
+    // 未选任务 + 无 URL → 提交禁用
+    expect(screen.getByRole("button", { name: /开始扫描/ })).toBeDisabled();
+  });
+
+  it("历史入口恢复：location.state type=blackbox 直落黑盒表单并预选任务预填目标", async () => {
+    server.use(WB_SCANS(), WB_DETAIL());
+    renderPageFresh({ type: "blackbox", workspace: "ws1", reuseScanId: "wb-s1" });
+    await waitFor(() => expect(screen.getByTestId("blackbox-form")).toBeInTheDocument());
+    // getScan 预填 bb_url 到目标 URL 输入框
+    await waitFor(() => {
+      const input = screen.getByDisplayValue("http://target.example.com");
+      expect(input).toBeInTheDocument();
+    });
+  });
+
+  it("齐备后提交：POST blackbox-runs 组合模式 body（type=whitebox+url，无 source）", async () => {
+    let called = false;
+    let captured: Record<string, unknown> = {};
+    server.use(
+      WB_SCANS(), WB_DETAIL(),
+      http.post("/api/workspaces/:ws/scans/:scanId/blackbox-runs", async ({ request }) => {
+        called = true;
+        captured = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ workspace: "ws1", scan_id: "wb-s1", run_id: "run-1" });
+      }),
+    );
+    renderPageFresh();
+    fireEvent.click(screen.getByRole("button", { name: "黑盒验证" }));
+    await waitFor(() => screen.getByTestId("blackbox-form"));
+    await selectWorkspace("ws1");
+    await selectBlackboxScan(/wb-s1/);
+    await waitFor(() => screen.getByDisplayValue("http://target.example.com"));
+    const submit = screen.getByRole("button", { name: /开始扫描/ });
+    await waitFor(() => expect(submit).not.toBeDisabled());
+    fireEvent.click(submit);
+    await waitFor(() => expect(called).toBe(true));
+    expect(captured.type).toBe("whitebox");
+    expect(captured.url).toBe("http://target.example.com");
+    expect(captured.source).toBeUndefined();
+    expect(captured.workspace).toBeUndefined();
+    expect((captured as { scan_id?: string }).scan_id).toBeUndefined();
   });
 });

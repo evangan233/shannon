@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useParams, useNavigate, useOutletContext, Link } from "react-router-dom";
 import { toast } from "sonner";
-import { Ban, ChevronRight, Eye, Play, RefreshCw, Search, Trash2 } from "lucide-react";
+import { Ban, ChevronRight, Crosshair, Eye, Play, RefreshCw, Search, Trash2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -641,6 +641,18 @@ function ScanRow({ ws, scan, scansById, onChanged }: {
             {isTerminal && scan.scan_type !== "blackbox" && (
               <Button size="sm" variant="ghost" onClick={onRerun} disabled={busy}>
                 <RefreshCw className="size-3.5" /> {t("workspaceDetail.scans.rerun")}
+              </Button>
+            )}
+            {/* 黑盒验证入口（2026-09-10 D3 入口回归）：白盒终态行直达 ScanNewPage 黑盒
+                验证表单（任务预选 + 目标/认证预填由 getScan 承担）——列表层级恢复显式
+                触发位，替代「进详情页找 header 小按钮」。口径同 ScanDetail whiteboxAddable
+                （白盒 + completed/done/cancelled——failed 不给，后端产物门 422 兜底）。 */}
+            {isTerminal && scan.scan_type === "whitebox" && (
+              <Button size="sm" variant="ghost" onClick={() =>
+                nav(`/scan/new?workspace=${encodeURIComponent(ws)}`, {
+                  state: { type: "blackbox", workspace: ws, reuseScanId: scan.scan_id },
+                })} disabled={busy}>
+                <Crosshair className="size-3.5" /> {t("workspaceDetail.scans.runs.verifyBlackbox")}
               </Button>
             )}
             <Button

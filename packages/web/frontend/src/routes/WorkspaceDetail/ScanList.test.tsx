@@ -840,3 +840,39 @@ describe("ScanList correlation 主行子仓源过滤", () => {
     expect(screen.queryByText(/recon/)).not.toBeInTheDocument();
   });
 });
+
+// —— 黑盒验证行内入口（2026-09-10 D3 入口回归）：白盒终态行直达黑盒验证表单 ——
+
+describe("ScanList 黑盒验证入口（D3 回归）", () => {
+  it("白盒终态行显示「黑盒验证」，点击跳黑盒表单并预选任务", async () => {
+    server.use(
+      http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([{
+        scan_id: "wb-77", scan_type: "whitebox", status: "completed", created_at: 2000,
+        completed_at: 3000, vuln_count: 3, is_running: false, workflow_id: "ws-wb-77",
+      }])),
+    );
+    renderList();
+    await waitFor(() => expect(screen.getByText("ws-wb-77")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /黑盒验证/ }));
+    await waitFor(() => expect(navMock).toHaveBeenCalled());
+    expect(navMock).toHaveBeenCalledWith("/scan/new?workspace=ws", {
+      state: { type: "blackbox", workspace: "ws", reuseScanId: "wb-77" },
+    });
+  });
+
+  it("运行中 / 黑盒 / 跨仓行不显示「黑盒验证」", async () => {
+    server.use(
+      http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([
+        { scan_id: "r1", scan_type: "whitebox", status: "running", created_at: 1000,
+          completed_at: null, vuln_count: 0, is_running: true, workflow_id: "ws-r1" },
+        { scan_id: "b1", scan_type: "blackbox", status: "completed", created_at: 2000,
+          completed_at: 3000, vuln_count: 0, is_running: false, workflow_id: "ws-b1" },
+        { scan_id: "c1", scan_type: "correlation", status: "completed", created_at: 2200,
+          completed_at: 3200, vuln_count: 0, is_running: false, workflow_id: "ws-c1" },
+      ])),
+    );
+    renderList();
+    await waitFor(() => expect(screen.getByText("ws-c1")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /黑盒验证/ })).not.toBeInTheDocument();
+  });
+});
