@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from supernova_web.auth.dependencies import current_user, workspace_member
@@ -8,7 +9,9 @@ from supernova_web.components.workspace_provisioner import is_global_admin, is_s
 from supernova_web.auth.models import User
 from supernova_web.components.scan_manager import TemporalUnavailable
 from supernova_web.components.ws_config_store import ProviderConfigIncomplete
-from supernova_web.models import ScanAccepted, ScanRequest
+from supernova_web.models import (
+    BatchScanAccepted, BatchScanRequest, BatchScanResultItem, RepoSource, ScanAccepted, ScanRequest,
+)
 
 router = APIRouter(prefix="/api/scan", tags=["scan"])
 
@@ -81,6 +84,68 @@ async def create_scan(req: ScanRequest, request: Request,
             except Exception:  # noqa: BLE001 - 读 session best-effort，不阻塞提交响应
                 bb_phase = None
     return ScanAccepted(workspace=ws_name, scan_id=scan_id, bb_phase=bb_phase)
+
+
+@router.post("/batch", response_model=BatchScanAccepted, status_code=202)
+async def create_scan_batch(req: BatchScanRequest, request: Request,
+                            user: User = Depends(current_user)):
+    """批量白盒扫描（spec 2026-09-11-batch-whitebox-scan §3）。
+
+    端点层逐仓循环调既有 sm.start()——scan_manager 零改动；单仓失败（未就绪/
+    不存在/排队满/Temporal 异常）只计入该仓 results，不阻断整批。有任何成功 →
+    202；全部失败 → 422 附 results。并发由 worker ScanGate 排队（web 不限）。
+    """
+    ws = req.workspace
+    if not ws or not is_safe_workspace_name(ws):
+        raise HTTPException(422, "workspace 不存在，请先让 admin 创建")
+    ws_dir = request.app.state.config.workspaces_dir / ws
+    if not ws_dir.is_dir() or ws_dir.is_symlink():
+        raise HTTPException(422, "workspace 不存在，请先让 admin 创建")
+    if not is_global_admin(user) and request.app.state.auth_store.get_workspace_member_role(
+            ws, user.id) is None:
+        raise HTTPException(403, "非该 workspace 成员")
+    try:
+        request.app.state.ws_config_store.resolve_provider_config(ws)
+    except ProviderConfigIncomplete as e:
+        raise HTTPException(422, detail={"code": "provider_incomplete", "missing": e.missing})
+
+    sm = request.app.state.scan_manager
+    results: list[BatchScanResultItem] = []
+    for repo in req.repos:
+        single = ScanRequest(
+            type="whitebox",
+            source=RepoSource(kind="repo", value=repo),
+            url=req.url,
+            workspace=req.workspace,
+            authentication=req.authentication,
+            auth_accounts=req.auth_accounts,
+            auth_profile_id=req.auth_profile_id,
+            auth_credential_ids=req.auth_credential_ids,
+            host_profile_id=req.host_profile_id,
+            host_url=req.host_url,
+            delete_repo_on_finish=req.delete_repo_on_finish,
+        )
+        try:
+            _, scan_id = await sm.start(single)
+            results.append(BatchScanResultItem(repo=repo, ok=True, scan_id=scan_id))
+        except TemporalUnavailable:
+            results.append(BatchScanResultItem(
+                repo=repo, ok=False, error="Temporal 服务未运行，请先 docker-compose up -d"))
+        except PermissionError as e:
+            results.append(BatchScanResultItem(repo=repo, ok=False, error=str(e)))
+        except ValueError as e:
+            results.append(BatchScanResultItem(repo=repo, ok=False, error=str(e)))
+
+    submitted = sum(1 for r in results if r.ok)
+    failed = len(results) - submitted
+    if submitted == 0:
+        # 全失败 → 422，body 顶层即 BatchScanAccepted（results 不裹 detail——
+        # 端点测试锁 body["results"]；与 provider_incomplete 的 detail 包裹不同）。
+        return JSONResponse(
+            status_code=422,
+            content=BatchScanAccepted(
+                workspace=ws, submitted=0, failed=failed, results=results).model_dump())
+    return BatchScanAccepted(workspace=ws, submitted=submitted, failed=failed, results=results)
 
 
 @router.get("/gate")
