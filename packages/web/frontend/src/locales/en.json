@@ -415,6 +415,12 @@
       "urlLabel": "Target Service",
       "urlPlaceholder": "http://target.example"
     },
+    "deleteRepo": {
+      "toggle": "Delete repo after scan",
+      "hint": "Delete this repo from the workspace once the scan reaches any final state (clone and index included).",
+      "corrHint": "Delete newly-scanned child repos once the correlation scan reaches any final state (reused scans' repos untouched).",
+      "linkedHint": "Linked repos are managed outside this workspace; delete-on-finish does not apply."
+    },
     "precheckStatus": "Precheck (auth validation)",
     "tags": {
       "localAudit": "Local Audit",

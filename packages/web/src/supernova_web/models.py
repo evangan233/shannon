@@ -67,6 +67,10 @@ class ScanRequest(BaseModel):
     # 都不填 = 不启用 HOST 代理（向后兼容，既有扫描字节不变）。
     host_profile_id: str | None = None   # 选 HOST 档案
     host_url: str | None = None          # 或填 GET 链接（扫描时拉取）
+    # 扫完即删（2026-09-10）：勾选后扫描到任意终态（completed/failed/cancelled…）
+    # 时由 web 仓库级 sweep 删除对应仓库（私有克隆 rmtree；linked 仓不处理）。
+    # 标志随扫描行落 session；correlation 传播给本次新建的子仓扫描行。
+    delete_repo_on_finish: bool = False
 
     @field_validator("host_profile_id", "host_url", mode="before")
     @classmethod

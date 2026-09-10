@@ -971,6 +971,9 @@ export interface ScanRequest {
   config_content?: string;
   // 可选：提交时把 config_content 另存为命名配置（multi-config store）。
   save_as?: string;
+  // 扫完即删（2026-09-10）：勾选后扫描到任意终态由 web 仓库级 sweep 删除对应仓库
+  //（correlation 传播给本次新建子仓；linked 仓后端不处理）。仅 true 时发送（默认不发键）。
+  delete_repo_on_finish?: boolean;
 }
 
 export interface ScanResponse {

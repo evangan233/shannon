@@ -35,7 +35,13 @@ from .host_profile_store import (
 )
 from .repo_manager import _resolve_repo_dir, _validate_ws_segment, resolve_linked_repo_path
 from .scan_liveness import is_scan_recently_active
-from .scan_store import ScanStore, _read_workflow_id_from_ndjson, write_repo_snapshot
+from .scan_store import (
+    ScanStore,
+    _read_workflow_id_from_ndjson,
+    effective_scan_status,
+    merge_latest_run_view,
+    write_repo_snapshot,
+)
 from .workspaces_indexer import _compute_status
 
 
@@ -81,6 +87,11 @@ class AuthValidationPending(Exception):
 # （POST /api/scan 起新 scan_id，旧记录保留）。
 _RESUMABLE_STATUSES = frozenset(
     {"interrupted", "crashed", "failed", "cancelled", "killed"})
+
+# 扫完即删（2026-09-10）sweep 判「扫描仍在用仓库」的状态集：running（心跳/提交
+# 宽限判活）与 queued（worker 闸门排队中）保护仓库；其余状态（completed/failed/
+# cancelled/crashed/killed/interrupted/…）均视为「已完毕」（用户裁定任何终态都删）。
+_SWEEP_ACTIVE_STATUSES = frozenset({"running", "queued"})
 
 
 def _now_iso() -> str:
@@ -203,11 +214,15 @@ class ScanManager:
                  scan_timeout: float = 0.0,
                  ws_config_store: Any = None,
                  auth_profile_store: Any = None,
-                 host_profile_store: Any = None) -> None:
+                 host_profile_store: Any = None,
+                 repo_manager: Any = None) -> None:
         self._workspaces_dir = Path(workspaces_dir)
         self._repos_dir = Path(repos_dir)
         self._config_store = config_store
         self._scan_timeout = scan_timeout
+        # 扫完即删（2026-09-10）：sweep 委托 repo_manager.delete（私有克隆 rmtree）。
+        # None=旧测试/CLI 兜底构造（sweep no-op，不影响既有流程）。
+        self._repo_manager = repo_manager
         # T3: _handles/_tasks/_active_reqs key = (ws, scan_id)（同 ws 多 scan 不互斥）。
         self._handles: dict[tuple[str, str], Any] = {}
         self._tasks: dict[tuple[str, str], asyncio.Task] = {}
@@ -251,6 +266,98 @@ class ScanManager:
             if req.source is not None and req.source.kind == "repo":
                 out.add((ws, req.source.value))
         return out
+
+    # ---- 扫完即删（2026-09-10）：仓库级 sweep ----
+
+    async def sweep_delete_flagged_repos(self, ws: str) -> list[str]:
+        """对 ws 做仓库级 sweep，删除「扫描已全部完毕」的带标志仓库，返删除名单。
+
+        删除条件（合取，对应「任何终态都删 + 不误删共享仓」）：
+          - 该 repo 存在 ≥1 个 session 带 ``delete_repo_on_finish`` 的扫描行；
+          - 该 repo 的**所有**引用扫描（source_repo 命中，含不带标志的）都已完毕
+            （events.ndjson 有 scan_end，或 effective status 非活跃——组合扫描看
+            黑盒 run 阶段，与列表/详情同口径）；
+          - (ws, repo) 不在本进程活跃引用（active_repo_sources，提交冷启动窗口带）；
+          - 非 linked 仓（linked 完全不处理：不删源目录、不解引用）。
+        满足 → repo_manager.delete()（私有克隆 rmtree + 空组目录清理）。幂等 best-effort：
+        仓库已删/正忙/单行读失败 → 跳过不抛。repo_manager 未注入（旧测试/CLI）→ no-op。
+        """
+        if self._repo_manager is None:
+            return []
+        ws_dir = self._workspaces_dir / ws
+        if not ws_dir.is_dir() or ws_dir.is_symlink():
+            return []
+        by_repo: dict[str, list[tuple[Path, dict]]] = {}
+        for _scan_id, scan_dir in self._store._scan_entries(ws):
+            try:
+                data = SessionManager(scan_dir.parent).get_session_data(scan_dir)
+            except Exception:  # noqa: BLE001 - 单行读失败不阻塞整个 sweep
+                continue
+            repo = data.get("source_repo") if isinstance(data, dict) else None
+            if repo:
+                by_repo.setdefault(repo, []).append((scan_dir, data))
+        active = self.active_repo_sources()
+        deleted: list[str] = []
+        for repo, entries in by_repo.items():
+            if not any(d.get("delete_repo_on_finish") for _, d in entries):
+                continue
+            if (ws, repo) in active:
+                continue
+            if any(self._scan_still_needs_repo(sd, d) for sd, d in entries):
+                continue
+            if not (ws_dir / "repos" / repo).is_dir():
+                continue  # 仓库已不在（手动删过）；linked 仓不在 repos/ 下也走此跳过
+            if self._repo_manager._is_linked(ws, repo):
+                continue  # linked 仓不处理（源目录共享，可能他 ws 仍用）
+            try:
+                await self._repo_manager.delete(ws, repo)
+            except (ValueError, OSError) as exc:
+                _log.warning("扫完即删跳过 %s/%s: %s", ws, repo, exc)
+                continue
+            deleted.append(repo)
+            _log.info("扫完即删：%s/%s 已删除（引用扫描均已终态）", ws, repo)
+        return deleted
+
+    def _scan_still_needs_repo(self, scan_dir: Path, data: dict) -> bool:
+        """该扫描是否仍需要仓库文件（sweep 保护判定）。
+
+        events.ndjson 已有 scan_end = 已收尾（completed/failed/cancelled/… 全算
+        「完毕」）；无 scan_end 时看 effective status：组合扫描白盒段完成但黑盒 run
+        在跑（merge_latest_run_view + effective_scan_status）仍是 running，queued =
+        worker 闸门排队中——两者保护仓库，其余（含 interrupted：心跳死的孤儿）放行。
+        """
+        if self._has_scan_end(scan_dir / "events.ndjson"):
+            return False
+        raw = _compute_status(
+            scan_dir, SessionManager(scan_dir.parent).get_status(scan_dir))
+        combined = data.get("combined") if isinstance(data, dict) else None
+        bb_phase, _bb_reason, _merged = merge_latest_run_view(scan_dir, data)
+        status = effective_scan_status(raw, combined, bb_phase)
+        return status in _SWEEP_ACTIVE_STATUSES
+
+    async def sweep_all_workspaces(self) -> int:
+        """启动兜底：对全部 ws 各跑一次 sweep（_watch 随上次进程退出丢失的补删）。
+
+        返回删除仓库总数。单 ws 失败记日志继续（不阻塞其余 ws 与启动流程）。
+        """
+        if self._repo_manager is None or not self._workspaces_dir.is_dir():
+            return 0
+        n = 0
+        for ws_dir in self._workspaces_dir.iterdir():
+            if not ws_dir.is_dir() or ws_dir.is_symlink():
+                continue
+            try:
+                n += len(await self.sweep_delete_flagged_repos(ws_dir.name))
+            except Exception:  # noqa: BLE001
+                _log.exception("扫完即删 sweep 失败: ws=%s", ws_dir.name)
+        return n
+
+    async def _sweep_ws_quiet(self, ws: str) -> None:
+        """best-effort sweep（各触发点统一入口）：失败仅记日志，绝不影响宿主流程。"""
+        try:
+            await self.sweep_delete_flagged_repos(ws)
+        except Exception:  # noqa: BLE001
+            _log.exception("扫完即删 sweep 失败: ws=%s", ws)
 
     async def reap_zombies(self) -> None:
         """lifespan 启动时扫无主子进程。C1 后 web 无子进程 -> no-op."""
@@ -328,6 +435,9 @@ class ScanManager:
         corr_config: MultiRepoConfig | None = None
         corr_repo_paths: dict[str, Path] = {}
         corr_repo_dirs: dict[str, str] = {}
+        # 扫完即删（2026-09-10）：svc → ws 内仓库名（此刻 plan.repo_path 仍是名字；
+        # 下方 final-fix ② 会把 spec.path 回填成绝对路径，子仓循环里名字已丢）。
+        corr_repo_names: dict[str, str] = {}
         if req.type == "correlation":
             # final-fix ①：宽容解析（缺 correlation 段注入默认占位，详见模块级
             # _parse_corr_config_with_defaults 注释）；后续校验/规划消费同一对象。
@@ -337,6 +447,7 @@ class ScanManager:
                 if not plan.reuse:
                     # path 语义 = ws 内仓库名（web 提交通道；_resolve_repo_path 做
                     # linked 仓优先 + 防遍历 + state=ready 校验，同白盒 source=repo）。
+                    corr_repo_names[plan.service] = plan.repo_path or plan.service
                     corr_repo_dirs[plan.service] = self._resolve_repo_path(
                         ws, plan.repo_path or "")
 
@@ -364,6 +475,13 @@ class ScanManager:
             scan_id, scan_dir = self._store.create_scan(
                 ws, req.url or "", target or "", req.type)
         self._mark_owner(scan_dir, "web")
+        # 扫完即删（2026-09-10）：勾选标志随扫描行落盘（whitebox/mr 单仓；blackbox
+        # 禁 source 天然不涉及；correlation 主行无 source、由子仓循环逐仓传播给新建
+        # 行）。提交前落盘——precheck 失败等提前终态路径的行同样可被 sweep 到。
+        if req.delete_repo_on_finish and req.source is not None \
+                and req.source.kind == "repo":
+            SessionManager(scan_dir.parent).update_session(
+                scan_dir, {"delete_repo_on_finish": True})
         # 分支快照（spec 2026-08-21 §4）：repo 来源提交时快照仓库当前 branch/commit
         # 进 scan_dir——切分支后报告靠此区分来源（scan_id 只含仓库名+时间戳）。
         self._maybe_write_repo_snapshot(req, target, scan_dir)
@@ -436,6 +554,8 @@ class ScanManager:
                         await self._mark_bb(scan_dir, "failed", "auth_failed")
                         await self._ensure_scan_end(scan_dir, status="failed")
                         self._active_reqs.pop(scan_key, None)
+                        # 扫完即删：precheck 失败 = 已终态（此路径无 _watch），在此触发。
+                        await self._sweep_ws_quiet(ws)
                         return ws, scan_id
                     await self._mark_bb(scan_dir, "pending")
                 handle = await self._submit_whitebox(
@@ -493,6 +613,13 @@ class ScanManager:
                         continue
                     c_scan_id, c_dir = self._store.create_scan(ws, "", svc, "whitebox")
                     self._mark_owner(c_dir, "web")
+                    # 扫完即删（2026-09-10）：主表单勾选传播给本次新建子仓行（带
+                    # source_repo=ws 内仓库名供 sweep 分组；复用子仓无新行，天然不传播）。
+                    if req.delete_repo_on_finish:
+                        SessionManager(c_dir.parent).update_session(c_dir, {
+                            "delete_repo_on_finish": True,
+                            "source_repo": corr_repo_names.get(svc, svc),
+                        })
                     await corr_writer.repo(svc, "started")
                     wb_handle = await self._submit_whitebox(
                         corr_repo_dirs[svc], ws, c_scan_id, c_dir,
@@ -536,6 +663,8 @@ class ScanManager:
             self._orchestrator_tasks.pop(scan_key, None)
             # A directory was already created, so never leave it in running state.
             await self._mark_submission_failed(scan_dir, event_file, exc)
+            # 扫完即删：提交失败 = 已终态（此路径无 _watch），best-effort 触发后照常抛。
+            await self._sweep_ws_quiet(ws)
             raise
         self._handles[scan_key] = handle
         self._tasks[scan_key] = asyncio.create_task(self._watch(scan_key, event_file, scan_dir))
@@ -2477,6 +2606,9 @@ class ScanManager:
             self._handles.pop(scan_key, None)
             self._tasks.pop(scan_key, None)
             self._active_reqs.pop(scan_key, None)
+            # 扫完即删（2026-09-10）：扫描终态触发该 ws 的仓库级 sweep。放在登记
+            # 清理之后——本扫描不再自锁仓库；best-effort，失败不影响 _watch 收尾。
+            await self._sweep_ws_quiet(scan_key[0])
 
     @staticmethod
     def _has_scan_end(event_file: Path) -> bool:
@@ -2754,6 +2886,9 @@ class ScanManager:
             # _cancel_combined 已 pop，此处兜底幂等）。cancel 时不在此标终态——_cancel_combined/
             # _mark_cancelled 负责。
             self._orchestrator_tasks.pop(scan_key, None)
+            # 扫完即删（2026-09-10）：precheck-fail 路径未起 _watch（pass 路径由 _watch
+            # finally 触发，此处幂等重扫无害）。
+            await self._sweep_ws_quiet(ws)
 
     async def _combined_orchestrator(self, scan_key: tuple[str, str], wb_handle: Any,
                                      scan_dir: Path, req: ScanRequest) -> None:

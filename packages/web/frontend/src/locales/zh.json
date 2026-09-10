@@ -415,6 +415,12 @@
       "urlLabel": "目标服务",
       "urlPlaceholder": "http://target.example"
     },
+    "deleteRepo": {
+      "toggle": "扫完即删",
+      "hint": "扫描到任意终态后从工作区删除该仓库（含克隆与索引）。",
+      "corrHint": "扫描到任意终态后删除本次新建扫描的各子仓库（复用已有扫描的仓库不受影响）。",
+      "linkedHint": "外部关联仓库不受工作区管理，不适用扫完即删。"
+    },
     "precheckStatus": "预验证中（认证校验）",
     "tags": {
       "localAudit": "本地审计",

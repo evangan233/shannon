@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { RepoCombobox } from "./RepoCombobox";
 import { RepoQuickActions } from "./RepoQuickActions";
+import { DeleteRepoOnFinishCheckbox } from "./DeleteRepoOnFinishCheckbox";
 import { GroupLabel } from "./GroupLabel";
 import { CredentialRows } from "./auth/CredentialRows";
 import { AddRepoDialog } from "./AddRepoDialog";
@@ -900,6 +901,12 @@ export function ScanFormFields({
             <GroupLabel hint={t("scan.tags.localAudit")}>{t("scan.steps.source")}</GroupLabel>
             {repoPicker}
             {sourceErr && <div className="text-destructive text-xs">{sourceErr}</div>}
+            {/* 扫完即删（2026-09-10）：linked 仓禁用（后端 sweep 对 linked 完全不处理）。 */}
+            <DeleteRepoOnFinishCheckbox
+              checked={!!f.deleteRepoOnFinish}
+              onChange={(v) => set({ deleteRepoOnFinish: v })}
+              disabled={!!selectedRepoObj?.linked}
+            />
           </section>
         </div>
 

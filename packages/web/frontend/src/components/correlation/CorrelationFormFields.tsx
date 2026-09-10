@@ -4,6 +4,7 @@ import { GroupLabel } from "@/components/GroupLabel";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { RepoCombobox } from "@/components/RepoCombobox";
+import { DeleteRepoOnFinishCheckbox } from "@/components/DeleteRepoOnFinishCheckbox";
 import { useRepos } from "@/api/useRepos";
 import { useScans } from "@/routes/WorkspaceDetail/useScans";
 import { validateForm, type CorrFormState, type CorrRepoDraft, type CorrRole, type CorrProtocol } from "@/lib/correlation-yaml";
@@ -15,6 +16,10 @@ interface Props {
   /** 表单交互路径：父层 updateCorr(s) 三方扇出（表单是源 → 图 + YAML 实时生成）。 */
   onState: (s: CorrFormState) => void;
   workspace: string;
+  /** 扫完即删（2026-09-10）：跨仓语义 = 主表单勾选，后端传播给本次新建的子仓扫描行
+   *  （复用已有扫描的子项不受影响）。表单 state 走页面级 FormState，经此回调上抛。 */
+  deleteRepoOnFinish?: boolean;
+  onDeleteRepoFinishChange?: (v: boolean) => void;
 }
 
 /** 紧凑 segmented（角色/来源二选一）：aria-pressed 按钮，样式对齐 ScanFormFields 的来源 segmented。
@@ -70,7 +75,8 @@ function fmtTime(unix?: number): string {
  *  原「表单模式整页容器」瘦身——ws 段/YAML 面板/relations chips/黑盒验证上提 tabs 外或
  *  并入其他视图：边的编辑主场在图 tab（边表/连线），chips 摘要与图内 TopologyTables 重复
  *  表达同一份边集合，撤除。 */
-export function CorrelationFormFields({ state, onState, workspace }: Props) {
+export function CorrelationFormFields({ state, onState, workspace,
+                                         deleteRepoOnFinish, onDeleteRepoFinishChange }: Props) {
   const { t } = useTranslation();
   // repo 候选（卡片 RepoCombobox 数据源）：SWR 共享 key，与 ReposTab 同 ["repos", ws] 缓存。
   const { repos } = useRepos(workspace);
@@ -281,6 +287,15 @@ export function CorrelationFormFields({ state, onState, workspace }: Props) {
             );
           })}
         </div>
+      )}
+      {/* 扫完即删（2026-09-10）：跨仓语义文案（删本次新建子仓，复用子仓不受影响）。
+          linked 子仓由后端 sweep 逐仓跳过，前端不逐一禁用。 */}
+      {onDeleteRepoFinishChange && (
+        <DeleteRepoOnFinishCheckbox
+          checked={!!deleteRepoOnFinish}
+          onChange={onDeleteRepoFinishChange}
+          hint={t("scan.deleteRepo.corrHint")}
+        />
       )}
       {/* 表单级校验（D1 validateForm；issue 文案经渲染层 i18n 映射——lib 产出中文硬编码，D7）。
           同步错误也会以红点亮在表单 tab 标签上（页面层 corr-tab-dot-form）。 */}

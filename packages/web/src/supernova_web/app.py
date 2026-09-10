@@ -71,6 +71,18 @@ async def lifespan(app: FastAPI):
     ensure_all_user_workspaces(app.state.config.workspaces_dir, app.state.auth_store)
     _reconcile_repo_meta(app)
     await _reconcile_orphaned_scans(app)  # 重启后给孤儿 scan 补 scan_end，让 live 不再卡 running
+    # 扫完即删（2026-09-10）启动兜底 sweep：孤儿对账收口终态后，补删「带标志且
+    # 已完毕」的仓库（_watch 随上次 web 进程退出丢失的窗口）。best-effort 不阻断启动。
+    try:
+        swept = await app.state.scan_manager.sweep_all_workspaces()
+        if swept:
+            import logging
+            logging.getLogger("supernova_web").info(
+                "Startup swept %d delete-on-finish repo(s).", swept)
+    except Exception:
+        import logging
+        logging.getLogger("supernova_web").exception(
+            "startup delete-on-finish sweep failed; continuing startup")
     # 启动把 configs/*.yaml 的 authentication 段 seed 成全局共享系统档案（.system 段，
     # 所有 ws 可见、只读，以 configs 文件为唯一真相源）。seed_from_config 内部对单个
     # 文件 parse 失败/无 authentication 段已容错；此处再兜一层防意外阻断启动。
@@ -294,15 +306,17 @@ def create_app(overrides: dict | None = None) -> FastAPI:
         ws_config_store=app.state.ws_config_store,
     )
     overrides = overrides or {}
+    # RepoManager 先建：ScanManager 的扫完即删 sweep（2026-09-10）委托它删仓库。
+    app.state.repo_manager = overrides.get("repo_manager") or RepoManager(
+        cfg.workspaces_dir, git_fetcher, max_concurrent=cfg.repos_max_concurrent_clones,
+        max_upload_zip_bytes=cfg.max_upload_zip_bytes)
     app.state.scan_manager = overrides.get("scan_manager") or ScanManager(
         cfg.workspaces_dir, cfg.repos_dir, app.state.config_store,
         scan_timeout=cfg.scan_timeout,
         ws_config_store=app.state.ws_config_store,
         auth_profile_store=app.state.auth_profile_store,
-        host_profile_store=app.state.host_profile_store)
-    app.state.repo_manager = overrides.get("repo_manager") or RepoManager(
-        cfg.workspaces_dir, git_fetcher, max_concurrent=cfg.repos_max_concurrent_clones,
-        max_upload_zip_bytes=cfg.max_upload_zip_bytes)
+        host_profile_store=app.state.host_profile_store,
+        repo_manager=app.state.repo_manager)
 
     from .components.topology_analysis import TopologyAnalysisManager
     app.state.topology_manager = overrides.get("topology_manager") or TopologyAnalysisManager(

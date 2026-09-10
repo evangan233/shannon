@@ -159,6 +159,26 @@ def test_post_scan_workspace_field_name_contract(_authed_app):
     assert len(fake.started) == 1
 
 
+def test_post_scan_delete_repo_on_finish_passes_through(_authed_app):
+    """扫完即删（2026-09-10）：请求体 delete_repo_on_finish 经 pydantic 解析透传给
+    sm.start（默认 False 不勾；勾选后扫描终态由 web sweep 删仓库）。"""
+    fake = FakeSM()
+    app = create_app(overrides={"scan_manager": fake})
+    app.state.auth_store = _authed_app.state.auth_store
+    app.state.session_manager = _authed_app.state.session_manager
+    client = _authed_client(app)
+    tok = _csrf(client)
+    body = {"type": "whitebox", "source": {"kind": "path", "value": "/x"},
+            "url": "http://e", "workspace": "WSX", "delete_repo_on_finish": True}
+    r = client.post("/api/scan", json=body, headers={"X-CSRF-Token": tok})
+    assert r.status_code == 202, r.text
+    assert fake.started[0].delete_repo_on_finish is True
+    # 默认（不发该键）= False
+    r2 = client.post("/api/scan", json=_BODY, headers={"X-CSRF-Token": tok})
+    assert r2.status_code == 202
+    assert fake.started[1].delete_repo_on_finish is False
+
+
 # ── GET /api/scan/gate：全局扫描闸门快照（spec 2026-09-08-worker-scan-gate §8.1）──
 
 def _write_gate_file(app, payload):

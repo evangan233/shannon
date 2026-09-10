@@ -11,6 +11,7 @@ import { RepoCombobox } from "../components/RepoCombobox";
 import { LinkResolveBox } from "../components/LinkResolveBox";
 import { RefRangeInput } from "../components/RefRangeInput";
 import { RepoQuickActions } from "../components/RepoQuickActions";
+import { DeleteRepoOnFinishCheckbox } from "../components/DeleteRepoOnFinishCheckbox";
 import type { ResolveLinkResult } from "../api/types";
 import { useRepos } from "../api/useRepos";
 import { CorrelationFormFields } from "../components/correlation/CorrelationFormFields";
@@ -290,6 +291,10 @@ export interface FormState {
   mrHeadRef?: string;
   mrHeadCommit?: string;
   mrBaseCommit?: string | null;
+  /** 扫完即删（2026-09-10）：勾选后扫描到任意终态由 web 仓库级 sweep 删除对应仓库
+   *  （correlation 传播给本次新建子仓）。可选——旧 FormState 字面量不传 = false；
+   *  仅 true 时 buildBody 发送该键（wire format 字节不变）。 */
+  deleteRepoOnFinish?: boolean;
 }
 
 /** 将 AuthFormState 写入 ScanRequest 认证字段（auth-profile-vault 双来源）：
@@ -352,6 +357,8 @@ export function buildBody(type: ScanType, f: FormState, workspace: string, corrY
     body.head_ref = f.mrHeadRef?.trim() || undefined;
     body.head_commit = f.mrHeadCommit?.trim() || undefined;
     body.base_commit = f.mrBaseCommit?.trim() || undefined;
+    // 扫完即删（2026-09-10）：仅勾选时发送（默认不发键，wire format 字节不变）。
+    if (f.deleteRepoOnFinish) body.delete_repo_on_finish = true;
     return body;
   }
   if (type === "correlation") {
@@ -367,6 +374,8 @@ export function buildBody(type: ScanType, f: FormState, workspace: string, corrY
       if (f.auth.enabled) assignAuthToBody(body, f.auth);
       assignHostToBody(body, f.host);
     }
+    // 扫完即删（2026-09-10）：传播给本次新建子仓扫描（复用已有扫描的子项不受影响）。
+    if (f.deleteRepoOnFinish) body.delete_repo_on_finish = true;
     return body;
   }
   const hostIsActive = !!f.combined && !!f.url;
@@ -386,6 +395,8 @@ export function buildBody(type: ScanType, f: FormState, workspace: string, corrY
   } else {
     body.url = undefined;
   }
+  // 扫完即删（2026-09-10）：仅勾选时发送（默认不发键，wire format 字节不变）。
+  if (f.deleteRepoOnFinish) body.delete_repo_on_finish = true;
   return body;
 }
 
@@ -926,6 +937,12 @@ export function ScanNewPage() {
                       {mrSelectedRepo?.state === "ready" && (
                         <RepoQuickActions workspace={workspace} repo={mrSelectedRepo} />
                       )}
+                      {/* 扫完即删（2026-09-10）：linked 仓禁用（后端 sweep 对 linked 完全不处理）。 */}
+                      <DeleteRepoOnFinishCheckbox
+                        checked={!!f.deleteRepoOnFinish}
+                        onChange={(v) => set({ deleteRepoOnFinish: v })}
+                        disabled={!!mrSelectedRepo?.linked}
+                      />
                     </div>
                   )}
                 </section>
@@ -1058,7 +1075,9 @@ export function ScanNewPage() {
                   />
                 </TabsContent>
                 <TabsContent value="form">
-                  <CorrelationFormFields state={corrState} onState={updateCorr} workspace={workspace} />
+                  <CorrelationFormFields state={corrState} onState={updateCorr} workspace={workspace}
+                    deleteRepoOnFinish={!!f.deleteRepoOnFinish}
+                    onDeleteRepoFinishChange={(v) => set({ deleteRepoOnFinish: v })} />
                 </TabsContent>
                 <TabsContent value="yaml">
                   <YamlPanel yaml={corrYaml} onChange={onCorrYaml} error={yamlErr} synced />
