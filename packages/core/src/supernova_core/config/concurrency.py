@@ -369,3 +369,43 @@ def get_poc_agent_concurrency() -> int:
                      "falling back to %d", val, _POC_AGENT_CONCURRENCY_DEFAULT)
         return _POC_AGENT_CONCURRENCY_DEFAULT
     return val
+
+
+# ── 对抗性审查阶段旋钮（spec 2026-09-10 §4.6）──
+# 整型解析复用 _get_max_turns（通用 int>=1 env 读取，等价 brief 的 _int_env_or，
+# 勿重复定义）；布尔开关复用 _is_truthy_env。
+
+_ADVERSARIAL_REVIEW_CONCURRENCY_DEFAULT = 4
+_ADVERSARIAL_REVIEW_MAX_TURNS_DEFAULT = 40
+_ADVERSARIAL_REVIEW_SHARD_MAX_DEFAULT = 3
+_ADVERSARIAL_REVIEW_MAX_AGENTS_DEFAULT = 50
+
+
+def is_adversarial_review_enabled() -> bool:
+    """SUPERNOVA_ADVERSARIAL_REVIEW_ENABLED（默认开）：白盒合并后对抗审查总开关。
+    经 ws_getenv 支持 per-workspace 覆盖。"""
+    return _is_truthy_env("SUPERNOVA_ADVERSARIAL_REVIEW_ENABLED", default=True)
+
+
+def get_adversarial_review_concurrency() -> int:
+    """片 agent 并发上限（scan 级共享 Semaphore，类间+片间统一限流防 429 放大）。"""
+    return _get_max_turns("SUPERNOVA_ADVERSARIAL_REVIEW_CONCURRENCY",
+                          _ADVERSARIAL_REVIEW_CONCURRENCY_DEFAULT)
+
+
+def get_adversarial_review_max_turns() -> int:
+    """片 agent turn 预算（默认 40，对齐 POC 片换算：≤3 卡/片 × ~9 turns/卡 + 余量）。"""
+    return _get_max_turns("SUPERNOVA_ADVERSARIAL_REVIEW_MAX_TURNS",
+                          _ADVERSARIAL_REVIEW_MAX_TURNS_DEFAULT)
+
+
+def get_adversarial_review_shard_max_cards() -> int:
+    """片大小上限（同 sink 文件超限裂片，对齐 get_poc_shard_max_cards 模式）。"""
+    return _get_max_turns("SUPERNOVA_ADVERSARIAL_REVIEW_SHARD_MAX_CARDS",
+                          _ADVERSARIAL_REVIEW_SHARD_MAX_DEFAULT)
+
+
+def get_adversarial_review_max_agents() -> int:
+    """预算护栏：超出片数的卡 unreviewed 保守放行（对齐 CHAIN_VERDICT_MAX_AGENTS）。"""
+    return _get_max_turns("SUPERNOVA_ADVERSARIAL_REVIEW_MAX_AGENTS",
+                          _ADVERSARIAL_REVIEW_MAX_AGENTS_DEFAULT)

@@ -81,6 +81,19 @@ SCAN_ENV_KEYS: frozenset[str] = frozenset({
     # 一锅端 14 卡 4 次启动 0 交付（429 大请求 + 输出截断）的根因修复。
     "SUPERNOVA_POC_SHARD_MAX_CARDS",
     "SUPERNOVA_POC_AGENT_CONCURRENCY",
+    # 2026-09-11 准入（对抗性审查阶段，per-workspace 预算×质量取舍）：
+    # ENABLED 是工作区主人省 token 关掉整段审查的唯一出口（同
+    # ENDPOINT_ENRICH_ENABLED 先例）；CONCURRENCY / MAX_TURNS / SHARD_MAX_CARDS
+    # 逐一对照同族先例准入（CHAIN_VERDICT_CONCURRENCY / *_VERDICT_MAX_TURNS /
+    # POC_SHARD_MAX_CARDS）——审查片与 POC 片同为「聚类分片 + 片 agent」形态，
+    # 容量铁律「片数÷并发×单链耗时≤窗口」三旋钮只许全局调则工作区配不平。
+    # 预算护栏键 SUPERNOVA_ADVERSARIAL_REVIEW_MAX_AGENTS 对齐
+    # CHAIN_VERDICT_MAX_AGENTS 有意不进（护栏留全局，工作区写了归 unknown
+    # 警告丢弃，见上条注释）。
+    "SUPERNOVA_ADVERSARIAL_REVIEW_ENABLED",
+    "SUPERNOVA_ADVERSARIAL_REVIEW_CONCURRENCY",
+    "SUPERNOVA_ADVERSARIAL_REVIEW_MAX_TURNS",
+    "SUPERNOVA_ADVERSARIAL_REVIEW_SHARD_MAX_CARDS",
 })
 
 # 启动期配置（worker main() 启动时读一次，ws 覆盖不生效）→ 警告不阻塞，不进 fields/env。

@@ -328,3 +328,35 @@ def test_parse_poc_shard_keys_to_env_section():
     }
     assert parsed.unknown == []
     assert parsed.ineffective == []
+
+
+def test_parse_adversarial_review_keys_to_env_section():
+    """对抗审查四旋钮（2026-09-11 准入，工作区预算×质量取舍）→ env 段。
+
+    ENABLED 是工作区省 token 关整段审查的唯一出口（同 ENDPOINT_ENRICH_ENABLED
+    先例）；CONCURRENCY / MAX_TURNS / SHARD_MAX_CARDS 对照同族先例准入
+    （CHAIN_VERDICT_CONCURRENCY / *_VERDICT_MAX_TURNS / POC_SHARD_MAX_CARDS）。
+    预算护栏 ADVERSARIAL_REVIEW_MAX_AGENTS 对齐 CHAIN_VERDICT_MAX_AGENTS
+    有意不进（见下个测试），勿无差别补齐。"""
+    parsed = parse_env_text(
+        "SUPERNOVA_ADVERSARIAL_REVIEW_ENABLED=0\n"
+        "SUPERNOVA_ADVERSARIAL_REVIEW_CONCURRENCY=2\n"
+        "SUPERNOVA_ADVERSARIAL_REVIEW_MAX_TURNS=30\n"
+        "SUPERNOVA_ADVERSARIAL_REVIEW_SHARD_MAX_CARDS=1\n")
+    assert parsed.env == {
+        "SUPERNOVA_ADVERSARIAL_REVIEW_ENABLED": "0",
+        "SUPERNOVA_ADVERSARIAL_REVIEW_CONCURRENCY": "2",
+        "SUPERNOVA_ADVERSARIAL_REVIEW_MAX_TURNS": "30",
+        "SUPERNOVA_ADVERSARIAL_REVIEW_SHARD_MAX_CARDS": "1",
+    }
+    assert parsed.unknown == []
+    assert parsed.ineffective == []
+
+
+def test_parse_adversarial_review_max_agents_stays_global():
+    """预算护栏对齐 CHAIN_VERDICT_MAX_AGENTS：有意留全局通道，ws 写了归
+    unknown 警告丢弃（不静默半生效）。"""
+    parsed = parse_env_text("SUPERNOVA_ADVERSARIAL_REVIEW_MAX_AGENTS=100\n")
+    assert parsed.env == {}
+    assert parsed.unknown == ["SUPERNOVA_ADVERSARIAL_REVIEW_MAX_AGENTS"]
+    assert parsed.ineffective == []
