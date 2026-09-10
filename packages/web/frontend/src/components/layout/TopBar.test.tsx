@@ -138,6 +138,31 @@ describe("TopBar 工作区 nav active 判定", () => {
   });
 });
 
+// 2026-09-10 用户反馈：点击顶栏「工作区」时，你在哪个工作区就跳回哪个工作区，
+// 不强制跳到置顶（pinned）工作区。点击后 URL 已变 /workspaces-entry、来源丢失，
+// 故由 TopBar 渲染时按当前路径覆写 to：命中 /p/:ws 直达本 ws；否则保持三段中转。
+describe("TopBar 工作区入口跳回当前工作区", () => {
+  beforeEach(() => i18n.changeLanguage("zh"));
+
+  it("/p/:ws 扫描子页 →「工作区」直达本 ws 首页 /p/demo-ws（不走 /workspaces-entry）", () => {
+    renderAt("/p/demo-ws/scans/scan-123/live");
+    const link = screen.getByText("工作区").closest("a");
+    expect(link).toHaveAttribute("href", "/p/demo-ws");
+  });
+
+  it("/p/:ws 首页 →「工作区」指向本 ws 自身", () => {
+    renderAt("/p/demo-ws");
+    const link = screen.getByText("工作区").closest("a");
+    expect(link).toHaveAttribute("href", "/p/demo-ws");
+  });
+
+  it("非工作区路由（/scan/new）→ 保持 /workspaces-entry 三段跳转中转", () => {
+    renderAt("/scan/new");
+    const link = screen.getByText("工作区").closest("a");
+    expect(link).toHaveAttribute("href", "/workspaces-entry");
+  });
+});
+
 describe("TopBar sticky 吸顶", () => {
   beforeEach(() => i18n.changeLanguage("zh"));
 
