@@ -522,6 +522,39 @@ async def scan_dataflow(ws: str, scan_id: str, request: Request,
     return _dataflow_view_for(_scan_dir_or_404(request, ws, scan_id))
 
 
+def _adversarial_review_for(scan_dir: Path) -> dict:
+    """直读 intermediate/adversarial_review.json（spec 2026-09-10 §4.8）。
+
+    不经 DeliverablesReader——端点返 JSON 非 text/plain 截断（对齐
+    _dataflow_view_for 模式）。缺失/坏 JSON 一律 404，不 500 冒泡。
+    """
+    import json
+    from supernova_core.utils.paths import resolve_intermediate, WHITEBOX_SUBDIR
+    wb_dir = scan_dir / "deliverables" / WHITEBOX_SUBDIR
+    path = resolve_intermediate(wb_dir, "adversarial_review.json")
+    if path is None or not path.is_file():
+        raise HTTPException(404, "adversarial review not generated")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise HTTPException(404,
+                            f"adversarial review unreadable: {exc}") from exc
+    if not isinstance(data, dict):
+        raise HTTPException(404, "adversarial review malformed")
+    return data
+
+
+@router.get("/{ws}/scans/{scan_id}/adversarial-review")
+async def scan_adversarial_review(
+    ws: str, scan_id: str, request: Request,
+    _: User = Depends(workspace_member),
+) -> dict:
+    """对抗性审查结果（spec 2026-09-10 §4.8）。读 whitebox intermediate
+    产物 adversarial_review.json，缺 -> 404。对齐 scan_dataflow 鉴权与直读模式。
+    """
+    return _adversarial_review_for(_scan_dir_or_404(request, ws, scan_id))
+
+
 @router.get("/{ws}/scans/{scan_id}/evidence-matrix")
 async def scan_evidence_matrix(ws: str, scan_id: str, request: Request,
                                _: User = Depends(workspace_member)) -> dict:
