@@ -37,6 +37,7 @@ vuln prompt 的 false_positives_to_avoid），**没有独立的对抗性审查�
 | 降级语义 | 片失败/JSON 打捞失败/预算超限 → `unreviewed` 保守放行（审查通道失败 ≠ 判了误报，对齐 unadjudicated 哲学） |
 | checkpoint | 产物即 checkpoint：`adversarial_review.json` 已有终态记录（survived/refuted）的卡不重审，重试只跑残余 |
 | 默认开关 | `SUPERNOVA_ADVERSARIAL_REVIEW_ENABLED`，默认 `"1"`（经 `ws_getenv` 支持 per-workspace 覆盖） |
+| 防过驳（over-refutation）防线 | ①**证据存在性机器校验**（§6 L4：refuted 证据的文件须在 repo 存在 + snippet 须能匹配到，纯确定性零 LLM，打幻觉证据）②**prompt 姿态校准**（§4.1：诚实怀疑者非辩护人，survived 是正常结论、驳回是需铁证的例外，维度判据从严写陷阱反例）。低置信 refuted 不做特殊处理（confidence 自评校准差、防护空间被 L3/L4 挤压，2026-09-11 已裁 YAGNI）；dry-run 首跑模式不做 |
 | refuted 可见入口 | **web 扫描详情页新 Tab**（§4.8）：读 adversarial_review.json 全量透传，三态徽标 + failed_dimensions 筛选，展开看反驳论证与证据；白盒报告不展示被驳回项（维持 §9） |
 
 ## 2. 架构定位与铁律关系
@@ -98,10 +99,19 @@ platform_protection/authz_guard）。
 
 结构对齐 `cross-repo-adjudication.txt`（角色/目标/维度清单/输出格式四段）：
 
-- `<role>`：Adversarial Reviewer——专职反驳者，目标是**证明 finding 是误报**，
-  不是复核也不是重新分析。只读工具（grep/read），禁 Task/写文件。
-- `<dimensions>`：§3 七维度清单逐条展开（每维度的反驳判据、什么证据算成立），
-  并按 vuln_class 标注适用集。
+- `<role>`：Adversarial Reviewer——**诚实怀疑的对抗审查者**（honest skeptic），
+  从受限远程攻击者视角审视：任务是**努力反驳、诚实汇报**，不是「必须驳倒的
+  辩护人」。只读工具（grep/read），禁 Task/写文件。
+- **姿态校准硬规则**（防激励偏置 → 防过驳）：`survived` 是**正常且常见的
+  结论**（not a failure）；`refuted` 是需要 file:line 铁证的**例外**。禁止
+  为驳回而驳回——找不到具体代码证据就诚实判 survived；证据只允许来自本次
+  真实读到的代码，禁止凭记忆/推测/卡内声称构造。
+- `<dimensions>`：§3 七维度清单逐条展开（每维度的反驳判据、什么证据算
+  成立），并按 vuln_class 标注适用集；**每维度附「不成立的常见陷阱」反例**，
+  判据从严——例：`platform_protection` 不得拿「框架默认转义」驳回走了
+  转义豁免通道的 sink（`dangerouslySetInnerHTML` / `v-html` / `|safe`
+  filter / `innerHTML` 赋值）；`defense_effective` 须确认防御匹配该 slot
+  且 sanitize 后无再拼接。
 - `<methodology>`：逐卡流程——读卡（sink/endpoint/数据流声称）→ 逐适用维度
   尝试反驳（每维度真实读码，证据必须是自己读到的 file:line，不得引用卡内声称）
   → 汇总裁定。**负面结论与正面结论同举证强度**（借鉴跨仓裁决 Rules）：
@@ -334,6 +344,12 @@ DimensionResult 接口）/ `client.ts`（fetchAdversarialReview）/
   `rebutted=true` → **拒收降级为 survived（零维度失败、带拒因记账）**——
   宁可漏反驳不误杀（防误降级优先于防误报，对齐 implementation-review.md:513
   的 over-seed 原则）。
+- L4 **证据存在性校验**（防幻觉证据，纯确定性零 LLM，2026-09-11 过驳风险
+  分析后加）：refuted 卡的每条 evidence——`location` 的文件部分相对
+  `repo_root` 必须真实存在；`snippet` 归一化空白（strip + collapse
+  whitespace）后必须能在该文件内容中子串匹配到。任一失败 → 整卡降级
+  survived + 拒因记账（对齐 L3 降级语义）。函数签名带
+  `repo_root: Path | None`，None 时跳过本层（测试/离线复用友好）。
 
 **降级矩阵**：
 
@@ -342,7 +358,7 @@ DimensionResult 接口）/ `client.ts`（fetchAdversarialReview）/
 | 片 agent 抛错 | 该片卡 `unreviewed`，不炸类（对齐 POC 诚实缺失） |
 | structured_output=None 且打捞失败 | 同上 |
 | 预算护栏超出 | 未开审的卡 `unreviewed` 保守放行 |
-| validate 拒收 refuted | 降级 survived + warning 记账 |
+| validate 拒收 refuted（L3 证据门槛不过 / L4 存在性校验失败） | 降级 survived + warning 记账 |
 | LLM 全不可用（stub） | 全部 unreviewed，queue 原样（审查是增强层，不阻塞） |
 | Temporal 取消 | workflow 层 `is_cancellation` 直接 raise（铁律：吞掉=幽灵扫描） |
 | 开关关闭 | activity 直读 return，零产物零改动 |
@@ -364,7 +380,9 @@ records 里有 `review_verdict="unreviewed"` + `after.action="kept"` 留痕。
 
 - **validate_review**：枚举归一 / 幻觉 ID 拒收 / refuted 无证据降级 survived /
   failed_dimensions 与 verdict 一致性不变量 / dimension 适用集校验（auth 卡
-  返回 authz_guard 维度 → 拒收或忽略，按适用表）。
+  返回 authz_guard 维度 → 拒收或忽略，按适用表）/ **L4 证据存在性校验**
+  （location 文件不存在 → 降级；snippet 归一化后匹配不到 → 降级；
+  `repo_root=None` 跳过本层；survived 卡的证据不做存在性要求）。
 - **分片**：sink 聚类复用逻辑的适用性（若抽公共函数则改两处调用方测试）。
 - **产物 schema 与幂等**：records 同 ID 覆盖合并 / 重跑不重审（终态过滤）/
   unreviewed 卡重跑补审 / summary 计数与 records 一致。
