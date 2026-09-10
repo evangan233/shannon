@@ -175,6 +175,67 @@ async def test_run_correlation_phase_writes_flows_and_respects_paths(tmp_path, m
 
 
 @pytest.mark.asyncio
+async def test_run_correlation_phase_emits_edge_agent_events(tmp_path, monkeypatch):
+    """edge agent 细粒度事件（2026-09-10 live tab）：execute 的 tool_audit_logger 回调 +
+    agent start/end 包裹 → AgentEvent/ToolCallEvent/LlmTurnEvent 落主行 events.ndjson，
+    agent_name=edge:<f>→<t>（前端零改动渲染）。"""
+    import json as _json
+    from supernova_multi.orchestrator import run_correlation_phase
+
+    gw_ws, be_ws = tmp_path / "gw-scan", tmp_path / "be-scan"
+    for w in (gw_ws, be_ws):
+        (w / "deliverables").mkdir(parents=True)
+    (be_ws / "deliverables" / "injection_exploitation_queue.json").write_text(
+        _json.dumps({"vulnerabilities": [
+            {"title": "SQLi", "description": "d", "severity": "high",
+             "location": "dao.go:8"}]}), encoding="utf-8")
+    out_ws = tmp_path / "corr-scan"
+    out_ws.mkdir()
+    event_file = out_ws / "events.ndjson"
+
+    cfg = MultiRepoConfig(
+        repos={"gateway": RepoSpec(path="/r/gw", role="entrypoint"),
+               "order-svc": RepoSpec(path="/r/be", role="backend")},
+        relations=[Relation(**{"from": "gateway", "to": "order-svc"})],
+        correlation=CorrelationConfig(out_workspace="corr-scan"))
+
+    async def fake_execute(self, **kw):
+        tl = kw.get("tool_audit_logger")
+        if tl is not None:
+            await tl.log_tool_start("Grep", {"q": "grpc"})
+            await tl.log_assistant_turn(1, "分析调用关系")
+
+        class _M:
+            structured_output = {"from": "gateway", "to": "order-svc",
+                                 "protocol": "grpc", "calls": [], "status": "ok",
+                                 "boundaries": []}
+            duration_ms = 42
+            cost_usd = 0.1
+            cost_currency = "CNY"
+            input_tokens = 10
+            output_tokens = 5
+        return _M()
+
+    import supernova_core.agents.executor as executor_mod
+    monkeypatch.setattr(executor_mod.AgentExecutor, "execute", fake_execute)
+
+    await run_correlation_phase(cfg, {"gateway": gw_ws, "order-svc": be_ws},
+                                out_ws, event_file, write_scan_end=False)
+
+    events = [_json.loads(l) for l in event_file.read_text(encoding="utf-8").splitlines() if l]
+    agents = [e for e in events if e["type"] == "AgentEvent"]
+    assert agents and agents[0]["event"] == "start"
+    assert agents[0]["agent_name"] == "edge:gateway→order-svc"
+    assert agents[-1]["event"] == "end" and agents[-1]["success"] is True
+    assert agents[-1]["duration_ms"] == 42 and agents[-1]["cost_currency"] == "CNY"
+    tools = [e for e in events if e["type"] == "ToolCallEvent"]
+    assert tools and tools[0]["tool_name"] == "Grep"
+    assert tools[0]["agent_name"] == "edge:gateway→order-svc"
+    llm = [e for e in events if e["type"] == "LlmTurnEvent"]
+    assert llm and llm[0]["turn"] == 1 and llm[0]["content"].startswith("分析调用关系")
+
+
+@pytest.mark.asyncio
 async def test_run_correlation_phase_write_scan_end_true(tmp_path, monkeypatch):
     """write_scan_end=True（CLI 默认）→ scan_end 事件落 ndjson。"""
     from supernova_multi.orchestrator import run_correlation_phase

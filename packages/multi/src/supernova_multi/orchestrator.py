@@ -116,7 +116,7 @@ async def run_correlation_phase(
     from supernova_core.models.agents import AgentName
     from supernova_core.correlation.schemas import CrossServiceFlow
     from supernova_core.correlation.report import write_correlation_deliverables
-    from supernova_multi.correlation_event_writer import CorrelationEventWriter
+    from supernova_multi.correlation_event_writer import CorrelationEventWriter, EdgeAgentEventLogger
 
     corr_writer = CorrelationEventWriter(event_file)
 
@@ -247,15 +247,31 @@ async def run_correlation_phase(
                         service=t, role=primary_role.get(t, "backend"), roles=role_map.get(t, ["backend"]),
                         repo_path=repo_paths.get(t), deliverables=None)),
             }
-            metrics = await executor.execute(
-                agent_name=AgentName.CROSS_REPO_CORRELATION,
-                repo_path=str(out_ws),  # 注:非 git repo,但 git ops 全在 deliverables(见 Task A6 风险 #1)
-                deliverables_path=str(out_dlv),
-                pipeline_testing=pipeline_testing,
-                prompt_variables=prompt_vars,
-                structured_output_schema=edge_output_schema,  # 强制单 edge JSON 输出
-                provider_config=provider_config,  # A3: per-scan provider 穿线(web 编排;CLI 恒 None)
-            )
+            # edge agent 细粒度事件落盘（2026-09-10 live tab）：tool_audit_logger 钩子
+            # 转 AgentEvent/ToolCallEvent/LlmTurnEvent（标准形状,前端零改动渲染），
+            # start/end 手动包裹（end 拆 AgentMetrics 计量字段）。
+            edge_logger = EdgeAgentEventLogger(corr_writer, f"edge:{f}→{t}")
+            await edge_logger.agent_start()
+            try:
+                metrics = await executor.execute(
+                    agent_name=AgentName.CROSS_REPO_CORRELATION,
+                    repo_path=str(out_ws),  # 注:非 git repo,但 git ops 全在 deliverables(见 Task A6 风险 #1)
+                    deliverables_path=str(out_dlv),
+                    pipeline_testing=pipeline_testing,
+                    prompt_variables=prompt_vars,
+                    structured_output_schema=edge_output_schema,  # 强制单 edge JSON 输出
+                    provider_config=provider_config,  # A3: per-scan provider 穿线(web 编排;CLI 恒 None)
+                    tool_audit_logger=edge_logger,
+                )
+            except Exception as e:
+                await edge_logger.agent_end(success=False, error=str(e))
+                raise  # 交回 _run_edge 既有单边隔离（status=error）
+            await edge_logger.agent_end(
+                duration_ms=getattr(metrics, "duration_ms", None),
+                cost_usd=getattr(metrics, "cost_usd", None),
+                cost_currency=getattr(metrics, "cost_currency", None),
+                input_tokens=getattr(metrics, "input_tokens", None),
+                output_tokens=getattr(metrics, "output_tokens", None))
             # A6 风险 #3:AgentMetrics 真实属性是 structured_output(非 brief 的 output)。
             # 取不到合法 payload 则降级 unverified(spec §8 per-edge 隔离)。
             payload = getattr(metrics, "structured_output", None)
