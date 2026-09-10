@@ -176,6 +176,35 @@ async def test_edge_logger_tool_end_noop(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("emit", [
+    lambda lg: lg.agent_start(),
+    lambda lg: lg.agent_end(duration_ms=1),
+    lambda lg: lg.log_tool_start("Read", {}),
+    lambda lg: lg.log_error("boom"),
+    lambda lg: lg.log_assistant_turn(1, "内容"),
+])
+async def test_edge_logger_events_carry_ts(tmp_path, emit):
+    """live 页时间列读 ev.ts（LogsTab: ev.ts ?? ev.timestamp ?? ""）——edge 细粒度
+    事件缺 ts 则时间列空白（2026-09-11 cross-repo-20260910-193903 实测 52 条
+    AGENT/TOOL/LLM 全无 ts）。契约对齐 core StructuredEventRenderer：每行必有 ts。"""
+    w = CorrelationEventWriter(tmp_path / "e.ndjson")
+    lg = EdgeAgentEventLogger(w, "edge:a→b")
+    await emit(lg)
+    r = _rows(tmp_path / "e.ndjson")[-1]
+    assert "ts" in r and r["ts"]  # 非空 ISO 时间戳
+
+
+@pytest.mark.asyncio
+async def test_raw_does_not_overwrite_caller_ts(tmp_path):
+    """raw() 是「补」ts（setdefault 语义）：调用方自带 ts 时不覆盖。"""
+    w = CorrelationEventWriter(tmp_path / "e.ndjson")
+    await w.raw({"ts": "2026-09-10T19:39:03Z", "category": "AGENT",
+                 "type": "AgentEvent"})
+    r = _rows(tmp_path / "e.ndjson")[-1]
+    assert r["ts"] == "2026-09-10T19:39:03Z"
+
+
+@pytest.mark.asyncio
 async def test_edge_logger_shares_writer_lock(tmp_path):
     """edge 细粒度事件与 repo/phase/edge 控制行并发写同一 ndjson：锁串行无交错。"""
     w = CorrelationEventWriter(tmp_path / "e.ndjson")

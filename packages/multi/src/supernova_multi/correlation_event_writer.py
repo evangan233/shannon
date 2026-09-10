@@ -53,7 +53,10 @@ class CorrelationEventWriter:
 
         形状契约由调用方保证：对齐 core StructuredEventRenderer 的序列化
         （{ts, category, type, ...事件字段}），让前端既有渲染零改动。
+        ts 在此统一补（setdefault 语义，调用方自带不覆盖）——2026-09-11 修复：
+        edge 细粒度事件曾整批漏 ts，live 页时间列（ev.ts ?? ev.timestamp）全空白。
         """
+        payload.setdefault("ts", _now_iso())
         await self._append(payload)
 
     async def repo(self, name: str, status: str, detail: str | None = None) -> None:
