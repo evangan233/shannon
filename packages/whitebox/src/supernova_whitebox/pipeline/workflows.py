@@ -627,6 +627,32 @@ class WhiteboxScanWorkflow:
                     start_to_close_timeout=timedelta(minutes=2),
                     retry_policy=retry_for("standard"),
                 )
+                # === 对抗性审查（merge 后、富化前；non-fatal，spec
+                # 2026-09-10）：固定 7 维度逐卡反驳，refuted 剔卡+归档，
+                # 反驳掉的卡不再消耗富化/POC/polish 的逐卡 LLM 成本。 ===
+                try:
+                    await workflow.execute_activity(
+                        activities.run_adversarial_review, act_input,
+                        start_to_close_timeout=timedelta(minutes=20),
+                        retry_policy=retry_for("standard"),
+                    )
+                except Exception as exc:
+                    if is_cancellation(exc):  # 取消放行（吞掉=幽灵扫描）
+                        raise
+                    if _activity_not_registered_hint(exc):
+                        raise ApplicationFailure(
+                            f"Adversarial review activity is not registered: {exc}",
+                            type="ActivityNotRegistered",
+                            non_retryable=True,
+                        ) from exc
+                    await workflow.execute_activity(
+                        activities.log_info_activity,
+                        ActivityInput(**{**act_input.__dict__,
+                           "info_message": f"adversarial review failed (non-fatal): {exc}",
+                           "info_level": "warning"}),
+                        start_to_close_timeout=timedelta(seconds=10),
+                        retry_policy=retry_for("log"),
+                    )
                 # === GN-only 深度富化（merge 后；non-fatal，spec 2026-08-26 §6.2） ===
                 # 对配对后仍 gitnexus-only 的 taint 条目跑多轮 agent 读码富化
                 # （title/impact/remediation/dataflow_steps/witness_payload 等

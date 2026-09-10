@@ -38,6 +38,14 @@ def test_step_names_matches_phase_steps_order():
     )
 
 
+def test_vulnerability_analysis_phase_contains_adversarial_review():
+    from supernova_whitebox.pipeline.step_intents import PHASE_STEPS
+    names = [s.name for s in PHASE_STEPS["vulnerability-analysis"]]
+    assert "adversarial-review" in names
+    assert names.index("merge-dual-track") < names.index("adversarial-review") \
+        < names.index("gn-finding-enrichment")
+
+
 def test_step_names_unknown_phase_raises_keyerror():
     with pytest.raises(KeyError):
         step_names("does-not-exist")
