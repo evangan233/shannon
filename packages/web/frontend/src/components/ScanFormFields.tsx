@@ -6,19 +6,18 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { RepoCombobox } from "./RepoCombobox";
-import { RepoQuickActions } from "./RepoQuickActions";
 import { DeleteRepoOnFinishCheckbox } from "./DeleteRepoOnFinishCheckbox";
 import { GroupLabel } from "./GroupLabel";
 import { CredentialRows } from "./auth/CredentialRows";
 import { AddRepoDialog } from "./AddRepoDialog";
-import { CloneProgress } from "./CloneProgress";
+import { RepositoryMultiSelector } from "./correlation/RepositoryMultiSelector";
 import { listScans } from "@/api/client";
 import { createAuthProfile } from "@/api/authProfiles";
 import { useAuthProfiles } from "@/api/useAuthProfiles";
 import { useHostProfiles } from "@/api/useHostProfiles";
 import { useRepos } from "@/api/useRepos";
-import type { ScanSummary, Workspace, AuthProfile, AuthProfileCredential, VerifyState } from "@/api/types";
+import type { Repo, ScanSummary, Workspace, AuthProfile, AuthProfileCredential, VerifyState } from "@/api/types";
+import { CLONE_POLL_MS, CLONE_BUSY_STATES } from "../pages/ScanNewPage";
 import type { FormState, AuthFormState, HostFormState } from "../pages/ScanNewPage";
 import { useAuth } from "@/auth/AuthContext";
 import { apiErrorMessage } from "@/lib/apiError";
@@ -805,35 +804,29 @@ export function ScanFormFields({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [type, f.reuseScanId, wbScans, wbLoadedFor, workspace]);
 
-  const selectedRepoObj = repos.find((r) => r.name === f.selectedRepo);
-  const selectedRepoState = selectedRepoObj?.state;
-
-  // —— 共用：仓库选择器（入口已收窄——仅工作区已下载仓库，无本地路径分支） ——
-  // ws 未选时不渲染仓库 picker / 添加按钮（listRepos 必须 ws）
+  // —— 白盒仓库多选（2026-09-11 批量白盒扫描）：复用 correlation 的 RepositoryMultiSelector
+  // （搜索/全选/已选计数/未就绪禁选灰显 state 原文）。CloneProgress/RepoQuickActions 随
+  // 单选下拉退役——多选列表自带 state 显示，busy 态由 BusyReposWatch 轮询驱动翻转；
+  // 快捷操作（切分支/更新）去仓库页。ws 未选时不渲染（listRepos 必须 ws）。
+  const anySelectedLinked = repos.some((r) => r.linked && f.selectedRepos.includes(r.name));
   const repoPicker = workspace ? (
     <div className="space-y-2">
-      <RepoCombobox
+      <RepositoryMultiSelector
         repos={repos}
-        value={f.selectedRepo || null}
-        onChange={(v) => set({ selectedRepo: v })}
-        placeholder={t("scan.repo.selectPlaceholder")}
-        searchPlaceholder={t("scan.repo.searchPlaceholder")}
-        emptyText={t("scan.repo.noMatch")}
-        ungroupedLabel={t("scan.repo.ungrouped")}
-        linkedLabel={t("repos.linkedBadge")}
+        selected={f.selectedRepos}
+        onChange={(next) => set({ selectedRepos: next })}
       />
       <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}>{t("scan.repo.addBtn")}</Button>
-      {f.selectedRepo && selectedRepoState && selectedRepoState !== "ready" && (
-        selectedRepoState === "cloning" || selectedRepoState === "pulling"
-          ? <CloneProgress ws={workspace} name={f.selectedRepo} />
-          : <div className="text-xs text-destructive">{t("scan.repo.notReady", { state: selectedRepoState })}</div>
-      )}
-      {/* C 段（2026-09-03）：ready 仓库的快捷操作条——切分支/更新，免跑去仓库页 */}
-      {selectedRepoObj?.state === "ready" && (
-        <RepoQuickActions workspace={workspace} repo={selectedRepoObj} />
-      )}
+      {/* 扫完即删（2026-09-10）：选中项含 linked 仓时禁用（后端 sweep 对 linked 完全不处理）。 */}
+      <DeleteRepoOnFinishCheckbox
+        checked={!!f.deleteRepoOnFinish}
+        onChange={(v) => set({ deleteRepoOnFinish: v })}
+        disabled={anySelectedLinked}
+      />
       <AddRepoDialog ws={workspace} open={addOpen} onOpenChange={setAddOpen}
-        onCreated={(name) => set({ selectedRepo: name })} />
+        onCreated={(name) => set({ selectedRepos: [...new Set([...f.selectedRepos, name])] })}
+        onBatchCreated={(names) => set({ selectedRepos: [...new Set([...f.selectedRepos, ...names])] })} />
+      <BusyReposWatch workspace={workspace} repos={repos} />
     </div>
   ) : (
     <div className="text-xs text-muted-foreground">{t("scan.fields.selectWsFirst")}</div>
@@ -901,12 +894,6 @@ export function ScanFormFields({
             <GroupLabel hint={t("scan.tags.localAudit")}>{t("scan.steps.source")}</GroupLabel>
             {repoPicker}
             {sourceErr && <div className="text-destructive text-xs">{sourceErr}</div>}
-            {/* 扫完即删（2026-09-10）：linked 仓禁用（后端 sweep 对 linked 完全不处理）。 */}
-            <DeleteRepoOnFinishCheckbox
-              checked={!!f.deleteRepoOnFinish}
-              onChange={(v) => set({ deleteRepoOnFinish: v })}
-              disabled={!!selectedRepoObj?.linked}
-            />
           </section>
         </div>
 
@@ -1104,4 +1091,19 @@ export function ScanFormFields({
       )}
     </div>
   );
+}
+
+/** busy 仓轮询（2026-09-11 批量白盒）：repos 有 cloning/pulling/extracting 等忙态时按
+ *  CLONE_POLL_MS（2s）刷 SWR 共享缓存（["repos", ws]——与 ReposTab / MR 表单同 key），
+ *  让多选列表的 state 原文（cloning→ready）实时翻转；全部脱离忙态即停。
+ *  纯轮询引擎不渲染（与 ScanNewPage.CloneWatch 同式，显示由多选列表承担）。 */
+function BusyReposWatch({ workspace, repos }: { workspace: string; repos: Repo[] }) {
+  const { refresh } = useRepos(workspace || undefined);
+  const busy = repos.some((r) => CLONE_BUSY_STATES.has(r.state));
+  useEffect(() => {
+    if (!busy) return;
+    const timer = window.setInterval(() => void refresh(), CLONE_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [busy, refresh]);
+  return null;
 }

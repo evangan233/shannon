@@ -1089,6 +1089,37 @@ export interface ScanResponse {
   bb_phase?: "precheck" | "running" | "done" | string;
 }
 
+/** 批量白盒扫描（2026-09-11）：POST /api/scan/batch——N 个仓库共享其余白盒配置，
+ *  各自产生独立扫描。字段名与 backend models.py BatchScanRequest 一致。 */
+export interface BatchScanRequest {
+  workspace: string;
+  repos: string[];
+  url?: string;
+  authentication?: ScanAuthentication;
+  auth_accounts?: { role: string; username: string; password: string; totp_secret?: string }[];
+  auth_profile_id?: string;
+  auth_credential_ids?: string[];
+  host_profile_id?: string;
+  host_url?: string;
+  delete_repo_on_finish?: boolean;
+}
+
+export interface BatchScanResultItem {
+  repo: string;
+  ok: boolean;
+  scan_id?: string;
+  error?: string;
+}
+
+/** 批量提交汇总：202（部分/全部成功）与全失败 422 的 body 同为此顶层形状
+ *  （422 无 detail 包裹——spec §3.3 要求前端在全失败时也展示全部失败明细）。 */
+export interface BatchScanResponse {
+  workspace: string;
+  submitted: number;
+  failed: number;
+  results: BatchScanResultItem[];
+}
+
 export interface FsEntry {
   name: string;
   type: "dir" | "file";

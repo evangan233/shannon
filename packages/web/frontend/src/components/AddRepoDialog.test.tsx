@@ -142,6 +142,30 @@ describe("AddRepoDialog", () => {
     expect((screen.getByTestId("submit") as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("批量克隆提交成功后 onBatchCreated 收到全部新仓库名（submitted+queued）", async () => {
+    const onBatchCreated = vi.fn();
+    mockBatchClone.mockResolvedValue(
+      { submitted: ["be/new-a"], queued: ["be/new-b"], skipped: [] });
+    render(<AddRepoDialog ws="ws1" open onOpenChange={() => {}} onCreated={() => {}}
+      onBatchCreated={onBatchCreated} />);
+    fireEvent.change(await screen.findByTestId("repo-urls"),
+      { target: { value: "https://gl/a.git\nhttps://gl/b.git" } });
+    fireEvent.click(screen.getByTestId("submit"));
+    await waitFor(() =>
+      expect(onBatchCreated).toHaveBeenCalledWith(["be/new-a", "be/new-b"]));
+  });
+
+  it("未传 onBatchCreated 时批量克隆仍走 onCreated(首个)（向后兼容）", async () => {
+    const onCreated = vi.fn();
+    mockBatchClone.mockResolvedValue(
+      { submitted: ["be/new-a"], queued: ["be/new-b"], skipped: [] });
+    render(<AddRepoDialog ws="ws1" open onOpenChange={() => {}} onCreated={onCreated} />);
+    fireEvent.change(await screen.findByTestId("repo-urls"),
+      { target: { value: "https://gl/a.git\nhttps://gl/b.git" } });
+    fireEvent.click(screen.getByTestId("submit"));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith("be/new-a"));
+  });
+
   it("批量克隆：group 共享透传", async () => {
     mockBatchClone.mockResolvedValue({ submitted: ["frontend/foo", "frontend/bar"], queued: [], skipped: [] });
     render(<AddRepoDialog {...props()} />);

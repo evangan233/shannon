@@ -372,6 +372,11 @@
       "clearLabel": "取消选择仓库"
     },
     "submit": "开始扫描",
+    "batch": {
+      "submit": "发起批量扫描 ({{count}})",
+      "bannerTitle": "批量提交完成：成功 {{ok}} / 失败 {{fail}}",
+      "bannerClose": "关闭批量结果提示"
+    },
     "errors": {
       "yamlRuntimeError": "yaml 有错，无法运行",
       "temporal": "Temporal 未就绪（localhost:7233）。先启动：docker-compose up temporal",

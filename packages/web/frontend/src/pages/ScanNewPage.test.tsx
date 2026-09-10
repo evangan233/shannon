@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { SWRConfig } from "swr";
 import { setupServer } from "msw/node";
 import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
 import i18n from "@/i18n";
-import { ScanNewPage, buildBody, buildAuthPayload, buildBlackboxRunBody, validateAuth, presetToAuthState, presetToHostState, DEFAULT_AUTH, DEFAULT_HOST, type AuthFormState, type FormState, type RerunPreset } from "./ScanNewPage";
+import { ScanNewPage, buildBody, buildAuthPayload, buildBatchBody, buildBlackboxRunBody, validateAuth, presetToAuthState, presetToHostState, DEFAULT_AUTH, DEFAULT_HOST, type AuthFormState, type FormState, type RerunPreset } from "./ScanNewPage";
 
 // 空态提示按 role 切文案 → useAuth 可控（同 DashboardPage.test 模式）。
 const { mockUseAuth } = vi.hoisted(() => ({ mockUseAuth: vi.fn() }));
@@ -80,23 +80,15 @@ async function selectWorkspace(name: string) {
   await selectOption("选择 workspace", name);
 }
 
-// RepoCombobox 在「仓库」分节 section 内（2026-09-09 质感统一：StepGroup 卡中卡退役，
-// 白盒/MR 分区同为开放 section + GroupLabel）。
-// ws Select 在另一个 section（"工作区"）——按分节标题 scope 避开它。
-function repoComboboxIn(stepTitle: string) {
-  const step = screen.getByText(stepTitle).closest<HTMLElement>("section")!;
-  return within(step).getAllByRole("combobox").at(-1)!;
+// 白盒仓库多选（2026-09-11 批量白盒）：仓库区换成 RepositoryMultiSelector
+// （testid=topology-repo-selector）——白盒用例的「选仓库」= 多选列表内勾选 checkbox。
+// MR 表单仍是 RepoCombobox（其用例用 within(form).getByText("选择仓库") 定位，不走本 helper）。
+async function checkRepo(name: RegExp | string) {
+  const selector = await screen.findByTestId("topology-repo-selector");
+  fireEvent.click(await within(selector).findByRole("checkbox", { name }));
 }
 
-function selectRepoOption(stepTitle: string, optionName: RegExp | string) {
-  const trigger = repoComboboxIn(stepTitle);
-  fireEvent.click(trigger);
-  return screen.findByRole("option", { name: optionName }).then((opt) => {
-    fireEvent.click(opt);
-  });
-}
-
-// 入口已收窄为 repo-only + 白盒去动态（无 URL 输入）：白盒提交类用例统一注入 ready 仓库 + 选 ws + 选 repo。
+// 入口已收窄为 repo-only + 白盒去动态（无 URL 输入）：白盒提交类用例统一注入 ready 仓库 + 选 ws + 勾选 repo。
 async function fillValidRepo() {
   server.use(
     http.get("/api/workspaces/:ws/repos", () =>
@@ -107,7 +99,7 @@ async function fillValidRepo() {
   );
   await selectWorkspace("ws1");
   await waitFor(() => screen.getByRole("button", { name: /\+ 添加新仓库/ }));
-  await selectRepoOption("仓库", /foo/);
+  await checkRepo(/foo/);
 }
 
 describe("ScanNewPage", () => {
@@ -275,11 +267,11 @@ describe("ScanNewPage", () => {
       }),
     );
     renderPage("/scan/new?repo=foo");
-    // 选 ws1 → listRepos(ws1) 拉到 foo → 仓库 combobox 显选中短名 foo
+    // 选 ws1 → listRepos(ws1) 拉到 foo → 多选列表预勾选 foo（preset selectedRepos=["foo"]）
     await selectWorkspace("ws1");
-    await waitFor(() =>
-      expect(repoComboboxIn("仓库")).toHaveTextContent("foo"),
-    );
+    const selector = await screen.findByTestId("topology-repo-selector");
+    const presetBox = await within(selector).findByRole("checkbox", { name: /foo/ });
+    await waitFor(() => expect(presetBox).toBeChecked());
     // 白盒去动态（无 URL 输入）→ 选 ws + 预选 repo 即 enabled，直接提交
     await waitFor(() => expect(screen.getByRole("button", { name: /开始扫描/ })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: /开始扫描/ }));
@@ -303,10 +295,10 @@ describe("ScanNewPage", () => {
       }),
     );
     renderPage();
-    // 先选 ws1 → repo picker 出现 → 手选 bar
+    // 先选 ws1 → repo picker 出现 → 手选 bar（多选列表勾选）
     await selectWorkspace("ws1");
     await waitFor(() => screen.getByRole("button", { name: /\+ 添加新仓库/ }));
-    await selectRepoOption("仓库", /bar/);
+    await checkRepo(/bar/);
     // 白盒去动态（无 URL 输入）→ 选 ws + repo 即 enabled
     await waitFor(() => expect(screen.getByRole("button", { name: /开始扫描/ })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: /开始扫描/ }));
@@ -316,26 +308,24 @@ describe("ScanNewPage", () => {
     expect(captured!.workspace).toBe("ws1");
   });
 
-  it("选中的 repo 正在 cloning → 显 CloneProgress（clone 中文案）", async () => {
+  it("选中的 repo 正在 cloning → 多选行禁选且显 cloning state 原文（BusyReposWatch 轮询）", async () => {
     server.use(
       http.get("/api/workspaces/:ws/repos", () =>
         HttpResponse.json([
           { name: "wip", state: "cloning", source: { kind: "git", url: "https://gitlab.example/wip.git" } },
         ]),
       ),
-      // CloneProgress 走 SSE；返回空流即可（不影响"clone 中"渲染）
-      http.get("/api/workspaces/:ws/repos/wip/events", () => new HttpResponse("", { headers: { "Content-Type": "text/event-stream" } })),
     );
     renderPage("/scan/new?repo=wip");
     await selectWorkspace("ws1");
-    await waitFor(() =>
-      expect(repoComboboxIn("仓库")).toHaveTextContent("wip"),
-    );
-    // 状态=cloning → CloneProgress 渲染"clone 中"
-    await waitFor(() => expect(screen.getByText(/clone 中/)).toBeInTheDocument());
+    const selector = await screen.findByTestId("topology-repo-selector");
+    const box = await within(selector).findByRole("checkbox", { name: /wip/ });
+    // busy 仓不可选（灰显禁选），行内显 state 原文；busy 态由 BusyReposWatch 轮询驱动翻转
+    expect(box).toBeDisabled();
+    expect(within(selector).getByText("cloning")).toBeInTheDocument();
   });
 
-  it("选中的 repo state=failed → 显仓库未就绪提示", async () => {
+  it("选中的 repo state=failed → 多选行禁选且显 failed state 原文", async () => {
     server.use(
       http.get("/api/workspaces/:ws/repos", () =>
         HttpResponse.json([
@@ -345,10 +335,10 @@ describe("ScanNewPage", () => {
     );
     renderPage("/scan/new?repo=broken");
     await selectWorkspace("ws1");
-    await waitFor(() =>
-      expect(repoComboboxIn("仓库")).toHaveTextContent("broken"),
-    );
-    expect(screen.getByText(/仓库未就绪/)).toBeInTheDocument();
+    const selector = await screen.findByTestId("topology-repo-selector");
+    const box = await within(selector).findByRole("checkbox", { name: /broken/ });
+    expect(box).toBeDisabled();
+    expect(within(selector).getByText("failed")).toBeInTheDocument();
   });
 
   it("白盒去动态无 URL 输入：选 repo + 选 ws → 可提交（无需目标地址）", async () => {
@@ -362,7 +352,7 @@ describe("ScanNewPage", () => {
     renderPage();
     await selectWorkspace("ws1");
     await waitFor(() => screen.getByRole("button", { name: /\+ 添加新仓库/ }));
-    await selectRepoOption("仓库", /foo/);
+    await checkRepo(/foo/);
     // 白盒已去动态（recon 固定静态）→ 无 URL 输入框，选 ws + repo 即可提交
     await waitFor(() => expect(screen.getByRole("button", { name: /开始扫描/ })).toBeEnabled());
   });
@@ -394,6 +384,181 @@ describe("ScanNewPage", () => {
     expect(await screen.findByRole("option", { name: "ws1" })).toBeInTheDocument();
     expect(screen.queryByText(/联系管理员/)).toBeNull();
     expect(screen.queryByText(/新建一个工作区/)).toBeNull();
+  });
+});
+
+// —— 批量白盒扫描（spec 2026-09-11）：白盒 tab 仓库多选 ——
+// 复用本文件既有 helper：renderPage / selectWorkspace（Radix Select click 姿势已验证）。
+// RepositoryMultiSelector 的 checkbox 可达名 = 行 label 文本（含仓库名），但 label 的
+// htmlFor id 是 topology-repo-<name> 派生（无 label-for 之外的可达名线索）——多仓按序
+// 断言走 within(selector).getAllByRole("checkbox")（对齐 RepositoryMultiSelector.test 姿势）。
+describe("whitebox multi-repo select", () => {
+  beforeEach(() => i18n.changeLanguage("zh"));
+
+  // SWR 全局缓存跨测试泄漏（见 correlation describe 的 renderPageFresh 注释）——
+  // 多选 fixture 须在干净缓存里取，不与前面用例的 ["repos","ws1"] 缓存串台。
+  function renderPageFresh(initialPath = "/scan/new") {
+    return render(
+      <MemoryRouter initialEntries={[initialPath]}>
+        <SWRConfig value={{ provider: () => new Map() }}>
+          <ScanNewPage />
+        </SWRConfig>
+      </MemoryRouter>,
+    );
+  }
+
+  const MULTI_REPOS = [
+    { name: "be/gateway", group: "be", source: { kind: "git", url: "https://gl/gw.git" }, state: "ready" },
+    { name: "be/auth", group: "be", source: { kind: "git", url: "https://gl/auth.git" }, state: "ready" },
+    { name: "be/cloning", group: "be", source: { kind: "git", url: "https://gl/c.git" }, state: "cloning" },
+  ];
+
+  // 白盒 FormState 基础字面量（本文件 wbForm / makeForm 同式）：批量字段 selectedRepos。
+  const wbBase: FormState = {
+    selectedRepo: "",
+    selectedRepos: [],
+    url: "",
+    reuseScanId: "",
+    auth: DEFAULT_AUTH,
+    host: DEFAULT_HOST,
+    yaml: "",
+  };
+
+  it("白盒 tab 渲染多选列表（勾选两个 ready 仓，cloning 仓禁选）", async () => {
+    server.use(
+      http.get("/api/workspaces/:ws/repos", () => HttpResponse.json(MULTI_REPOS)),
+    );
+    renderPageFresh();
+    await selectWorkspace("ws1");
+    const selector = await screen.findByTestId("topology-repo-selector");
+    await waitFor(() =>
+      expect(within(selector).getAllByRole("checkbox")).toHaveLength(3),
+    );
+    const boxes = within(selector).getAllByRole("checkbox");
+    fireEvent.click(boxes[0]); // be/gateway
+    fireEvent.click(boxes[1]); // be/auth
+    expect(boxes[2]).toBeDisabled(); // be/cloning
+    // 已选计数显示 2（scan.correlation.analysis.selectedCount）
+    expect(within(selector).getByText("已选 2")).toBeInTheDocument();
+  });
+
+  it("buildBody 白盒分支单发取 selectedRepos[0]", () => {
+    const f = { ...wbBase, selectedRepos: ["be/gateway"] };
+    const body = buildBody("whitebox", f, "ws1");
+    expect(body.source).toEqual({ kind: "repo", value: "be/gateway" });
+  });
+});
+
+// === 批量白盒提交（2026-09-11 批量白盒扫描 Task 4）：≥2 仓走 /scan/batch + 跳列表页 ===
+describe("whitebox batch submit", () => {
+  beforeEach(() => i18n.changeLanguage("zh"));
+
+  // SWR 全局缓存跨测试泄漏（见 multi-repo describe 的 renderPageFresh 注释）——
+  // 批量 fixture 须在干净缓存里取，不与前面用例的 ["repos","ws1"] 缓存串台。
+  // 带最小路由表（仅 /scan/new 一条）：批量提交后 nav 到 /p/{ws}/scans 无匹配路由
+  // → ScanNewPage 真卸载（表单元素消失），可断言跳转离开表单。
+  function renderPageFresh(initialPath = "/scan/new") {
+    return render(
+      <MemoryRouter initialEntries={[initialPath]}>
+        <SWRConfig value={{ provider: () => new Map() }}>
+          <Routes>
+            <Route path="/scan/new" element={<ScanNewPage />} />
+          </Routes>
+        </SWRConfig>
+      </MemoryRouter>,
+    );
+  }
+
+  const BATCH_REPOS = [
+    { name: "be/gateway", group: "be", state: "ready", source: { kind: "git", url: "https://gl/gw.git" } },
+    { name: "be/auth", group: "be", state: "ready", source: { kind: "git", url: "https://gl/a.git" } },
+  ];
+
+  // 白盒 FormState 基础字面量（同 wbBase 式）：批量字段 selectedRepos。
+  const BATCH_BASE: FormState = {
+    selectedRepo: "",
+    selectedRepos: [],
+    url: "",
+    reuseScanId: "",
+    auth: DEFAULT_AUTH,
+    host: DEFAULT_HOST,
+    yaml: "",
+  };
+
+  it("buildBatchBody 组合公共字段（url/delete）", () => {
+    const f = { ...BATCH_BASE, selectedRepos: ["be/gateway", "be/auth"],
+               combined: true, url: "http://t", deleteRepoOnFinish: true };
+    const body = buildBatchBody(["be/gateway", "be/auth"], f, "ws1");
+    expect(body.repos).toEqual(["be/gateway", "be/auth"]);
+    expect(body.workspace).toBe("ws1");
+    expect(body.url).toBe("http://t");
+    expect(body.delete_repo_on_finish).toBe(true);
+  });
+
+  it("buildBatchBody 纯白盒（无 combined）不发 url/auth 字段", () => {
+    const f = { ...BATCH_BASE, selectedRepos: ["be/gateway", "be/auth"] };
+    const body = buildBatchBody(["be/gateway", "be/auth"], f, "ws1");
+    expect(body.url).toBeUndefined();
+    expect(body.authentication).toBeUndefined();
+  });
+
+  it("选 2 仓 → 按钮文案「发起批量扫描 (2)」→ 提交走 /scan/batch → 跳列表页带 state", async () => {
+    let captured: unknown;
+    server.use(
+      http.get("/api/workspaces/:ws/repos", () => HttpResponse.json(BATCH_REPOS)),
+      http.post("/api/scan/batch", async ({ request }) => {
+        captured = await request.json();
+        return HttpResponse.json(
+          { workspace: "ws1", submitted: 1, failed: 1,
+            results: [
+              { repo: "be/gateway", ok: true, scan_id: "scan-0001" },
+              { repo: "be/auth", ok: false, error: "仓库未就绪（state=cloning）" },
+            ] }, { status: 202 });
+      }),
+    );
+    renderPageFresh();
+    await selectWorkspace("ws1");
+    const selector = await screen.findByTestId("topology-repo-selector");
+    await waitFor(() =>
+      expect(within(selector).getAllByRole("checkbox")).toHaveLength(2));
+    const boxes = within(selector).getAllByRole("checkbox");
+    fireEvent.click(boxes[0]);
+    fireEvent.click(boxes[1]);
+    const btn = await screen.findByRole("button", { name: "发起批量扫描 (2)" });
+    fireEvent.click(btn);
+    await waitFor(() => expect(captured).toBeDefined());
+    expect((captured as { repos: string[] }).repos).toEqual(["be/gateway", "be/auth"]);
+    // 跳转：MemoryRouter 无真路由表——断言 nav 离开表单（表单元素消失）即可；
+    // 精确路由断言由 ScanList 横幅用例覆盖 location.state 链路。
+    await waitFor(() =>
+      expect(screen.queryByTestId("topology-repo-selector")).not.toBeInTheDocument());
+  });
+
+  it("全失败 422（顶层 BatchScanResponse，无 detail 包裹）→ 同样跳列表页带横幅 state，不落 toast", async () => {
+    // spec §3.3：全失败 422 的 body 也是顶层 BatchScanResponse（无 detail 包裹）——
+    // catch 识别后同样跳列表页横幅展示 0 成功/N 失败明细，不走 renderError toast。
+    const spy = vi.spyOn(toast, "error");
+    server.use(
+      http.get("/api/workspaces/:ws/repos", () => HttpResponse.json(BATCH_REPOS)),
+      http.post("/api/scan/batch", () => HttpResponse.json(
+        { workspace: "ws1", submitted: 0, failed: 2,
+          results: [
+            { repo: "be/gateway", ok: false, error: "仓库未就绪（state=cloning）" },
+            { repo: "be/auth", ok: false, error: "工作区并发已满" },
+          ] }, { status: 422 })),
+    );
+    renderPageFresh();
+    await selectWorkspace("ws1");
+    const selector = await screen.findByTestId("topology-repo-selector");
+    await waitFor(() =>
+      expect(within(selector).getAllByRole("checkbox")).toHaveLength(2));
+    const boxes = within(selector).getAllByRole("checkbox");
+    fireEvent.click(boxes[0]);
+    fireEvent.click(boxes[1]);
+    fireEvent.click(await screen.findByRole("button", { name: "发起批量扫描 (2)" }));
+    await waitFor(() =>
+      expect(screen.queryByTestId("topology-repo-selector")).not.toBeInTheDocument());
+    expect(spy).not.toHaveBeenCalled();
   });
 });
 
@@ -985,6 +1150,7 @@ describe("correlation HOST buildBody / presetToHostState", () => {
   // 最小可用 correlation FormState（gateway url 开 = 附黑盒验证；auth/host 默认 disabled）。
   const baseF: FormState = {
     selectedRepo: "",
+    selectedRepos: [],
     url: "http://example.com",
     reuseScanId: "",
     auth: { enabled: false, source: "inline", profileId: "", credentialIds: [],
@@ -1079,6 +1245,7 @@ describe("buildBody whitebox 组合扫描 HOST 透传", () => {
   function wbForm(overrides: Partial<FormState> = {}): FormState {
     return {
       selectedRepo: "foo",
+      selectedRepos: ["foo"],
       url: "http://target.example/",
       reuseScanId: "",
       auth: {
@@ -1137,6 +1304,7 @@ describe("buildBody whitebox 组合扫描 HOST 透传", () => {
 describe("HOST enabled source validation", () => {
   const baseF: FormState = {
     selectedRepo: "",
+    selectedRepos: [],
     url: "http://example.com",
     reuseScanId: "20260731-1200",
     auth: { enabled: false, source: "inline", profileId: "", credentialIds: [],
@@ -1838,7 +2006,7 @@ describe("ScanNewPage 链接解析（resolve-link 回填，2026-09-03 仓库入�
 
 describe("buildBlackboxRunBody 黑盒验证提交 body", () => {
   const baseF: FormState = {
-    selectedRepo: "", url: "http://t.example.com", reuseScanId: "wb-1",
+    selectedRepo: "", selectedRepos: [], url: "http://t.example.com", reuseScanId: "wb-1",
     auth: DEFAULT_AUTH, host: DEFAULT_HOST, yaml: "",
   };
 

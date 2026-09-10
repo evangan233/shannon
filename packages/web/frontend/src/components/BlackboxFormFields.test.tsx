@@ -60,7 +60,7 @@ afterAll(() => server.close());
  *  供选中预填断言（避免窥探组件内部实现）。 */
 function Harness() {
   const [f, setF] = useState<FormState>({
-    selectedRepo: "", url: "", reuseScanId: "",
+    selectedRepo: "", selectedRepos: [], url: "", reuseScanId: "",
     auth: DEFAULT_AUTH, host: DEFAULT_HOST, yaml: "",
   });
   const set = (patch: Partial<FormState>) => setF((prev) => ({ ...prev, ...patch }));

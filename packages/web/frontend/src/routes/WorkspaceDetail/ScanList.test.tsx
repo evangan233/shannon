@@ -876,3 +876,25 @@ describe("ScanList 黑盒验证入口（D3 回归）", () => {
     expect(screen.queryByRole("button", { name: /黑盒验证/ })).not.toBeInTheDocument();
   });
 });
+
+// === 批量白盒提交结果横幅（2026-09-11 批量白盒 Task 4）：ScanNewPage 批量提交后经 ===
+// === location.state.batchResult（BatchScanResponse）传入，列表顶部显示汇总 + 失败明细 ===
+describe("ScanList 批量提交结果横幅（批量白盒）", () => {
+  it("批量提交结果横幅：location.state.batchResult 显示成功/失败明细，可关闭", async () => {
+    renderWithSwr(
+      <MemoryRouter initialEntries={[{
+        pathname: "/p/ws",
+        state: { batchResult: { workspace: "ws1", submitted: 1, failed: 1,
+          results: [{ repo: "be/auth", ok: false, error: "仓库未就绪（state=cloning）" }] } },
+      }]}>
+        <Routes><Route path="/p/:workspace" element={<ScanList />} /></Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByTestId("batch-result-banner")).toBeInTheDocument();
+    expect(screen.getByText(/成功 1/)).toBeInTheDocument();
+    expect(screen.getByText(/be\/auth/)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("batch-banner-close"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("batch-result-banner")).not.toBeInTheDocument());
+  });
+});

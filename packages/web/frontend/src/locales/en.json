@@ -372,6 +372,11 @@
       "clearLabel": "Clear selected repository"
     },
     "submit": "Start scan",
+    "batch": {
+      "submit": "Start batch scan ({{count}})",
+      "bannerTitle": "Batch submitted: {{ok}} succeeded / {{fail}} failed",
+      "bannerClose": "Dismiss batch result"
+    },
     "errors": {
       "yamlRuntimeError": "yaml has errors; cannot run",
       "temporal": "Temporal not ready (localhost:7233). Start it first: docker-compose up temporal",

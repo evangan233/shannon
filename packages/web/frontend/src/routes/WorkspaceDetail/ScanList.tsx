@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 // useEffect/useState 仍被行内组件（SSE 订阅等）使用；列表数据层已上移 useScans。
 import { useTranslation } from "react-i18next";
-import { useParams, useNavigate, useOutletContext, Link } from "react-router-dom";
+import { useParams, useNavigate, useLocation, useOutletContext, Link } from "react-router-dom";
 import { toast } from "sonner";
 import { Ban, ChevronRight, Crosshair, Eye, Play, RefreshCw, Search, Trash2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
@@ -27,7 +27,7 @@ import { getScanGate, type ScanGateSnapshot } from "@/api/client";
 import { ScanGatePanel } from "@/components/ScanGatePanel";
 import { useEventSource } from "@/api/useEventSource";
 import { liveScanPct } from "@/state/liveScanPct";
-import type { BlackboxRunSummary, ScanSummary } from "@/api/types";
+import type { BlackboxRunSummary, BatchScanResponse, ScanSummary } from "@/api/types";
 import { fmtCost } from "@/utils/currency";
 import { fmtTime, fmtDur, compactUrl } from "@/utils/format";
 import { isRunTerminal } from "./runStatus";
@@ -115,6 +115,21 @@ export function ScanList() {
       latest && latest.held.length + latest.waiting.length > 0 ? 10_000 : 0,
   });
   const [filters, setFilters] = useState<ListFilters>(DEFAULT_LIST_FILTERS);
+
+  // 批量提交结果横幅（2026-09-11 批量白盒）：ScanNewPage 批量提交后经 location.state
+  // 传入 BatchScanResponse（202 与全失败 422 同形）。useState 初始化器捕获首帧 state
+  // （闭包固定）——effect 里 navigate replace 清掉 history entry 的 state 后（防刷新/
+  // 后退重复呈现），横幅仍显示（若直接读 location.state，replace 触发的重渲染会把
+  // batchResult 变 undefined，横幅闪现即消失——已规避）。关闭用局部 bannerClosed。
+  const location = useLocation();
+  const bannerNav = useNavigate();
+  const [batchResult] = useState(
+    () => (location.state as { batchResult?: BatchScanResponse } | null)?.batchResult ?? null);
+  const [bannerClosed, setBannerClosed] = useState(false);
+  useEffect(() => {
+    if (batchResult) bannerNav(location.pathname, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 关键词 + 类型先行过滤（分段计数以此为准，计数不随当前分段变化）；
   // 分段口径见 segOf：other（interrupted 等）只在「全部」出现。
@@ -234,6 +249,30 @@ export function ScanList() {
             <SelectItem value="mr">{t("workspaces.filter.mr")}</SelectItem>
           </SelectContent>
         </Select>
+        </div>
+      )}
+
+      {/* 批量提交结果横幅（2026-09-11 批量白盒）：成功/失败计数 + 失败明细（repo：原因），
+          可关闭。空工作区/加载中也显示——批量提交后跳转落地即见汇总，不依赖列表数据。 */}
+      {batchResult && !bannerClosed && (
+        <div data-testid="batch-result-banner"
+          className="flex items-start justify-between gap-3 rounded-lg border border-border bg-card px-4 py-3">
+          <div className="min-w-0 text-xs">
+            <span className="font-medium">{t("scan.batch.bannerTitle",
+              { ok: batchResult.submitted, fail: batchResult.failed })}</span>
+            {batchResult.failed > 0 && (
+              <ul className="mt-1.5 space-y-0.5">
+                {batchResult.results.filter((r) => !r.ok).map((r) => (
+                  <li key={r.repo} className="font-mono text-[11px] text-destructive">
+                    {r.repo}：{r.error}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <button type="button" data-testid="batch-banner-close" aria-label={t("scan.batch.bannerClose")}
+            className="shrink-0 text-muted-foreground hover:text-foreground"
+            onClick={() => setBannerClosed(true)}>✕</button>
         </div>
       )}
 

@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from "vitest";
 import { useState } from "react";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { setupServer } from "msw/node";
 import { http, HttpResponse } from "msw";
@@ -56,6 +56,7 @@ const DISABLED_AUTH: AuthFormState = {
 function form(overrides: Partial<FormState> = {}): FormState {
   return {
     selectedRepo: "foo",
+    selectedRepos: ["foo"],
     url: "",
     reuseScanId: "",
     auth: DISABLED_AUTH,
@@ -129,11 +130,9 @@ async function fillWhiteboxRepo() {
   );
   await selectOption("选择 workspace", "ws1");
   await waitFor(() => screen.getByRole("button", { name: /\+ 添加新仓库/ }));
-  // 仓库 combobox（「仓库」步骤区最后一个 combobox）
-  const step = screen.getByText("仓库").closest<HTMLElement>("section")!;
-  const trigger = Array.from(step.querySelectorAll('[role="combobox"]')).at(-1) as HTMLElement;
-  fireEvent.click(trigger);
-  fireEvent.click(await screen.findByText("foo"));
+  // 白盒仓库多选（2026-09-11 批量白盒）：勾选 topology-repo-selector 内 foo 的 checkbox
+  const selector = await screen.findByTestId("topology-repo-selector");
+  fireEvent.click(await within(selector).findByRole("checkbox", { name: /foo/ }));
 }
 
 describe("白盒表单扫完即删 checkbox", () => {
@@ -172,7 +171,7 @@ describe("白盒表单扫完即删 checkbox", () => {
       <MemoryRouter>
         <ScanFormFields
           type="whitebox"
-          f={form({ selectedRepo: "ext" })}
+          f={form({ selectedRepo: "ext", selectedRepos: ["ext"] })}
           set={() => {}}
           sourceErr={null}
           reuseErr={null}

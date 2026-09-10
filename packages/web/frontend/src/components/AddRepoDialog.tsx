@@ -17,11 +17,15 @@ interface Props {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   onCreated: (name: string) => void;
+  /** 批量克隆提交成功回调（2026-09-11 批量白盒预选增强）：传本批全部新仓库名
+   *  （submitted+queued，skipped 不含）——调用方（白盒表单）把它们预选进多选列表。
+   *  可选：不传则维持旧行为 onCreated(首个)。 */
+  onBatchCreated?: (names: string[]) => void;
 }
 
 type Mode = "clone" | "linkdir" | "upload";
 
-export function AddRepoDialog({ ws, open, onOpenChange, onCreated }: Props) {
+export function AddRepoDialog({ ws, open, onOpenChange, onCreated, onBatchCreated }: Props) {
   const { t } = useTranslation();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
@@ -77,7 +81,9 @@ export function AddRepoDialog({ ws, open, onOpenChange, onCreated }: Props) {
         });
         toast.success(t("repos.addDialog.batchResult",
           { submitted: r.submitted.length, queued: r.queued.length, skipped: r.skipped.length }));
-        onCreated(r.submitted[0] ?? r.queued[0] ?? "");
+        const names = [...r.submitted, ...r.queued];
+        if (onBatchCreated) onBatchCreated(names);
+        else onCreated(r.submitted[0] ?? r.queued[0] ?? "");
       } else if (mode === "clone") {
         const r = await createRepo(ws, {
           git_url: url.trim(),

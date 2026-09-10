@@ -26,6 +26,8 @@ const DEFAULT_AUTH: AuthFormState = {
 function makeForm(overrides: Partial<FormState> = {}): FormState {
   return {
     selectedRepo: "",
+    // 白盒仓库多选（2026-09-11 批量白盒）：本文件只覆盖 HOST/认证区，不选仓库。
+    selectedRepos: [],
     url: "http://example.com",
     reuseScanId: "20260731-1200",
     auth: DEFAULT_AUTH,

@@ -131,6 +131,12 @@ export const createRepo = (
 export const batchClone = (ws: string, body: { urls: string[]; group?: string }) =>
   apiPost<import("./types").BatchCloneResult>(`/workspaces/${encWs(ws)}/repos/batch-clone`, body);
 
+/** 批量白盒扫描（2026-09-11）：N 个仓库共享其余白盒配置，各自产生独立扫描。
+ *  202 返回汇总（部分成功也可能有失败明细）；全失败 422 的 body 同为顶层
+ *  BatchScanResponse（无 detail 包裹）——调用方在 catch 里按形状识别同样展示明细。 */
+export const createBatchScan = (body: import("./types").BatchScanRequest) =>
+  apiPost<import("./types").BatchScanResponse>("/scan/batch", body);
+
 /** 统一链接解析（2026-09-03 仓库入口整合 A 段）：仓库/MR 链接 → 匹配工作区仓库
  *  （不存在则后端异步 clone，repo_state="cloning"）；MR 附 base/head refs。 */
 export const resolveLink = (ws: string, url: string) =>

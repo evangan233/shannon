@@ -64,18 +64,6 @@ async function selectWorkspace(name: string) {
   await selectOption("选择 workspace", name);
 }
 
-function repoComboboxIn(stepTitle: string) {
-  const step = screen.getByText(stepTitle).closest<HTMLElement>(".rounded-lg")!;
-  return within(step).getAllByRole("combobox").at(-1)!;
-}
-
-async function selectRepoOption(stepTitle: string, optionName: RegExp | string) {
-  const trigger = repoComboboxIn(stepTitle);
-  fireEvent.click(trigger);
-  const opt = await screen.findByRole("option", { name: optionName });
-  fireEvent.click(opt);
-}
-
 // inline 凭据 Label 无 htmlFor——按文本定位同处 div 里的 input（同 ScanNewPage.test 范式）。
 function inputByLabel(labelText: RegExp | string) {
   const label = screen.getByText(labelText);
@@ -92,7 +80,9 @@ async function fillValidRepo() {
   );
   await selectWorkspace("ws1");
   await waitFor(() => screen.getByRole("button", { name: /\+ 添加新仓库/ }));
-  await selectRepoOption("仓库", /foo/);
+  // 白盒仓库多选（2026-09-11 批量白盒）：勾选 topology-repo-selector 内 foo 的 checkbox
+  const selector = await screen.findByTestId("topology-repo-selector");
+  fireEvent.click(await within(selector).findByRole("checkbox", { name: /foo/ }));
 }
 
 // === buildBody 纯函数：组合开关决定是否附 url + 认证 ===
@@ -110,6 +100,7 @@ const INLINE_AUTH: AuthFormState = {
 function wbForm(overrides: Partial<FormState> = {}): FormState {
   return {
     selectedRepo: "foo",
+    selectedRepos: ["foo"],
     url: "",
     reuseScanId: "",
     auth: DISABLED_AUTH,

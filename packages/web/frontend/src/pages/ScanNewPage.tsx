@@ -3,8 +3,8 @@ import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { toast } from "sonner";
-import type { CorrelationTopologyAnalysis, ScanRequest, ScanResponse, TopologyAuditLine, Workspace, ScanAuthentication } from "../api/types";
-import { apiGet, apiPost, ApiError, addBlackboxToWhitebox, cancelCorrelationTopologyAnalysis, deleteCorrelationTopologyAnalysis, getCorrelationTopologyAnalysis, getLatestTopologyAnalysis, getTopologyAnalysisLog, listCorrelationTopologyAnalyses, startCorrelationTopologyAnalysis } from "../api/client";
+import type { CorrelationTopologyAnalysis, ScanRequest, ScanResponse, BatchScanRequest, BatchScanResponse, TopologyAuditLine, Workspace, ScanAuthentication } from "../api/types";
+import { apiGet, apiPost, ApiError, addBlackboxToWhitebox, cancelCorrelationTopologyAnalysis, createBatchScan, deleteCorrelationTopologyAnalysis, getCorrelationTopologyAnalysis, getLatestTopologyAnalysis, getTopologyAnalysisLog, listCorrelationTopologyAnalyses, startCorrelationTopologyAnalysis } from "../api/client";
 import { useScans } from "../routes/WorkspaceDetail/useScans";
 import { ScanFormFields } from "../components/ScanFormFields";
 import { BlackboxFormFields } from "../components/BlackboxFormFields";
@@ -251,8 +251,10 @@ export function validateAuth(a: AuthFormState, t: TFunction): string | null {
  *  仓库下拉同缓存，refresh 一处全局生效），repo 脱离忙态即停。
  *
  *  放页面级而非 LinkResolveBox 内：组件随表单切换卸载，提示与轮询态不能随之丢失。 */
-const CLONE_POLL_MS = 2000;
-const CLONE_BUSY_STATES = new Set(["cloning", "pulling", "extracting", "empty"]);
+/** 克隆轮询节奏 + 忙态集合（2026-09-11 批量白盒起 export）：CloneWatch（链接解析下载监视）
+ *  与 ScanFormFields.BusyReposWatch（白盒多选列表 busy 轮询）共用同一节奏/判定。 */
+export const CLONE_POLL_MS = 2000;
+export const CLONE_BUSY_STATES = new Set(["cloning", "pulling", "extracting", "empty"]);
 
 function CloneWatch({ workspace, name, onDone }: { workspace: string; name: string; onDone: () => void }) {
   const { repos, refresh } = useRepos(workspace || undefined);
@@ -271,8 +273,12 @@ function CloneWatch({ workspace, name, onDone }: { workspace: string; name: stri
 }
 
 export interface FormState {
-  /** 扫描仓库（白盒必选）。入口已收窄——仅工作区已下载仓库，无本地路径。 */
+  /** MR 增量扫描专用仓库（单选；批量白盒不使用——白盒用 selectedRepos）。
+   *  入口已收窄——仅工作区已下载仓库，无本地路径。 */
   selectedRepo: string;
+  /** 白盒批量/单发共用仓库多选（2026-09-11 批量白盒扫描）：长度 1 = 单发（行为同旧版），
+   *  ≥2 = 批量（Task 4 走 /scan/batch）。MR 不使用。 */
+  selectedRepos: string[];
   /** 白盒=组合扫描目标 URL；correlation=黑盒验证 gateway URL（CorrelationFormFields 的
    *  gatewayUrl 即此字段，避免新 state）。可选——空则纯白盒 / 纯关联。 */
   url: string;
@@ -299,11 +305,16 @@ export interface FormState {
   deleteRepoOnFinish?: boolean;
 }
 
-/** 将 AuthFormState 写入 ScanRequest 认证字段（auth-profile-vault 双来源）：
+/** 认证/HOST 字段写入目标：单发 ScanRequest 与批量 BatchScanRequest 的公共字段面
+ *  （2026-09-11 批量白盒：两条 body 共用同一映射函数，字段名恒一致）。 */
+type AuthHostBody = Pick<ScanRequest, "authentication" | "auth_accounts" | "auth_profile_id"
+  | "auth_credential_ids" | "host_profile_id" | "host_url">;
+
+/** 将 AuthFormState 写入 body 认证字段（auth-profile-vault 双来源）：
  *    - inline 模式 → authentication（+附加角色 auth_accounts）。
  *    - profile 模式 → auth_profile_id + auth_credential_ids（空数组=后端全选）。
- *  黑盒与白盒组合扫描共用（Task 9），保证两条分支字段映射一致。 */
-function assignAuthToBody(body: ScanRequest, a: AuthFormState): void {
+ *  黑盒验证 / 白盒组合扫描 / 批量白盒组合共用，保证各分支字段映射一致。 */
+function assignAuthToBody(body: AuthHostBody, a: AuthFormState): void {
   if (a.source === "profile") {
     body.auth_profile_id = a.profileId || undefined;
     body.auth_credential_ids = a.credentialIds.length ? a.credentialIds : undefined;
@@ -329,7 +340,7 @@ function assignAuthToBody(body: ScanRequest, a: AuthFormState): void {
  *  白盒组合扫描与 correlation（gateway url 开）共用，保证分支字段映射一致。HOST 与认证独立、非互斥。
  *  仅组合模式（combined && url）/correlation+url 调——纯白盒/纯关联（无 url）不发 host
  *  （无黑盒阶段，HOST 代理无意义）。 */
-function assignHostToBody(body: ScanRequest, h: HostFormState): void {
+function assignHostToBody(body: AuthHostBody, h: HostFormState): void {
   if (!h.enabled) return;
   if (h.mode === "profile") body.host_profile_id = h.profileId || undefined;
   else body.host_url = h.hostUrl || undefined;
@@ -386,7 +397,9 @@ export function buildBody(type: ScanType, f: FormState, workspace: string, corrY
     if (hostError) throw new Error(hostError);
   }
   const body: ScanRequest = { type, url: f.url || undefined, workspace: workspace || undefined };
-  body.source = { kind: "repo", value: f.selectedRepo };
+  // 白盒批量/单发共用 selectedRepos（2026-09-11）：单发（长度 1）取首个仓库，行为同旧版；
+  // 批量提交（≥2 走 /scan/batch）由 Task 4 的 buildBatchBody 承担，本函数仍发单发 body。
+  body.source = { kind: "repo", value: f.selectedRepos[0] ?? "" };
   // 组合扫描（Task 9）：开关开 + url → 同一 body 携带 url + 认证，后端 Task 1 validator
   // 识别 type=whitebox + url → 组合扫描，先跑黑盒认证预验证（bb_phase=precheck）。
   // 开关关 → 纯白盒：即便 f.url 有草稿也不发（strip 上方 line 设的 url），零回归。
@@ -402,6 +415,24 @@ export function buildBody(type: ScanType, f: FormState, workspace: string, corrY
   return body;
 }
 
+/** 批量白盒提交 body（2026-09-11 spec §4.2）：repos + 共享白盒配置。认证/HOST 映射
+ *  与单发白盒组合模式共用 assignAuthToBody/assignHostToBody（hostIsActive 校验同款）。 */
+export function buildBatchBody(repos: string[], f: FormState, workspace: string): BatchScanRequest {
+  const combinedOn = !!f.combined && !!f.url;
+  if (combinedOn) {
+    const hostError = hostValidationKey(f.host);
+    if (hostError) throw new Error(hostError);
+  }
+  const body: BatchScanRequest = { workspace: workspace || "", repos };
+  if (combinedOn) {
+    body.url = f.url;
+    if (f.auth.enabled) assignAuthToBody(body, f.auth);
+    assignHostToBody(body, f.host);
+  }
+  if (f.deleteRepoOnFinish) body.delete_repo_on_finish = true;
+  return body;
+}
+
 /** 黑盒验证 add-run 提交 body（2026-09-10 D3 入口回归）：端点 POST /scans/{id}/blackbox-runs
  *  收「组合模式 ScanRequest」（type=whitebox + url + 认证）——认证/HOST 字段映射与组合扫描
  *  共用 assignAuthToBody/assignHostToBody，两条入口字段恒一致。不带 source/workspace/
@@ -411,6 +442,13 @@ export function buildBlackboxRunBody(f: FormState): ScanRequest {
   if (f.auth.enabled) assignAuthToBody(body, f.auth);
   assignHostToBody(body, f.host);
   return body;
+}
+
+/** 批量提交响应形状守卫（2026-09-11 批量白盒）：202 与全失败 422 的 body 同为顶层
+ *  BatchScanResponse（后端无 detail 包裹，results 恒为数组）——catch 里按形状识别，
+ *  全失败也跳列表页横幅展示明细（spec §3.3），不落 toast。 */
+function isBatchResponse(b: unknown): b is BatchScanResponse {
+  return !!b && typeof b === "object" && Array.isArray((b as { results?: unknown }).results);
 }
 
 function renderError(e: ApiError, t: TFunction): string {
@@ -471,6 +509,11 @@ export function ScanNewPage() {
       : "whitebox");
   const [f, setF] = useState<FormState>({
     selectedRepo: preset.repo ?? presetRepo ?? "",
+    // 白盒批量/单发多选（2026-09-11）：白盒 preset（含 ?repo= query 预选）预填单仓，
+    // MR / 黑盒 / 跨仓 preset 不使用多选（MR 表单仍是 selectedRepo 单选）。
+    selectedRepos: preset.type && preset.type !== "whitebox"
+      ? []
+      : [preset.repo ?? presetRepo ?? ""].filter(Boolean),
     url: preset.url ?? "",
     reuseScanId: preset.reuseScanId ?? "",
     auth: presetToAuthState(preset),
@@ -568,7 +611,8 @@ export function ScanNewPage() {
   const setHost = (patch: Partial<HostFormState>) => setF((prev) => ({ ...prev, host: { ...prev.host, ...patch } }));
 
   useEffect(() => {
-    if (presetRepo) set({ selectedRepo: presetRepo });
+    // 双状态预填（2026-09-11）：selectedRepo（MR 单选）零改动语义；白盒多选随行预填。
+    if (presetRepo) set({ selectedRepo: presetRepo, selectedRepos: presetRepo ? [presetRepo] : [] });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presetRepo]);
 
@@ -784,7 +828,11 @@ export function ScanNewPage() {
   // 黑盒验证 = 任务必选 + url 必填（无目标无黑盒）+ 认证/HOST 可选（开了才校验）。
   const combined = type === "whitebox" && !!f.combined;
   const corrGatewayOn = type === "correlation" && !!f.url.trim();
-  const sourceErr = type === "whitebox" || type === "mr" ? validateSource(f.selectedRepo, t) : null;
+  // 白盒校验走多选首位（2026-09-11 批量白盒）：单发 = selectedRepos[0]，空多选即拦「请选择仓库」；
+  // MR 仍校验单选 selectedRepo（MR 表单零改动）。
+  const sourceErr = type === "whitebox"
+    ? validateSource(f.selectedRepos[0] ?? "", t)
+    : type === "mr" ? validateSource(f.selectedRepo, t) : null;
   const mrRefsErr = type === "mr"
     ? (f.mrBaseRef?.trim() && f.mrHeadRef?.trim() ? null : t("scan.errors.selectRefs"))
     : null;
@@ -824,6 +872,13 @@ export function ScanNewPage() {
         nav(`/p/${r.workspace}/scans/${r.scan_id}/live?run=${r.run_id}`);
         return;
       }
+      // 批量白盒（2026-09-11）：≥2 仓走 /scan/batch，跳扫描列表页 + location.state
+      // 带汇总（ScanList 顶部横幅显示成功/失败明细）；1 仓维持单发直跳 live（零变化）。
+      if (type === "whitebox" && f.selectedRepos.length > 1) {
+        const r = await createBatchScan(buildBatchBody(f.selectedRepos, f, workspace));
+        nav(`/p/${r.workspace}/scans`, { state: { batchResult: r } });
+        return;
+      }
       // 提交 payload（2026-09-04 tabs 重组统一）：带分析来源 → 确认快照原文（锁定确认
       // 那一刻的文本）；纯手工 → 当前 corrYaml（实时文本即所想即所得）。
       const submissionYaml = topologyNeedsConfirm
@@ -838,6 +893,12 @@ export function ScanNewPage() {
       // 过渡期 Phase 1 未返 scan_id 时回退旧 ws-scoped live（LegacyWsTabRedirect 兜底）。
       nav(r.scan_id ? `/p/${r.workspace}/scans/${r.scan_id}/live` : `/p/${r.workspace}/live`);
     } catch (e) {
+      // 批量全失败（422 顶层 BatchScanResponse，无 detail 包裹）：同样跳列表页横幅展示
+      // 全部失败明细（spec §3.3），不落 toast——与 202 部分失败的呈现统一。
+      if (e instanceof ApiError && isBatchResponse(e.body)) {
+        nav(`/p/${e.body.workspace}/scans`, { state: { batchResult: e.body } });
+        return;
+      }
       if (e instanceof ApiError) toast.error(renderError(e, t));
     } finally {
       setSubmitting(false);
@@ -850,7 +911,10 @@ export function ScanNewPage() {
     : "scan.subtitleWhitebox";
   // 提交按钮文案统一「开始扫描」（2026-09-09 v3，用户点名）：扫描类型由顶部
   // segmented 表达（白盒/MR 增量/跨仓关联），按钮只说动词——三类同一动作同一名。
-  const submitLabel = t("scan.submit");
+  // 批量白盒例外（2026-09-11）：≥2 仓切「发起批量扫描 (N)」显式告知批量化提交。
+  const submitLabel = type === "whitebox" && f.selectedRepos.length > 1
+    ? t("scan.batch.submit", { count: f.selectedRepos.length })
+    : t("scan.submit");
   const footerHint = type === "correlation" ? t("scan.correlation.footerHint")
     : type === "mr" ? t("scan.mrBaseHeadHint")
     : type === "blackbox" ? t("scan.blackbox.footerHint")
