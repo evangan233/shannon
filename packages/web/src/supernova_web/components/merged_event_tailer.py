@@ -5,6 +5,12 @@
 - **源**：``ac``=authcheck-events.ndjson（认证预检）、``wb``=events.ndjson（任务根，
   组合扫描即白盒段，独立黑盒扫描即其本体）、``run-K``=blackbox-runs/run-K/events.ndjson。
   run 目录周期重扫，流开着时新增 run（rerun/add run）自动纳入。
+- **correlation 子仓源**（2026-09-10 主行 live）：主行 session 的 ``corr_children``
+  （reused=False 现扫子仓）→ ``c-<scan_id>`` 源（同级 scans/ 目录下 events.ndjson）。
+  转发注入 ``src=c-<scan_id>`` + ``service=<svc>``（LogStream [svc] 归属前缀）；
+  子仓 scan_end 改写 ``run_end{run:<svc>}``（复用 RUN 行渲染）；子仓终态不参与
+  流关闭判定（主行 wb scan_end 才收口）。前端 ScanProgressOverview 按 src 前缀
+  过滤子仓事件（防其白盒 PhaseEvent 重置主行 correlation 网格）。
 - **源标记**：转发的事件统一注入 ``src``（=源 label）。前端判「组合扫描当前段」不能靠
   phase 名——authcheck（独立 AuthValidationWorkflow）与黑盒 run 的 auth-validation 段
   发同名 PhaseEvent，无从区分；源标记是 tailer 本就知道的可靠信号（2026-08-28 组合
@@ -64,6 +70,8 @@ class _Source:
     label: str
     path: Path
     priority: int
+    kind: str = "fixed"    # fixed(ac/wb) | run(run-K) | child(c-<scan_id>，correlation 子仓)
+    service: str | None = None  # child 源的 svc 名（转发注入 service 字段）
     file_off: int = 0      # 已从磁盘读到的字节（截断检测/续读基准）
     line_pos: int = 0      # 下一行起始字节（per-line end offset 的累积基准）
     emit_off: int = 0      # 已计入 SSE id 快照的字节（≤ line_pos）
@@ -87,11 +95,51 @@ class MergedEventTailer:
         self._dir = Path(scan_dir)
         self._sources: dict[str, _Source] = {}
         self._held_end: dict | None = None  # 扣住的 wb scan_end（终态判定满足后最后发）
+        self._children_confirmed = False  # 子仓源发现完成（读到 corr_children 或确认非 corr）
 
     # ---- 源发现与断点恢复 ----
 
+    def _discover_child_sources(self, resume: dict[str, int], now: float) -> None:
+        """correlation 主行子仓源（2026-09-10）：session corr_children 的现扫（reused=False）。
+
+        corr_children 在 start 请求内写（children 全建后 update_session）——若 SSE 首连
+        早于其落盘（提交后秒开 live 页），未确认前每轮重读；读到或确认 scan_type 非
+        correlation 后停读。session 缺失/损坏按「无子仓」确认（回落既有行为）。
+        """
+        if self._children_confirmed:
+            return
+        session_file = self._dir / "session.json"
+        try:
+            data = json.loads(session_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return  # 尚未创建：下轮再读（source_wait_timeout 兜底整体退出）
+        children = data.get("corr_children") or []
+        if not children and data.get("scan_type") != "correlation":
+            self._children_confirmed = True  # 非主行：永远不会有 corr_children
+            return
+        if not children:
+            return  # correlation 但 children 未写：下轮再读
+        self._children_confirmed = True
+        for i, child in enumerate(children):
+            if child.get("reused"):
+                continue  # 复用子仓不跑，无新日志
+            scan_id = str(child.get("scan_id") or "")
+            svc = str(child.get("service") or scan_id)
+            if not scan_id or "&" in scan_id or "=" in scan_id:
+                continue  # label 会进 SSE id 快照（&/= 分隔），含特殊字符的不纳入
+            label = f"c-{scan_id}"
+            if label not in self._sources:
+                self._sources[label] = _Source(
+                    label, self._dir.parent / scan_id / "events.ndjson",
+                    500 + i, kind="child", service=svc,
+                    file_off=resume.get(label, 0),
+                    line_pos=resume.get(label, 0),
+                    emit_off=resume.get(label, 0),
+                    last_active=now)
+
     def _discover(self, resume: dict[str, int]) -> None:
-        """补齐源表：固定 ac/wb + 重扫 blackbox-runs/run-K（新 run 流中自动纳入）。
+        """补齐源表：固定 ac/wb + 重扫 blackbox-runs/run-K（新 run 流中自动纳入）
+        + correlation 现扫子仓（session corr_children）。
 
         仅在 ``tail()``（运行中的 event loop）内调用，可安全取 loop 时钟初始化
         ``last_active``（run 空闲兜底的计时起点）。
@@ -108,6 +156,7 @@ class MergedEventTailer:
                                                line_pos=resume.get(label, 0),
                                                emit_off=resume.get(label, 0),
                                                last_active=now)
+        self._discover_child_sources(resume, now)
         runs_root = self._dir / "blackbox-runs"
         if runs_root.is_dir():
             for entry in runs_root.iterdir():
@@ -118,6 +167,7 @@ class MergedEventTailer:
                 if label not in self._sources:
                     self._sources[label] = _Source(
                         label, entry / "events.ndjson", 1000 + int(m.group(1)),
+                        kind="run",
                         file_off=resume.get(label, 0),
                         line_pos=resume.get(label, 0),
                         emit_off=resume.get(label, 0),
@@ -180,7 +230,8 @@ class MergedEventTailer:
             if emitted:
                 waited = 0.0
             # 终态判定：wb scan_end 已见（扣住）+ 所有已见 run 源各自见过 scan_end
-            runs = [s for s in self._sources.values() if s.label not in ("ac", "wb")]
+            # （child 子仓源不参与——主行 wb scan_end 才是流终态权威）
+            runs = [s for s in self._sources.values() if s.kind == "run"]
             closable = (self._held_end is not None
                         and all(s.seen_end for s in runs))
             if (not closable and self._held_end is not None
@@ -269,6 +320,15 @@ class MergedEventTailer:
                     self._held_end = data  # 扣住，终态判定满足后最后发
                     source.seen_end = True
                     continue
+                if source.kind == "child":
+                    # 子仓收尾：改写 run_end{run:<svc>}（复用 RUN 行渲染），标终态
+                    # 但不参与流关闭判定（见 tail() 的 runs 过滤）。
+                    await on_event(dict(data, type="run_end", run=source.service,
+                                        service=source.service, src=source.label),
+                                   self._id_snapshot())
+                    source.seen_end = True
+                    emitted += 1
+                    continue
                 # run-K 收尾：改写 type 转发（对全量流非终态），标该 run 终态
                 await on_event(dict(data, type="run_end", run=source.label,
                                     src=source.label),
@@ -276,6 +336,11 @@ class MergedEventTailer:
                 source.seen_end = True
                 emitted += 1
                 continue
-            await on_event(dict(data, src=source.label), self._id_snapshot())
+            if source.kind == "child":
+                # 子仓事件注入 service（LogStream [svc] 归属前缀用）
+                await on_event(dict(data, src=source.label, service=source.service),
+                               self._id_snapshot())
+            else:
+                await on_event(dict(data, src=source.label), self._id_snapshot())
             emitted += 1
         return emitted

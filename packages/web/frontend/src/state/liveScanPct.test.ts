@@ -94,3 +94,28 @@ describe("liveScanPct 非组合行（口径不变）", () => {
     expect(liveScanPct(events, CORR)).toBe(50);
   });
 });
+
+// ─── correlation 主行子仓源过滤（2026-09-10 归并流扩子仓）───
+// 现扫子仓白盒日志（src=c-<scan_id>）并入主行归并流后，其 PhaseEvent(start) 的
+// 网格重置语义会清掉 correlation_progress 累积网格——列表行进度必须挡在 fold 外。
+describe("liveScanPct correlation 子仓源过滤", () => {
+  it("子仓 PhaseEvent/StepEvent（src=c-*）不重置 correlation 网格", () => {
+    const events: NdjsonEvent[] = [
+      { ts: "2026-09-10T10:00:00Z", category: "CONTROL", type: "correlation_progress",
+        node: "repo", name: "gateway", status: "completed", src: "wb" },
+      { ts: "2026-09-10T10:00:01Z", category: "CONTROL", type: "correlation_progress",
+        node: "repo", name: "order-svc", status: "completed", src: "wb" },
+      phase("c-gw-123", "recon", ["a", "b"]),
+      step("c-gw-123", "recon", "a"),
+    ];
+    expect(liveScanPct(events, CORR)).toBe(100); // 2/2 repo 完成——子仓重置则会低
+  });
+
+  it("纯子仓事件（主行尚无 correlation_progress）→ null 回退 progress_pct", () => {
+    const events: NdjsonEvent[] = [
+      phase("c-gw-123", "recon", ["a", "b"]),
+      step("c-gw-123", "recon", "a"),
+    ];
+    expect(liveScanPct(events, CORR)).toBeNull();
+  });
+});

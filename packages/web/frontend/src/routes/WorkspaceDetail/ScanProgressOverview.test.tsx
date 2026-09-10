@@ -193,3 +193,38 @@ describe("ScanProgressOverview", () => {
     expect(screen.queryByTestId("progress-gn-hit")).not.toBeInTheDocument();
   });
 });
+
+// === correlation 子仓源过滤（2026-09-10 主行 live）===
+// 归并流把现扫子仓（src=c-<scan_id>）白盒日志也送进来——顶部概览只呈现主行编排，
+// 子仓事件（尤其 PhaseEvent start 的网格重置语义）必须挡在 reduce 之外。
+describe("ScanProgressOverview 子仓源过滤", () => {
+  it("src=c-* 的 PhaseEvent 不重置 correlation 网格 / 不改 current_phase", () => {
+    eventsState.events = [
+      { ts: TS, category: "CONTROL", type: "correlation_progress", node: "repo", name: "gateway", status: "completed", src: "wb" },
+      { ts: TS, category: "PHASE", type: "PhaseEvent", phase: "precheck", event: "start", src: "c-gw-123", service: "gateway" },
+    ];
+    render(<ScanProgressOverview ws="ws" scanId="s1" scanType="correlation" />);
+    const strip = screen.getByTestId("progress-strip");
+    const segs = strip.querySelectorAll("[data-unit]");
+    expect(segs).toHaveLength(1);  // 仅 repo 行——子仓 PhaseEvent 没把网格清掉
+    expect(strip.querySelector('[data-unit="gateway"]')).toHaveAttribute("data-status", "done");
+  });
+
+  it("src=c-* 的 AgentEvent 不进顶部 Agent 概览（子仓 agent 归子行详情页看）", () => {
+    eventsState.events = [
+      { ts: TS, category: "AGENT", type: "AgentEvent", agent_name: "vuln-injection", event: "start", attempt: 1, src: "c-gw-123", service: "gateway" },
+    ];
+    render(<ScanProgressOverview ws="ws" scanId="s1" scanType="correlation" />);
+    expect(screen.queryByText(/vuln-injection/)).not.toBeInTheDocument();
+  });
+
+  it("wb 源 correlation_progress 照常进网格（过滤只针对子仓源）", () => {
+    eventsState.events = [
+      { ts: TS, category: "CONTROL", type: "correlation_progress", node: "edge", name: "gateway->order", status: "running", src: "wb" },
+    ];
+    render(<ScanProgressOverview ws="ws" scanId="s1" scanType="correlation" />);
+    const strip = screen.getByTestId("progress-strip");
+    expect(strip.querySelectorAll("[data-unit]")).toHaveLength(1);
+    expect(strip.querySelector('[data-unit="gateway->order"]')).toHaveAttribute("data-status", "running");
+  });
+});

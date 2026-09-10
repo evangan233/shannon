@@ -350,7 +350,13 @@ function ScanRow({ ws, scan, scansById, onChanged }: {
   // 列表页粗粒度——精确步级/Agent 在扫描详情页顶部。scan_end → 刷新列表拿终态（漏洞数/状态）。
   const sseUrl = isRunning ? scanEventsUrl(ws, scan.scan_id) : "";
   const { events, hydrated } = useEventSource(sseUrl);
-  const currentPhase = useCurrentPhase(events);
+  // 子仓源（src=c-<scan_id>，2026-09-10 归并流扩子仓）不进列表行阶段——correlation
+  // 主行流现含现扫子仓白盒日志，其 PhaseEvent 不得冒充主行阶段（主行三段网格无
+  // PhaseEvent，过滤后维持无后缀现状）。子仓行自己的流无 c-* 源，不受影响。
+  const mainEvents = useMemo(
+    () => events.filter((e) => !String(e.src ?? "").startsWith("c-")),
+    [events]);
+  const currentPhase = useCurrentPhase(mainEvents);
   // 与进度百分比同样等待首轮回放边界，避免列表副标签也随历史 phase 逐帧闪动。
   const displayedPhase = hydrated ? currentPhase : null;
   // 实时进度（2026-08-27 修复列表进度不动；2026-08-28 组合口径修正）：progress_pct 的

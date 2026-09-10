@@ -104,15 +104,17 @@ export interface StreamReadyEvent extends CommonFields {
 }
 
 // src：归并流源标记（MergedEventTailer 注入：ac=认证预检 / wb=任务根（组合即白盒段）/
-// run-K=黑盒 run；单文件流与旧后端不带）。组合扫描列表进度三阶段加权判段用
-// （2026-08-28）——phase 名判段不可行：authcheck 与黑盒 run 发同名 auth-validation
-// PhaseEvent，前端无从区分。
+// run-K=黑盒 run / c-<scan_id>=correlation 现扫子仓；单文件流与旧后端不带）。组合扫描
+// 列表进度三阶段加权判段用（2026-08-28）——phase 名判段不可行：authcheck 与黑盒 run
+// 发同名 auth-validation PhaseEvent，前端无从区分。
+// service：子仓源的 svc 名（src=c-* 行的 LogStream [svc] 归属前缀；ScanProgressOverview
+// 按 src 前缀过滤子仓事件防网格重置——2026-09-10）。
 export type NdjsonEvent =
   ((WorkflowHeaderEvent | PhaseEvent | StepEvent | AgentEvent | ToolCallEvent
   | LlmTurnEvent | InfoEvent | ErrorEvent | SummaryEvent | ResumeEvent
   | GitnexusLlmEvent | ScanEndEvent | RunEndEvent | CorrelationProgressEvent | StreamReadyEvent
   | LogEventEvent
-  ) & { src?: string });
+  ) & { src?: string; service?: string });
 
 // === API 响应类型（对齐 backend-design.md）===
 export type WorkspaceStatus =

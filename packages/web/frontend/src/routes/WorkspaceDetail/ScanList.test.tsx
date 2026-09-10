@@ -803,3 +803,34 @@ describe("ScanList correlation 主行 + 嵌套子行（D4）", () => {
     expect(within(reused).getByTestId("corr-child-vulns-gone-1").textContent).toBe("—");
   });
 });
+
+// === correlation 主行：子仓源事件不进列表行进度/阶段（2026-09-10 归并流扩子仓）===
+describe("ScanList correlation 主行子仓源过滤", () => {
+  const corrRunning = {
+    scan_id: "corr-1", scan_type: "correlation", status: "running", created_at: 1000,
+    completed_at: null, vuln_count: 0, total_cost_usd: 0, cost_currency: "USD",
+    is_running: true, progress_pct: 5, combined: true,
+  } as const;
+
+  it("子仓白盒 PhaseEvent（src=c-*）不重置 correlation 网格——进度仍是主行 repo 完成度", async () => {
+    sseState.events = [
+      { type: "correlation_progress", node: "repo", name: "gateway", status: "completed", ts: "t1", category: "CONTROL", src: "wb" },
+      { type: "correlation_progress", node: "repo", name: "order-svc", status: "completed", ts: "t2", category: "CONTROL", src: "wb" },
+      { type: "PhaseEvent", phase: "recon", event: "start", steps: ["a", "b"], step_intents: ["", ""], ts: "t3", category: "PHASE", src: "c-gw-123", service: "gateway" },
+      { type: "StepEvent", name: "a", phase: "recon", event: "complete", ts: "t4", category: "STEP", src: "c-gw-123" },
+    ];
+    server.use(http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([corrRunning])));
+    renderList();
+    expect(await screen.findByText("100%")).toBeInTheDocument();
+  });
+
+  it("子仓 PhaseEvent 不冒充主行阶段副标签（过滤后无 PhaseEvent → 无后缀）", async () => {
+    sseState.events = [
+      { type: "PhaseEvent", phase: "recon", event: "start", ts: "t1", category: "PHASE", src: "c-gw-123", service: "gateway" },
+    ];
+    server.use(http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([corrRunning])));
+    renderList();
+    await screen.findByText("corr-1");
+    expect(screen.queryByText(/recon/)).not.toBeInTheDocument();
+  });
+});

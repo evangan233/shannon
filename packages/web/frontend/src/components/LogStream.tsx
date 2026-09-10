@@ -229,7 +229,10 @@ const VIRTUAL_THRESHOLD = 500;
 function LogRow({ e, agentColor, style }: {
   e: NdjsonEvent; agentColor?: string; style?: CSSProperties;
 }) {
-  const { icon, tag, body, metrics } = describe(e);
+  const { icon, tag, body: rawBody, metrics } = describe(e);
+  // 子仓源归属前缀（2026-09-10 主行 live）：归并流注入 service（src=c-<scan_id>），
+  // 前缀 [svc]——多子仓同名 agent（vuln-*）混流可辨归属；主行/黑盒行无此前缀。
+  const body = e.service ? `[${e.service}] ${rawBody}` : rawBody;
   // hover title 带完整 ts + agent 名：窄列只显 HH:MM:SS，悬停看完整
   // "2026-07-31 10:53:53" 与归属（TOOL/LLM 行 body 不含名字）。
   const who = agentScopeKey(e);

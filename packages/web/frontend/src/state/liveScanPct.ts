@@ -34,13 +34,17 @@ export function liveScanPct(
   events: NdjsonEvent[],
   scan: { combined?: boolean | null; scan_type: string },
 ): number | null {
-  const state = events.reduce(dashboardReducer, emptyState());
+  // 子仓源（src=c-<scan_id>，2026-09-10 归并流扩子仓）不进列表行进度 fold——其白盒
+  // PhaseEvent(start) 的网格重置语义会清掉 correlation_progress 累积网格。子仓行各自
+  // 订阅自己的流（无 c-* 源），不受影响。
+  const mainEvents = events.filter((e) => !String(e.src ?? "").startsWith("c-"));
+  const state = mainEvents.reduce(dashboardReducer, emptyState());
   const ratio = state.total_units > 0
     ? state.completed_units / state.total_units
     : 0;
 
   if (scan.combined === true && scan.scan_type !== "correlation") {
-    const src = lastSrc(events);
+    const src = lastSrc(mainEvents);
     if (src === null) return null; // 旧后端流无源标记：判不了段，回退 progress_pct
     if (src === "ac") return Math.round(5 * ratio);
     if (src === "wb") return Math.round(5 + 50 * ratio);

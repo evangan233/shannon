@@ -375,3 +375,90 @@ async def test_truncated_file_resets_and_replays(tmp_path):
     await asyncio.wait_for(c.done.wait(), timeout=3)
     await _cancel(task)
     assert c.events[-1]["type"] == "scan_end"
+
+
+# ---- correlation 现扫子仓源（2026-09-10 主行 live：子仓日志归并）----
+
+def _write_session(scan_dir, children: list[dict]) -> None:
+    scan_dir.mkdir(parents=True, exist_ok=True)
+    (scan_dir / "session.json").write_text(
+        json.dumps({"scan_type": "correlation", "corr_children": children}),
+        encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_child_sources_merged_with_service_tag(tmp_path):
+    """主行 session corr_children（reused=False）→ 子仓 events 并入归并流：
+    src=c-<scan_id> + service=<svc> 注入；reused 子仓不纳入。"""
+    scan = tmp_path / "scan"
+    _write_session(scan, [
+        {"service": "gateway", "scan_id": "gw-123", "reused": False},
+        {"service": "order-svc", "scan_id": "ord-456", "reused": False},
+        {"service": "pay-svc", "scan_id": "old-789", "reused": True},
+    ])
+    _append(tmp_path / "gw-123" / "events.ndjson",
+            _line({"type": "AgentEvent", "ts": "2026-09-10T10:00:01Z",
+                   "agent_name": "vuln-injection", "event": "start"}))
+    _append(tmp_path / "old-789" / "events.ndjson",
+            _line({"type": "InfoEvent", "ts": "2026-09-10T10:00:02Z", "message": "stale"}))
+    _append(scan / "events.ndjson",
+            _line({"type": "correlation_progress", "ts": "2026-09-10T10:00:03Z",
+                   "node": "repo", "name": "gateway", "status": "completed"})
+            + _line({"type": "scan_end", "ts": "2026-09-10T11:00:00Z", "status": "completed"}))
+
+    c = await _collect(MergedEventTailer(scan))
+    gw = [e for e in c.events if e.get("src") == "c-gw-123"]
+    assert gw and gw[0]["type"] == "AgentEvent"
+    assert gw[0]["service"] == "gateway"  # [svc] 归属展示用（LogStream 前缀）
+    assert not any(e.get("src") == "c-old-789" for e in c.events)  # reused 不纳入
+    assert c.events[-1]["type"] == "scan_end"  # wb 收口照常
+
+
+@pytest.mark.asyncio
+async def test_child_scan_end_becomes_run_end_named_by_service(tmp_path):
+    """子仓 scan_end 改写 run_end{run: <svc>}（复用 RUN 行渲染，不造新 type）；
+    子仓终态不参与流关闭判定（无 run 时 wb scan_end 即可收口）。"""
+    scan = tmp_path / "scan"
+    _write_session(scan, [{"service": "gateway", "scan_id": "gw-123", "reused": False}])
+    _append(tmp_path / "gw-123" / "events.ndjson",
+            _line({"type": "InfoEvent", "ts": "2026-09-10T10:00:00Z", "message": "gw-1"})
+            + _line({"type": "scan_end", "ts": "2026-09-10T10:30:00Z", "status": "completed"}))
+    _append(scan / "events.ndjson",
+            _line({"type": "scan_end", "ts": "2026-09-10T11:00:00Z", "status": "completed"}))
+
+    c = await _collect(MergedEventTailer(scan))
+    child_end = next(e for e in c.events
+                     if e["type"] == "run_end" and e.get("service") == "gateway")
+    assert child_end["run"] == "gateway" and child_end["status"] == "completed"
+    assert child_end["src"] == "c-gw-123"
+    # wb scan_end 仍是流末条（子仓终态不阻塞也不提前关流）
+    assert c.events[-1]["type"] == "scan_end" and c.events[-1]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_child_offset_in_sse_id_snapshot(tmp_path):
+    """重连断点：SSE id 快照含 c-<scan_id> 段（Last-Event-ID 恢复子仓各自 offset）。"""
+    scan = tmp_path / "scan"
+    _write_session(scan, [{"service": "gateway", "scan_id": "gw-123", "reused": False}])
+    _append(tmp_path / "gw-123" / "events.ndjson",
+            _line({"type": "InfoEvent", "ts": "2026-09-10T10:00:00Z", "message": "gw-1"}))
+    _append(scan / "events.ndjson",
+            _line({"type": "scan_end", "ts": "2026-09-10T11:00:00Z", "status": "completed"}))
+
+    c = await _collect(MergedEventTailer(scan))
+    assert any("c-gw-123=" in i for i in c.ids)
+
+
+@pytest.mark.asyncio
+async def test_no_corr_children_session_no_child_sources(tmp_path):
+    """非 correlation 主行（session 无 corr_children）→ 零子仓源，既有行为不变。"""
+    scan = tmp_path / "scan"
+    scan.mkdir()
+    (scan / "session.json").write_text(json.dumps({"scan_type": "whitebox"}),
+                                       encoding="utf-8")
+    _append(tmp_path / "gw-123" / "events.ndjson",
+            _line({"type": "InfoEvent", "ts": "2026-09-10T10:00:00Z", "message": "stray"}))
+    _append(scan / "events.ndjson",
+            _line({"type": "scan_end", "ts": "2026-09-10T11:00:00Z", "status": "completed"}))
+    c = await _collect(MergedEventTailer(scan))
+    assert not any(str(e.get("src", "")).startswith("c-") for e in c.events)

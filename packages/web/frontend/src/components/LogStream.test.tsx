@@ -486,3 +486,22 @@ describe("LogStream", () => {
     expect(mRow.textContent).not.toContain("recall skipped");
   });
 });
+
+  // ─── 子仓源归属前缀（2026-09-10 主行 live：归并流注入 service 字段）───
+  it("带 service 字段的子仓事件 → 行 body 前缀 [svc]（多子仓同名 agent 可辨归属）", () => {
+    const evs: NdjsonEvent[] = [
+      { ts: "2026-09-10T10:00:00.000Z", category: "AGENT", type: "AgentEvent",
+        agent_name: "vuln-injection", event: "start", attempt: 1,
+        src: "c-gw-123", service: "gateway" },
+      { ts: "2026-09-10T10:00:01.000Z", category: "AGENT", type: "AgentEvent",
+        agent_name: "vuln-injection", event: "start", attempt: 1,
+        src: "c-ord-456", service: "order-svc" },
+      { ts: "2026-09-10T10:00:02.000Z", category: "AGENT", type: "AgentEvent",
+        agent_name: "vuln-injection", event: "start", attempt: 1 },  // 主行/黑盒：无前缀
+    ];
+    const { container } = render(<LogStream events={evs} />);
+    const rows = Array.from(container.querySelectorAll(".log-row"));
+    expect(rows[0].textContent).toContain("[gateway]");
+    expect(rows[1].textContent).toContain("[order-svc]");
+    expect(rows[2].textContent).not.toContain("[");
+  });

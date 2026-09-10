@@ -107,7 +107,13 @@ export function ScanProgressOverview({
   const { t } = useTranslation();
   const eventsUrl = mergedScanEventsUrl(ws, scanId, runsCount);
   const { events, status } = useEventSource(eventsUrl);
-  const state = useMemo(() => events.reduce(dashboardReducer, emptyState()), [events]);
+  // 子仓源（src=c-<scan_id>，2026-09-10 归并流纳入的现扫子仓白盒日志）不进主行概览
+  // fold——其 PhaseEvent start 的网格重置语义会清掉 correlation 网格，agent 芯片归
+  // 子行自己的详情页看。live tab 的 LogStream 不过滤（子仓日志正是要看的内容）。
+  const mainEvents = useMemo(
+    () => events.filter((e) => !String(e.src ?? "").startsWith("c-")),
+    [events]);
+  const state = useMemo(() => mainEvents.reduce(dashboardReducer, emptyState()), [mainEvents]);
   // 同一 eventsUrl 只通知一次（切换 run 换 URL 后重新通知）；历史回放里的 scan_end 也会
   // 触发一次首拉刷新，幂等无害。
   const endedFor = useRef<string | null>(null);
