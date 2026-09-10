@@ -35,6 +35,8 @@ export function EvidenceTab() {
   const [coverageFilter, setCoverageFilter] = useState<string>("all");
   const [methodFilter, setMethodFilter] = useState<string>("all");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  // unmatched 明细（spec §8「可展开」）：banner 点击 toggle，默认收起只显计数。
+  const [showUnmatched, setShowUnmatched] = useState(false);
 
   const methods = useMemo(
     () => [...new Set((data?.endpoints ?? []).map((e) => e.method))].sort(),
@@ -89,8 +91,17 @@ export function EvidenceTab() {
           </select>
         </div>
         {unmatchedTotal > 0 && (
-          <div className="mb-2 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs">
-            {t("workspaceDetail.evidence.unmatchedBanner", { n: unmatchedTotal })}
+          <div className="mb-2">
+            <button
+              data-testid="unmatched-banner"
+              aria-expanded={showUnmatched}
+              onClick={() => setShowUnmatched(!showUnmatched)}
+              className="flex w-full items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-left text-xs text-amber-700 dark:text-amber-400"
+            >
+              <span className="shrink-0">{showUnmatched ? "▾" : "▸"}</span>
+              {t("workspaceDetail.evidence.unmatchedBanner", { n: unmatchedTotal })}
+            </button>
+            {showUnmatched && <UnmatchedDetail data={data} />}
           </div>
         )}
         <ul>
@@ -128,6 +139,11 @@ export function EvidenceTab() {
                   {selected.method}
                 </span>
                 {selected.path}
+                {selected.raw_route && selected.raw_route !== selected.path && (
+                  <span className="ml-2 font-mono text-xs font-normal text-muted-foreground">
+                    ({selected.raw_route})
+                  </span>
+                )}
               </h2>
             </header>
             <div className="grid gap-4 lg:grid-cols-2">
@@ -135,6 +151,13 @@ export function EvidenceTab() {
               <BlackboxColumn endpoint={selected} />
             </div>
           </>
+        ) : data.note ? (
+          // 底册缺失（如纯黑盒/旧版扫描）时 core 会产 note——展示缘由而非误导性的
+          // 「选择接口」空态（spec §4「缺哪个标哪个，前端提示证据不全」）。
+          <div data-testid="evidence-note"
+               className="rounded border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+            {data.note}
+          </div>
         ) : (
           <Empty title={t("workspaceDetail.evidence.selectEndpoint")} />
         )}
@@ -147,6 +170,61 @@ function CoverageDot({ coverage }: { coverage: EvidenceEndpoint["coverage"] }) {
   const color = coverage === "findings" ? "bg-red-500"
     : coverage === "defended" ? "bg-emerald-500" : "bg-muted-foreground/30";
   return <span className={`h-2 w-2 shrink-0 rounded-full ${color}`} aria-label={coverage} />;
+}
+
+/** unmatched 三桶明细（spec §8「可展开」的展开体）。条目为松类型（Record<string,
+ *  unknown>，core 侧保守保留原文），渲染一律 String() 收敛，缺字段自然空白。 */
+function UnmatchedDetail({ data }: { data: EvidenceMatrix }) {
+  const { t } = useTranslation();
+  const L = (k: string) => `workspaceDetail.evidence.${k}`;
+  const { findings, safe_dismissed, verdicts } = data.unmatched;
+  return (
+    <div data-testid="unmatched-detail"
+         className="mt-1 space-y-2 rounded border border-amber-500/30 p-2 text-xs">
+      {findings.length > 0 && (
+        <section>
+          <div className="font-medium text-muted-foreground">{t(L("unmatchedFindingsLabel"))}</div>
+          <ul className="mt-0.5 space-y-0.5">
+            {findings.map((f, i) => (
+              <li key={i}>
+                <span className="font-mono">{String(f.id ?? "")}</span> · {String(f.title ?? "")}
+                {f.reason != null && <span className="ml-1 opacity-60">({String(f.reason)})</span>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {safe_dismissed.length > 0 && (
+        <section>
+          <div className="font-medium text-muted-foreground">{t(L("unmatchedSafeLabel"))}</div>
+          <ul className="mt-0.5 space-y-0.5">
+            {safe_dismissed.map((s, i) => (
+              <li key={i}>
+                {String(s.subject ?? s.title ?? "")}
+                {s.kind != null && (
+                  <span className="ml-1 rounded bg-muted px-1 text-[10px]">{String(s.kind)}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {verdicts.length > 0 && (
+        <section>
+          <div className="font-medium text-muted-foreground">{t(L("unmatchedVerdictsLabel"))}</div>
+          <ul className="mt-0.5 space-y-0.5">
+            {verdicts.map((v, i) => (
+              <li key={i}>
+                <span className="font-mono">{String(v.vulnerability_id ?? "")}</span>
+                {v.run_id != null && <span className="ml-1 opacity-70">{String(v.run_id)}</span>}
+                {v.reason != null && <span className="ml-1 opacity-60">({String(v.reason)})</span>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  );
 }
 
 function WhiteboxColumn({ endpoint }: { endpoint: EvidenceEndpoint }) {
@@ -168,7 +246,28 @@ function WhiteboxColumn({ endpoint }: { endpoint: EvidenceEndpoint }) {
               <div className="font-medium">
                 {f.id} · {f.title}
                 {f.severity && <SeverityTag severity={f.severity} />}
+                {f.confidence && (
+                  <span className="ml-1 rounded bg-muted px-1 text-[10px] text-muted-foreground">
+                    {f.confidence}
+                  </span>
+                )}
               </div>
+              {f.params.length > 0 && (
+                <p className="mt-1">
+                  <span className="text-muted-foreground">
+                    {t("workspaceDetail.evidence.paramsLabel")}：
+                  </span>
+                  {f.params.join("、")}
+                </p>
+              )}
+              {f.auth_required && (
+                <p className="mt-1">
+                  <span className="text-muted-foreground">
+                    {t("workspaceDetail.evidence.authLabel")}：
+                  </span>
+                  {f.auth_required}
+                </p>
+              )}
               {f.evidence_chain && (
                 <p className="mt-1 whitespace-pre-wrap break-words">
                   {t("workspaceDetail.evidence.evidenceChain")}：{f.evidence_chain}

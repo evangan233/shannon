@@ -536,6 +536,7 @@
       "gatewayLabel": "Gateway URL",
       "gatewayPlaceholder": "http://gateway.example.com",
       "gatewayHint": "When set, a blackbox verification runs against the entrypoint after correlation (optional)",
+      "yamlToggle": "YAML configuration",
       "yamlSyncHint": "Synced with topology in real time",
       "yamlErrorKeepGraph": "Topology keeps its last valid state until this is fixed",
       "yamlEditor": "YAML editor",
@@ -1201,7 +1202,12 @@
       "witness": "Witness payload",
       "evidenceChain": "Evidence chain",
       "dismissReason": "Dismiss reason",
-      "selectEndpoint": "Select an endpoint to view evidence"
+      "selectEndpoint": "Select an endpoint to view evidence",
+      "unmatchedFindingsLabel": "Unmatched findings",
+      "unmatchedSafeLabel": "Unmatched safety conclusions & dismissed",
+      "unmatchedVerdictsLabel": "Unmatched blackbox verdicts",
+      "paramsLabel": "Parameters",
+      "authLabel": "Auth required"
     },
     "logs": {
       "listLoadError": "Failed to load log file list",

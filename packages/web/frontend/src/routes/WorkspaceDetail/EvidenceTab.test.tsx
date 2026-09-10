@@ -116,4 +116,46 @@ describe("EvidenceTab", () => {
     expect(within(screen.getByTestId("evidence-whitebox")).getByText(/session 绑定/)).toBeTruthy();
     expect(screen.getByText(i18n.t("workspaceDetail.evidence.blackboxEmpty"))).toBeTruthy();
   });
+
+  it("unmatched 明细可展开：banner 点击显示三桶条目", async () => {
+    const m = JSON.parse(JSON.stringify(matrix)) as EvidenceMatrix;
+    m.unmatched = {
+      findings: [{ id: "AUTHZ-VULN-02", title: "纵向越权：GET /benefits",
+                   reason: "ambiguous-or-no-endpoint-match" }],
+      safe_dismissed: [{ kind: "safe", subject: "getByUserIdAndThreshold 无 threshold 分支" }],
+      verdicts: [{ vulnerability_id: "X-9", run_id: "run-2",
+                   reason: "finding-or-endpoint-not-matched" }],
+    };
+    mockedFetch.mockResolvedValue(m);
+    renderTab();
+    const banner = await screen.findByTestId("unmatched-banner");
+    expect(banner.textContent).toContain("3");
+    expect(screen.queryByTestId("unmatched-detail")).toBeNull(); // 初始收起
+    fireEvent.click(banner);
+    const detail = screen.getByTestId("unmatched-detail");
+    expect(within(detail).getByText(/AUTHZ-VULN-02/)).toBeTruthy();
+    expect(within(detail).getByText(/getByUserIdAndThreshold/)).toBeTruthy();
+    expect(within(detail).getByText(/X-9/)).toBeTruthy();
+    expect(within(detail).getByText(/ambiguous-or-no-endpoint-match/)).toBeTruthy();
+  });
+
+  it("endpoints 空且有 note 时显示 note 而非选择空态", async () => {
+    const m = JSON.parse(JSON.stringify(matrix)) as EvidenceMatrix;
+    m.endpoints = [];
+    m.note = "entry_points.json 缺失（纯黑盒扫描或旧版扫描），接口底册为空，证据无处挂载。";
+    mockedFetch.mockResolvedValue(m);
+    renderTab();
+    const note = await screen.findByTestId("evidence-note");
+    expect(note.textContent).toContain("entry_points.json 缺失");
+    expect(screen.queryByText(i18n.t("workspaceDetail.evidence.selectEndpoint"))).toBeNull();
+  });
+
+  it("finding 卡渲染涉及参数与认证要求", async () => {
+    renderTab();
+    const list = await screen.findByTestId("evidence-list");
+    fireEvent.click(within(list).getByText("/allocations/:userId"));
+    const wb = within(screen.getByTestId("evidence-whitebox"));
+    expect(wb.getByText(/userId \(path\)/)).toBeTruthy();
+    expect(wb.getByText(/isLoggedIn/)).toBeTruthy();
+  });
 });

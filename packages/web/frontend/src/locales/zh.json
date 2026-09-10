@@ -536,6 +536,7 @@
       "gatewayLabel": "网关地址",
       "gatewayPlaceholder": "http://gateway.example.com",
       "gatewayHint": "填写后，关联完成时对入口服务发起黑盒验证（可选）",
+      "yamlToggle": "YAML 配置",
       "yamlSyncHint": "与拓扑实时同步",
       "yamlErrorKeepGraph": "拓扑保持上次有效状态，修正后继续同步",
       "yamlEditor": "YAML 编辑器",
@@ -1201,7 +1202,12 @@
       "witness": "Witness Payload",
       "evidenceChain": "证据链",
       "dismissReason": "驳回理由",
-      "selectEndpoint": "选择左侧接口查看证据"
+      "selectEndpoint": "选择左侧接口查看证据",
+      "unmatchedFindingsLabel": "未挂载的问题证据",
+      "unmatchedSafeLabel": "未挂载的安全结论与驳回",
+      "unmatchedVerdictsLabel": "未挂载的黑盒验证",
+      "paramsLabel": "涉及参数",
+      "authLabel": "认证要求"
     },
     "logs": {
       "listLoadError": "加载日志文件列表失败",
