@@ -37,6 +37,7 @@ vuln prompt 的 false_positives_to_avoid），**没有独立的对抗性审查�
 | 降级语义 | 片失败/JSON 打捞失败/预算超限 → `unreviewed` 保守放行（审查通道失败 ≠ 判了误报，对齐 unadjudicated 哲学） |
 | checkpoint | 产物即 checkpoint：`adversarial_review.json` 已有终态记录（survived/refuted）的卡不重审，重试只跑残余 |
 | 默认开关 | `SUPERNOVA_ADVERSARIAL_REVIEW_ENABLED`，默认 `"1"`（经 `ws_getenv` 支持 per-workspace 覆盖） |
+| refuted 可见入口 | **web 扫描详情页新 Tab**（§4.8）：读 adversarial_review.json 全量透传，三态徽标 + failed_dimensions 筛选，展开看反驳论证与证据；白盒报告不展示被驳回项（维持 §9） |
 
 ## 2. 架构定位与铁律关系
 
@@ -260,6 +261,53 @@ refuted 卡逐条 `append_dismissed`（`packages/core/src/supernova_core/service
 validate 层 + schema + 旋钮落 `packages/core`（对齐 collectors/poc.py 模式：
 POC_AGENT_OUTPUT_SCHEMA/validate_pocs 在 core，activity 在 whitebox 调用）。
 
+### 4.8 web 扫描详情页「对抗审查」视图（refuted 可见入口）
+
+**后端**（`packages/web/src/supernova_web/api/scans.py`）：
+
+- 新端点 `GET /api/workspaces/{ws}/scans/{scan_id}/adversarial-review`，照抄
+  `scan_dataflow` 端点壳（:516-522）+ `_dataflow_view_for` 直读模式
+  （:232-250）：`resolve_intermediate(scan_dir/"deliverables"/WHITEBOX_SUBDIR,
+  "adversarial_review.json")` → 缺失/坏 JSON 一律 `HTTPException(404,
+  "... not generated")`，存在则 `json.loads` **全量透传**（不经
+  DeliverablesReader——端点返 JSON 非 text/plain 截断）。
+- 权限 `workspace_member`（scans.py 模块约定，:3-4）。web 只读 JSON 文件，
+  零 agent、零 temporal、零写盘——不触 `test_web_never_runs_agents.py`
+  红线（import 仅 `supernova_core.utils.paths`，combined_report_renderer
+  已有同款先例）。
+- 不做 scan_type 条件拒绝（黑盒/correlation 扫描缺产物自然 404 → 前端
+  显空态，比 422 分支简单）。
+
+**前端**（`packages/web/frontend`，六文件动点对齐 Tab 新增样板）：
+
+- 新 Tab 路由段 `adversarial`（单词段，对齐 router.tsx:136 约定）：
+  `SCAN_TABS` 加行（ScanDetail.tsx:24-31）+ router 子路由（router.tsx
+  lazyWithRetry + per-scan children）+ `AdversarialReviewTab.tsx`。
+- 数据：`useSWR` 一次性拉取（终态产物无轮询，照抄 DataFlowTab.tsx:33-36）。
+- UI 结构（筛选照抄 DataFlowTab SummaryBar 模式——本地 useState + useMemo
+  从数据派生选项 + 原生 select；卡片照抄 CorrelationTab 的
+  AdjudicationCardView :291-357 同构样式）：
+  - 顶部 summary 计数条（total/refuted/survived/unreviewed，全量口径
+    不随筛选缩水）；
+  - 两个筛选：`review_verdict` 三态、`failed_dimensions`（选项从
+    `records.flatMap(r => r.failed_dimensions)` 派生）；
+  - records 卡片：verdict 徽标 + `before` 快照（反驳前状态）+
+    `dimension_results` 逐维度列表（rebutted 标记 + reason）+ `evidence`
+    file:line 列表 + `rebuttal_reason`/`survival_reason` 段落。
+- i18n：zh/en 双侧 camelCase 键（kebab→camel 陷阱，memory
+  `web-theme-system-architecture`；`locales.test.ts` 锁 key 集合一致）。
+
+**前端文件动点清单**：`types.ts`（AdversarialReview/ReviewRecord/
+DimensionResult 接口）/ `client.ts`（fetchAdversarialReview）/
+`router.tsx` / `ScanDetail.tsx` / `AdversarialReviewTab.tsx`（新建）/
+`zh.json` + `en.json`。
+
+**协调注意点**：同日在途工作「接口证据页」（spec
+`2026-09-10-api-evidence-matrix-design.md` + plan，core 聚合器已在
+工作区未提交）同样要加 Tab + 端点，撞 `ScanDetail.tsx` SCAN_TABS 与
+`ScanDetail.test.tsx:44` 的 tab 总数断言（`toHaveLength(6)`）——两工作
+落地时协调，后落地者按实际 tab 数更新断言。
+
 ## 5. 数据流（单类内）
 
 ```
@@ -327,6 +375,14 @@ records 里有 `review_verdict="unreviewed"` + `after.action="kept"` 留痕。
 - **接线契约**：worker 注册（对齐 `test_worker_registers_authz_judge.py`
   钉死模式）/ workflow 步骤存在性与顺序（merge 之后、gn-enrichment 之前）/
   step_intents StepSpec 注册。
+- **web 后端**：`test_scans_adversarial_review.py`（照抄
+  `test_scans_dataflow.py` 四用例：200 直读 / 404 缺产物 / tier fallback
+  平铺 / 404 scan 不存在；fixtures 走 conftest `authed_client`）。
+- **web 前端**：`AdversarialReviewTab.test.tsx`（msw + MemoryRouter +
+  SWRConfig 独立 cache + i18n zh，照抄 DataFlowTab.test.tsx 骨架；筛选
+  交互断言照 class-select 用例）；`ScanDetail.test.tsx` tab 数断言更新
+  （注意与接口证据页在途工作协调，§4.8）；提交前本地 `npx tsc -b`
+  （vitest 不查类型，memory `frontend-tsc-build-gates`）。
 - **prompt**：变量渲染完整 / 不含确定性 hints 桥梁（对齐
   test_static_dataflow_hints_decoupling.py 的守护思路——本 prompt 只吃合并
   queue 卡与维度清单，本就无确定性层直连，守恒即可）。
@@ -334,9 +390,9 @@ records 里有 `review_verdict="unreviewed"` + `after.action="kept"` 留痕。
 
 ## 9. 非目标与未来扩展
 
-- **不做**：web 前端筛选 UI（标记字段已就位，UI 另立需求）；报告附录展示
-  被驳回项（ dismissed 归档 + adversarial_review.json 已可人工审计）；
-  跨轨分歧对抗仲裁（spec 2026-08-27 §10 已裁 YAGNI，维持）。
+- **不做**：白盒报告附录展示被驳回项（web 详情页视图 §4.8 已是用户可见
+  入口，dismissed 归档 + adversarial_review.json 可审计）；跨轨分歧对抗
+  仲裁（spec 2026-08-27 §10 已裁 YAGNI，维持）。
 - **不做**：黑盒侧任何改动（用户口径：与黑盒无关）。
 - **未来可扩**：按 failed_dimensions 维度反哺 vuln prompt 的
   false_positives_to_avoid 清单（驳回原因→上游提示词进化，闭环但不自动——
