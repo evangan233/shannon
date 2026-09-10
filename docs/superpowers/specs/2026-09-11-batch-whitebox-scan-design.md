@@ -1,6 +1,6 @@
 # 批量白盒扫描设计（batch-whitebox-scan）
 
-> 日期：2026-09-11。状态：spec 待审。
+> 日期：2026-09-11。状态：已实现（见 plans/2026-09-11-batch-whitebox-scan.md）。
 > 需求：支持批量白盒扫描——输入批量 GitLab 链接（经现有批量克隆）与批量选择已注册仓库，一次提交对 N 个仓库各发起一条白盒扫描。
 > 已确认的产品决策：两步分离（克隆与扫描不做自动串联）、无批次实体（N 个扫描即 N 条独立记录）、白盒 tab 内多选改造（不新增 tab）、后端批量端点一次 fan-out、提交后跳扫描列表页 + 汇总横幅。
 
@@ -84,6 +84,10 @@ fan-out：for repo in repos:
 ## 4. 前端设计
 
 ### 4.1 `RepoCombobox` 单选→多选
+
+> 实现注记：组件选型偏离 spec 原文（RepoCombobox 加 multiple prop）——直接复用现成的
+> `RepositoryMultiSelector`（correlation 多选列表：搜索/全选/计数/未就绪禁选），交互语义
+> 全覆盖且 MR 单选零改动；白盒 repoPicker 的 CloneProgress/RepoQuickActions 随单选退役。
 
 - 列表项前加 checkbox；勾选**不关闭**下拉，可连续勾选；再次点击取消。
 - 已选项在触发器内显示为 chips（可点 × 移除）；`value: string` → `value: string[]`，`onChange(string[])`。
