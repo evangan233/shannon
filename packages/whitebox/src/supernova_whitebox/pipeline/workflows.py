@@ -865,6 +865,28 @@ class WhiteboxScanWorkflow:
                     )
                 finally:
                     self._state.current_agent = None
+                # === 接口证据矩阵（spec 2026-09-10 §6；non-fatal 报告增强） ===
+                # report_data 终版后聚合：接口级白盒/黑盒两栏证据，落 deliverables
+                # 根 api_evidence_matrix.json。黑盒 runs 此时多半未跑（黑盒栏空，
+                # 黑盒完成后 web lazy mtime 重建刷新——spec §7）。失败不阻塞收尾。
+                self._state.current_agent = "assemble-api-evidence"
+                try:
+                    await workflow.execute_activity(
+                        activities.run_assemble_api_evidence, act_input,
+                        start_to_close_timeout=timedelta(minutes=2),
+                        retry_policy=retry_for("standard"),
+                    )
+                except Exception as exc:
+                    if is_cancellation(exc):  # 取消放行
+                        raise
+                    await workflow.execute_activity(
+                        activities.log_info_activity,
+                        ActivityInput(**{**act_input.__dict__,
+                           "info_message": f"api evidence matrix assembly failed (non-fatal): {exc}",
+                           "info_level": "warning"}),
+                        start_to_close_timeout=timedelta(seconds=10),
+                        retry_policy=retry_for("log"),
+                    )
                 # === §3 export：rd → comprehensive md + poc_collection（含同构校验） ===
                 # 确定性纯函数（分钟内）：失败 = 部署问题显式暴露 → fatal（对齐
                 # assemble 语义）；同构 mismatch 在 activity 内写 qa.checks 不抛。

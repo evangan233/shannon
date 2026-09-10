@@ -891,6 +891,7 @@
     "tabs": {
       "overview": "概览",
       "report": "报告",
+      "evidence": "证据",
       "deliverables": "产物",
       "dataflow": "数据流",
       "correlation": "跨仓关联",
@@ -1178,6 +1179,29 @@
       "legendShieldBypass": "黄盾 · 防护被绕过",
       "legendShieldEffective": "绿盾 · 有效防护（剪断点）",
       "legendTarget": "靶心：红=有打通枝到达 · 灰虚线=无输入到达"
+    },
+    "evidence": {
+      "emptyTitle": "无接口证据产物",
+      "emptyHint": "该扫描未产出接口证据矩阵（旧版扫描或纯黑盒扫描）。需新版白盒扫描。",
+      "filterAll": "全部",
+      "coverageFindings": "有发现",
+      "coverageDefended": "有防御结论",
+      "coverageClean": "无发现",
+      "whiteboxTrack": "白盒分析证据",
+      "blackboxTrack": "黑盒验证证据",
+      "whiteboxEmpty": "白盒无发现",
+      "blackboxEmpty": "黑盒未验证",
+      "findingsGroup": "问题证据",
+      "safeGroup": "安全结论",
+      "dismissedGroup": "已驳回候选",
+      "liveProbe": "含实测",
+      "unmatchedBanner": "{{n}} 条证据未能关联到具体接口",
+      "steps": "实测步骤",
+      "proof": "实测证据",
+      "witness": "Witness Payload",
+      "evidenceChain": "证据链",
+      "dismissReason": "驳回理由",
+      "selectEndpoint": "选择左侧接口查看证据"
     },
     "logs": {
       "listLoadError": "加载日志文件列表失败",

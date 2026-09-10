@@ -522,6 +522,74 @@ async def scan_dataflow(ws: str, scan_id: str, request: Request,
     return _dataflow_view_for(_scan_dir_or_404(request, ws, scan_id))
 
 
+@router.get("/{ws}/scans/{scan_id}/evidence-matrix")
+async def scan_evidence_matrix(ws: str, scan_id: str, request: Request,
+                               _: User = Depends(workspace_member)) -> dict:
+    """api_evidence_matrix.json（spec 2026-09-10 §7）——接口级证据矩阵。
+
+    产物新鲜直读；缺失/陈旧（源产物 mtime 更新，典型 = 黑盒 run 完成后）且
+    whitebox report_data.json 在 → web 进程内跑 core 纯聚合函数重建（零 agent，
+    不违 web 零 agent 执行点铁律）+ 落盘缓存（写失败只返不缓存）。缓存坏 JSON
+    按不可用缓存处理（落回重建自愈，不 500）。重建条件不满足但有旧产物 →
+    返旧文件；两者皆无（或旧产物也坏）→ 404。
+    """
+    import json as _json
+
+    from supernova_core.services.api_evidence_matrix import (
+        EVIDENCE_MATRIX_FILENAME, build_api_evidence_matrix)
+    from supernova_core.utils.atomic_write import atomic_write_json
+
+    scan_dir = _scan_dir_or_404(request, ws, scan_id)
+    matrix_path = scan_dir / "deliverables" / EVIDENCE_MATRIX_FILENAME
+    wb_rd = scan_dir / "deliverables" / "whitebox" / REPORT_DATA_FILENAME
+
+    def _read_matrix() -> dict | None:
+        """读缓存；坏 JSON / 读失败 → None（不可用缓存，调用方走重建/兜底）。"""
+        try:
+            return _json.loads(matrix_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def _stale() -> bool:
+        """缓存 mtime < 任一源产物 mtime → 陈旧。
+
+        blackbox-runs/ 与 deliverables/ 平级（utils/paths.blackbox_runs_dir），
+        glob 从 scan_dir 起——曾误挂 deliverables/ 前缀致黑盒 verdicts 更新
+        永不触发重建。
+        """
+        try:
+            cached_mtime = matrix_path.stat().st_mtime
+        except OSError:
+            return True
+        sources = [scan_dir / "deliverables" / "whitebox" /
+                   "intermediate" / "entry_points.json", wb_rd, *scan_dir.glob(
+            "blackbox-runs/run-*/deliverables/blackbox/"
+            "intermediate/*_exploit_verdicts.json")]
+        for p in sources:
+            try:
+                if p.exists() and p.stat().st_mtime > cached_mtime:
+                    return True
+            except OSError:
+                continue  # 源被并发删（sweep）→ 不作陈旧依据，也不 500
+        return False
+
+    if matrix_path.exists() and not _stale():
+        cached = _read_matrix()
+        if cached is not None:
+            return cached  # 坏 JSON（此处 None）→ 落回下方重建自愈
+    if not wb_rd.exists():
+        cached = _read_matrix() if matrix_path.exists() else None
+        if cached is not None:
+            return cached  # 无法重建（report_data 缺）→ 旧文件兜底
+        raise HTTPException(404, "evidence matrix not available")
+    matrix = build_api_evidence_matrix(scan_dir)
+    try:
+        atomic_write_json(matrix_path, matrix)
+    except OSError:
+        pass  # 只读挂载等：不缓存，仅返回
+    return matrix
+
+
 def assemble_correlation_detail(scan_dir: Path) -> dict:
     """C5: 组装 correlation scan 详情（纯函数，只读 scan_dir 便于单测）。
 

@@ -701,6 +701,84 @@ export interface DataflowView {
   safe_vectors: SafeVector[];
 }
 
+// ── 接口证据矩阵（spec 2026-09-10 §4；core api_evidence_matrix.py 产物）──
+
+export interface EvidenceFinding {
+  id: string | null;
+  vuln_class: string | null;
+  severity: string | null;
+  confidence: string | null;
+  title: string | null;
+  evidence_chain: string | null;
+  witness_payload: string | null;
+  verdict: string | null;
+  mismatch_reason: string | null;
+  params: string[];
+  auth_required: string | null;
+  source_location: string | null;
+  sink_location: string | null;
+  role?: string | null;
+}
+
+export interface EvidenceSafeVector {
+  subject: string | null;
+  defense_mechanism: string | null;
+  location: string | null;
+  contains_live_probe: boolean;
+}
+
+export interface EvidenceDismissed {
+  ID: string | null;
+  vuln_class: string | null;
+  title: string | null;
+  dismiss_reason: string | null;
+  dismissed_at_stage: string | null;
+}
+
+export interface EvidenceVerdict {
+  vulnerability_id: string | null;
+  vuln_class: string | null;
+  status: string | null;
+  severity: string | null;
+  impact: string | null;
+  exploitation_steps: string[];
+  proof_of_impact: string | null;
+  run_id: string | null;
+}
+
+export interface EvidenceEndpoint {
+  method: string;
+  path: string;
+  raw_route: string | null;
+  func_block_id: string | null;
+  entry_verdict: string | null;
+  entry_evidence: string | null;
+  whitebox: {
+    findings: EvidenceFinding[];
+    safe: EvidenceSafeVector[];
+    dismissed: EvidenceDismissed[];
+  };
+  blackbox: {
+    verdicts: EvidenceVerdict[];
+    rejected: Record<string, unknown>[];
+  };
+  coverage: "findings" | "defended" | "clean";
+}
+
+export interface EvidenceMatrix {
+  schema_version: number;
+  scan_id: string | null;
+  generated_at: string | null;
+  sources: Record<string, unknown>;
+  endpoints: EvidenceEndpoint[];
+  unmatched: {
+    findings: Record<string, unknown>[];
+    safe_dismissed: Record<string, unknown>[];
+    verdicts: Record<string, unknown>[];
+  };
+  note?: string | null;
+}
+
 // === 跨仓关联视图（spec 2026-08-24，对齐 web api/scans.py assemble_correlation_detail，Task C5）===
 // GET /workspaces/{ws}/scans/{id}/correlation 返回值；422=非 correlation scan。
 // 缺文件语义（关联未跑完）：topology/report_md → null、boundaries/flows → []、

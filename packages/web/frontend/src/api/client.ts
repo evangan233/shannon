@@ -1,5 +1,5 @@
 import type {
-  BlackboxRunSummary, CorrelationDetail, DataflowView, FsBrowseResult,
+  BlackboxRunSummary, CorrelationDetail, DataflowView, EvidenceMatrix, FsBrowseResult,
   MultiConfigSummary, Repo, RepoDetail, ScanRequest, ScanSummary, SessionData,
   CorrelationTopologyAnalysis, TopologyAuditTail,
 } from "./types";
@@ -368,6 +368,11 @@ export const blackboxRunEventsUrl = (ws: string, scanId: string, runId: string) 
 // 全产物缺 → 后端 404（不产文件）；fetcher 抛 ApiError(404)，消费方据此显空态。
 export const fetchDataflowView = (ws: string, scanId: string) =>
   apiGet<DataflowView>(`/workspaces/${encWs(ws)}/scans/${encWs(scanId)}/dataflow`);
+
+// GET /workspaces/{ws}/scans/{id}/evidence-matrix → api_evidence_matrix.json
+//（写时组装 + web lazy 重建；404 = 该扫描无证据产物）。
+export const fetchEvidenceMatrix = (ws: string, scanId: string) =>
+  apiGet<EvidenceMatrix>(`/workspaces/${encWs(ws)}/scans/${encWs(scanId)}/evidence-matrix`);
 
 // ── 跨仓关联视图（spec 2026-08-24，Task C5 后端）───────────────────────────────
 // GET /workspaces/{ws}/scans/{id}/correlation → assemble_correlation_detail 产物。

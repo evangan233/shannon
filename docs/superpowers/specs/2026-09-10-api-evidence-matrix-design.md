@@ -1,7 +1,7 @@
 # 接口证据页（api evidence matrix）— 设计 spec
 
 - 日期：2026-09-10
-- 状态：已与用户确认（独立证据页 + 白盒/黑盒两栏独立 + 纯确定性聚合）
+- 状态：已实现（2026-09-10，plan `plans/2026-09-10-api-evidence-matrix.md` 7 任务 TDD 全绿 + 真实 NodeGoat 扫描抽查通过；实现中发现 plan 代码 glob 前缀笔误 `deliverables/blackbox-runs/`——§3 本表路径为准：`blackbox-runs/` 与 `deliverables/` 平级，已修正）
 
 ## 1. 背景与需求
 

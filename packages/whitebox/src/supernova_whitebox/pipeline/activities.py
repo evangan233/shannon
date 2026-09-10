@@ -2012,6 +2012,29 @@ async def run_assemble_dataflow_view(input: ActivityInput) -> dict:
 
 
 @activity.defn
+async def run_assemble_api_evidence(input: ActivityInput) -> dict:
+    """接口证据矩阵组装（spec 2026-09-10 §6；non-fatal 报告增强）。
+
+    聚合 entry_points/report_data/safe_vectors/dismissed/blackbox verdicts 为
+    deliverables 根 api_evidence_matrix.json（跨 track 视角——白盒 workflow 时点
+    黑盒 runs 多半未跑，黑盒栏为空；黑盒完成后的刷新靠 web lazy mtime 重建，
+    spec §7）。任何异常 → logger.warning + skipped，绝不阻塞扫描收尾。
+    """
+    try:
+        from supernova_core.services.api_evidence_matrix import (
+            EVIDENCE_MATRIX_FILENAME, build_api_evidence_matrix)
+
+        _repo, wb_deliverables, _ws = _get_paths(input)
+        scan_dir = wb_deliverables.parent.parent
+        matrix = build_api_evidence_matrix(scan_dir)
+        atomic_write_json(wb_deliverables.parent / EVIDENCE_MATRIX_FILENAME, matrix)
+        return {"status": "ok", "endpoints": len(matrix.get("endpoints", []))}
+    except Exception as exc:  # noqa: BLE001 — non-blocking（报告增强，绝不阻塞扫描）
+        logger.warning("run_assemble_api_evidence failed (non-blocking): %s", exc)
+        return {"status": "skipped", "reason": str(exc)}
+
+
+@activity.defn
 async def run_risk_scoring(input: ActivityInput) -> dict:
     """Score call chains and produce tiered audit plan."""
     from supernova_whitebox.audit.session_registry import get_audit_session

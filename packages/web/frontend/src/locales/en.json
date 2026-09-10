@@ -891,6 +891,7 @@
     "tabs": {
       "overview": "Overview",
       "report": "Report",
+      "evidence": "Evidence",
       "deliverables": "Deliverables",
       "dataflow": "Data flow",
       "correlation": "Correlation",
@@ -1178,6 +1179,29 @@
       "legendShieldBypass": "Yellow shield · guard bypassed",
       "legendShieldEffective": "Green shield · effective guard (cut point)",
       "legendTarget": "Target: red = a breached branch reaches it · gray dashed = no input reaches it"
+    },
+    "evidence": {
+      "emptyTitle": "No API evidence matrix",
+      "emptyHint": "This scan has no evidence matrix (legacy or blackbox-only scan). Requires a recent whitebox scan.",
+      "filterAll": "All",
+      "coverageFindings": "Findings",
+      "coverageDefended": "Defended",
+      "coverageClean": "Clean",
+      "whiteboxTrack": "Whitebox analysis evidence",
+      "blackboxTrack": "Blackbox verification evidence",
+      "whiteboxEmpty": "No whitebox findings",
+      "blackboxEmpty": "Not verified by blackbox",
+      "findingsGroup": "Findings",
+      "safeGroup": "Safety conclusions",
+      "dismissedGroup": "Dismissed candidates",
+      "liveProbe": "live probe",
+      "unmatchedBanner": "{{n}} evidence items could not be mapped to an endpoint",
+      "steps": "Exploitation steps",
+      "proof": "Proof of impact",
+      "witness": "Witness payload",
+      "evidenceChain": "Evidence chain",
+      "dismissReason": "Dismiss reason",
+      "selectEndpoint": "Select an endpoint to view evidence"
     },
     "logs": {
       "listLoadError": "Failed to load log file list",

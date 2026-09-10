@@ -24,6 +24,7 @@ import { useScanDetail } from "./useScanDetail";
 const SCAN_TABS = [
   { value: "overview", labelKey: "workspaceDetail.tabs.overview" },
   { value: "report", labelKey: "workspaceDetail.tabs.report" },
+  { value: "evidence", labelKey: "workspaceDetail.tabs.evidence" },
   { value: "deliverables", labelKey: "workspaceDetail.tabs.deliverables" },
   { value: "dataflow", labelKey: "workspaceDetail.tabs.dataflow" },
   { value: "logs", labelKey: "workspaceDetail.tabs.logs" },
