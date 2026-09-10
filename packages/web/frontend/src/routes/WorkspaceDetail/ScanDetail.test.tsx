@@ -197,12 +197,13 @@ describe("ScanDetail 加黑盒入口门控", () => {
   });
 });
 
-// === correlation 主行 tab 组（D6，spec 2026-08-24 §8）===
-// 关联主行 tab 列表按 scan_type 分支：概览 | 跨仓关联 | 产物 | 日志——无 report/
-// dataflow/live（结果在专属跨仓关联 tab；实时进度在顶部 ScanProgressOverview 经
-// correlation_progress 事件渲染）。
+// === correlation 主行 tab 组（D6，spec 2026-08-24 §8；2026-09-10 增 live）===
+// 关联主行 tab 列表按 scan_type 分支：概览 | 跨仓关联 | 产物 | 日志 | 实时——无 report/
+// dataflow（结果在专属跨仓关联 tab）。live = 段②关联编排（correlation_progress 经
+// LogStream CORR 行）+ 段③黑盒验证 run 日志（归并流自动纳入）；段①现扫子仓日志去
+// 子行 live 看，不进主行流。
 describe("ScanDetail correlation 主行 tab 组", () => {
-  it("correlation scan：渲染 4 tab（概览/跨仓关联/产物/日志），不含 report/dataflow/live", async () => {
+  it("correlation scan：渲染 5 tab（概览/跨仓关联/产物/日志/实时），不含 report/dataflow", async () => {
     server.use(
       http.get("/api/workspaces/:ws/scans/:scanId", () =>
         HttpResponse.json({ status: "running", scan_type: "correlation" })),
@@ -210,11 +211,11 @@ describe("ScanDetail correlation 主行 tab 组", () => {
     renderAt("/p/ws/scans/s1/logs");
     await waitFor(() =>
       expect(screen.getByRole("tab", { name: "跨仓关联" })).toBeInTheDocument());
-    expect(screen.getAllByRole("tab")).toHaveLength(4);
-    for (const name of ["概览", "跨仓关联", "产物", "日志"]) {
+    expect(screen.getAllByRole("tab")).toHaveLength(5);
+    for (const name of ["概览", "跨仓关联", "产物", "日志", "实时"]) {
       expect(screen.getByRole("tab", { name })).toBeInTheDocument();
     }
-    for (const absent of ["报告", "数据流", "实时"]) {
+    for (const absent of ["报告", "数据流"]) {
       expect(screen.queryByRole("tab", { name: absent })).not.toBeInTheDocument();
     }
   });
@@ -251,14 +252,15 @@ describe("ScanDetail correlation 主行 tab 组", () => {
     renderAt("/p/ws/scans/s1/logs");
     await waitFor(() =>
       expect(screen.getByRole("tab", { name: "Correlation" })).toBeInTheDocument());
-    expect(screen.getAllByRole("tab")).toHaveLength(4);
+    expect(screen.getAllByRole("tab")).toHaveLength(5);
   });
 });
 
-// === DefaultScanTab correlation 默认概览（D6）===
-// 关联主行 tab 组无 report/live——默认落「概览」（简版 CorrelationOverview：三段横幅 +
-// children 状态网格），不再按终态分落 report/live。
-describe("DefaultScanTab correlation 默认概览", () => {
+// === DefaultScanTab correlation 默认落 tab（D6 定概览；2026-09-10 增 live 后对齐
+// 普通扫描语义）===
+// 关联主行 tab 组含 live（无 report）——进行中落 live（看段②编排 + 段③黑盒验证实时
+// 日志），完成落「跨仓关联」（拓扑/攻击链结果页）。
+describe("DefaultScanTab correlation 默认落 tab", () => {
   function renderDefault(path: string) {
     return render(
       <MemoryRouter initialEntries={[path]}>
@@ -268,6 +270,7 @@ describe("DefaultScanTab correlation 默认概览", () => {
             <Route path="/p/:workspace/scans/:scanId">
               <Route index element={<DefaultScanTab />} />
               <Route path="overview" element={<div>ov-content</div>} />
+              <Route path="correlation" element={<div>corr-content</div>} />
               <Route path="report" element={<div>rp-content</div>} />
               <Route path="live" element={<div>lv-content</div>} />
             </Route>
@@ -277,22 +280,22 @@ describe("DefaultScanTab correlation 默认概览", () => {
     );
   }
 
-  it("correlation 主行（进行中）默认落概览而非 live", async () => {
+  it("correlation 主行（进行中）默认落 live（段②编排 + 段③黑盒实时日志）", async () => {
     server.use(
       http.get("/api/workspaces/:ws/scans/:scanId", () =>
         HttpResponse.json({ status: "running", scan_type: "correlation" })),
     );
     renderDefault("/p/ws/scans/s1");
-    await waitFor(() => expect(screen.getByText("ov-content")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("lv-content")).toBeInTheDocument());
   });
 
-  it("correlation 主行（completed）仍落概览（tab 组无 report）", async () => {
+  it("correlation 主行（completed）落跨仓关联（结果页替代 report）", async () => {
     server.use(
       http.get("/api/workspaces/:ws/scans/:scanId", () =>
         HttpResponse.json({ status: "completed", scan_type: "correlation" })),
     );
     renderDefault("/p/ws/scans/s1");
-    await waitFor(() => expect(screen.getByText("ov-content")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("corr-content")).toBeInTheDocument());
   });
 
   it("whitebox 回归：running → live / completed → report 不变", async () => {

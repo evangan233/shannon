@@ -35,9 +35,8 @@ const WorkspacesEntry = lazyWithRetry(() => import("./components/WorkspacesEntry
 const DevComponentsPage = lazyWithRetry(() => import("./pages/DevComponentsPage").then(m => ({ default: m.DevComponentsPage })));
 
 // per-scan 默认 tab：进行中 -> live，完成 -> report。fetch scan status 后 navigate（replace 避免占历史栈）。
-// correlation 主行例外（D6，spec 2026-08-24 §8）：tab 组为 概览|跨仓关联|产物|日志（无
-// report/live），运行中/完成统一默认落「概览」（简版 CorrelationOverview：三段横幅 +
-// children 状态网格）。
+// correlation 主行（D6，spec 2026-08-24 §8；2026-09-10 tab 组增 live 后对齐该语义）：
+// 进行中 -> live（段②编排 + 段③黑盒验证实时日志），完成 -> 跨仓关联（结果页替代 report）。
 export function DefaultScanTab() {
   const { workspace, scanId } = useParams<{ workspace: string; scanId: string }>();
   const nav = useNavigate();
@@ -45,12 +44,12 @@ export function DefaultScanTab() {
     if (!workspace || !scanId) return;
     getScan(workspace, scanId)
       .then((s) => {
-        if (s.scan_type === "correlation") {
-          nav("overview", { replace: true });
-          return;
-        }
         const st = s.status ?? s.session?.status ?? "running";
-        nav(st === "completed" || st === "done" ? "report" : "live", { replace: true });
+        const done = st === "completed" || st === "done";
+        // correlation 完成态结果页 = 跨仓关联 tab（无 report）；其余完成态落 report。
+        nav(s.scan_type === "correlation"
+          ? (done ? "correlation" : "live")
+          : (done ? "report" : "live"), { replace: true });
       })
       .catch(() => nav("live", { replace: true }));
   }, [workspace, scanId, nav]);

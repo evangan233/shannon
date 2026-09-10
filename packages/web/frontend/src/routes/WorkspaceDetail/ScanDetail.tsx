@@ -30,15 +30,17 @@ const SCAN_TABS = [
   { value: "live", labelKey: "workspaceDetail.tabs.live" },
 ] as const;
 
-// correlation 主行 tab 组（D6，spec 2026-08-24 §8）：概览 | 跨仓关联 | 产物 | 日志——
-// 无 report/dataflow/live：关联结果在专属「跨仓关联」tab；实时进度在顶部
-// ScanProgressOverview（correlation_progress 事件经 dashboardReducer 渲染 repo/
-// phase/edge 网格），原始事件流可经日志文件查看。
+// correlation 主行 tab 组（D6，spec 2026-08-24 §8；2026-09-10 增 live）：概览 | 跨仓
+// 关联 | 产物 | 日志 | 实时——无 report/dataflow：关联结果在专属「跨仓关联」tab。live =
+// 段②关联编排（correlation_progress 的 CORR 行）+ 段③黑盒验证 run 日志（归并流自动
+// 纳入 run-K）；段①现扫子仓日志在子行自己的 live 看，不进主行流。顶部
+// ScanProgressOverview（correlation_progress 经 dashboardReducer 渲染网格）照常全 tab 常驻。
 const CORRELATION_SCAN_TABS = [
   { value: "overview", labelKey: "workspaceDetail.tabs.overview" },
   { value: "correlation", labelKey: "workspaceDetail.tabs.correlation" },
   { value: "deliverables", labelKey: "workspaceDetail.tabs.deliverables" },
   { value: "logs", labelKey: "workspaceDetail.tabs.logs" },
+  { value: "live", labelKey: "workspaceDetail.tabs.live" },
 ] as const;
 
 /** ApiError → 可读文案：优先 body.detail（后端 ValueError 的 str，如「白盒产物未就绪」），
@@ -568,7 +570,7 @@ export default function ScanDetail() {
           </div>
         </Tabs>
       </div>
-      <div className={isFlexLayout ? "min-h-0 flex-1 overflow-hidden" : undefined}><ErrorBoundary key={current}><Outlet context={{ selectedRun, runSummary: selectedRunObj, combined: meta?.combined ?? null, bbPhase: meta?.bb_phase ?? null, runsCount: runs.length }} /></ErrorBoundary></div>
+      <div className={isFlexLayout ? "min-h-0 flex-1 overflow-hidden" : undefined}><ErrorBoundary key={current}><Outlet context={{ selectedRun, runSummary: selectedRunObj, combined: meta?.combined ?? null, bbPhase: meta?.bb_phase ?? null, runsCount: runs.length, scanType: meta?.scan_type ?? null }} /></ErrorBoundary></div>
 
       {/* 加黑盒确认 Dialog（空 body = 无认证直连；后续可扩认证/HOST 选择） */}
       <Dialog open={addBbOpen} onOpenChange={setAddBbOpen}>

@@ -1185,6 +1185,7 @@
       "endedTitle": "扫描结束",
       "endedHint": "可查看完整报告",
       "viewReport": "查看报告",
+      "viewCorrelation": "查看关联结果",
       "phaseWhitebox": "白盒阶段",
       "phaseBlackbox": "黑盒 · {{run}}"
     }

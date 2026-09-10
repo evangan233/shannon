@@ -1185,6 +1185,7 @@
       "endedTitle": "Scan ended",
       "endedHint": "View the full report",
       "viewReport": "View report",
+      "viewCorrelation": "View correlation",
       "phaseWhitebox": "Whitebox phase",
       "phaseBlackbox": "Blackbox · {{run}}"
     }

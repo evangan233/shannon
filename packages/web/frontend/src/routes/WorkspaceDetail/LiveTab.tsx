@@ -29,6 +29,8 @@ interface LiveTabCtx {
   bbPhase?: string | null;
   /** bb_runs 数量：变化即换 rev 重开流（服务端关流后新增 run 仍能续看实时日志）。 */
   runsCount?: number | null;
+  /** meta.scan_type：correlation 主行终态按钮跳「跨仓关联」（结果页）而非 report。 */
+  scanType?: string | null;
 }
 
 /**
@@ -49,6 +51,7 @@ export default function LiveTab() {
   const navigate = useNavigate();
   // 无 Outlet 父级（单测直挂）时 context 为 null——兜底空对象退回归并流（无 rev）。
   const ctx = useOutletContext<LiveTabCtx | null>() ?? {};
+  const isCorrelation = ctx.scanType === "correlation";
   const seg = { combined: ctx.combined ?? null, bbPhase: ctx.bbPhase ?? null, selectedRun: ctx.selectedRun ?? null };
   const inBlackboxSegment = isBlackboxSegmentActive(seg);
   const { events, status } = useEventSource(
@@ -100,9 +103,13 @@ export default function LiveTab() {
           <span className="text-cyan">{t("workspaceDetail.live.endedTitle")}</span>
           <span className="text-muted-foreground">{t("workspaceDetail.live.endedHint")}</span>
           <Button size="sm" variant="outline" onClick={() => navigate(
-            `/p/${workspace}/scans/${scanId}/report${inBlackboxSegment && ctx.selectedRun ? `?run=${ctx.selectedRun}` : ""}`,
+            isCorrelation
+              ? `/p/${workspace}/scans/${scanId}/correlation`
+              : `/p/${workspace}/scans/${scanId}/report${inBlackboxSegment && ctx.selectedRun ? `?run=${ctx.selectedRun}` : ""}`,
           )}>
-            {t("workspaceDetail.live.viewReport")}
+            {isCorrelation
+              ? t("workspaceDetail.live.viewCorrelation")
+              : t("workspaceDetail.live.viewReport")}
           </Button>
         </div>
       )}

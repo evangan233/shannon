@@ -35,6 +35,7 @@ function renderLiveCtx(ctx: Record<string, unknown>) {
         <Route path="/p/:workspace/scans/:scanId" element={<CtxRoute />}>
           <Route path="live" element={<LiveTab />} />
           <Route path="report" element={<div>rp-content</div>} />
+          <Route path="correlation" element={<div>corr-content</div>} />
         </Route>
       </Routes>
     </MemoryRouter>,
@@ -122,6 +123,29 @@ describe("LiveTab 全量归并流（单流，不切段）", () => {
     renderLiveCtx({ combined: true, bbPhase: "running", selectedRun: "run-1" });
     fireEvent.click(screen.getByRole("button", { name: /查看报告/ }));
     expect(screen.getByText("rp-content")).toBeInTheDocument();
+  });
+});
+
+// === correlation 主行 live（2026-09-10）：段②编排 + 段③黑盒验证共用归并流 ===
+describe("LiveTab correlation 主行", () => {
+  it("scanType=correlation + scan_end completed → 查看关联结果跳 correlation tab", () => {
+    eventsState.events = [
+      { type: "scan_end", status: "completed", ts: "2026-01-01T00:00:00Z", category: "CONTROL" },
+    ];
+    eventsState.status = "closed";
+    renderLiveCtx({ scanType: "correlation" });
+    fireEvent.click(screen.getByRole("button", { name: /查看关联结果/ }));
+    expect(screen.getByText("corr-content")).toBeInTheDocument();
+  });
+
+  it("scanType=correlation + scan_end failed → 失败横幅照常，无跳转按钮", () => {
+    eventsState.events = [
+      { type: "scan_end", status: "failed", stderr_tail: "edge 推断异常", ts: "2026-01-01T00:00:00Z", category: "CONTROL" },
+    ];
+    eventsState.status = "closed";
+    renderLiveCtx({ scanType: "correlation" });
+    expect(screen.getByText(/扫描失败/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /查看关联结果/ })).not.toBeInTheDocument();
   });
 });
 
