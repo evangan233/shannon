@@ -1761,7 +1761,9 @@ html body {
 }
 
 /* —— 剪枝树（PruningTreeFig）专用动画与 class（spec 2026-08-20 §5 视觉语言）——
-   组件自研 SVG 不引可视化库；列对齐 x=step_index×COL_W，逐节点对齐。
+   2026-09-10 迁移 React Flow（spec §5 预留升级路径）：节点=HTML 盒（prune-* 类），
+   边在 RF svg 边层内自建 g[data-branch-id]——本段 svg g[data-branch-id] 系选择器照常命中。
+   列对齐由 prune/layout.ts 保证（x=PAD_L+step×COL_X 等距化，dagre 出 y）。
    打通枝=红虚线流动 / 剪断枝=绿实线至防护节点+✂残端 / sink 靶心红脉动或灰虚线 /
    source 青色 pill / 同名函数青色点线弧。prefers-reduced-motion 全关。
    色用 --c- 语义 channel（深浅双主题统一）；stroke-dashoffset 驱动「流动」。 */
@@ -1953,6 +1955,182 @@ svg g[data-branch-id] {
   .branch-vuln.selected,
   svg g[data-branch-id]:hover .branch-vuln { animation: none; }
   .sink-pulse { animation: none; }
+}
+
+/* —— 剪枝树 React Flow 版 HTML 节点类（2026-09-10 迁移，spec 2026-08-20 §5 视觉语言）——
+   节点=HTML 盒（固定尺寸由 layout 钉进 style，渲染高==布局高——重叠根治机制）；配色对齐
+   旧 SVG 类（node-box-vuln/safe→prune-node-vuln/safe、shield-yellow/green→prune-shield-*、
+   source-pill*→prune-source*）；tint 用「渐变层+不透明卡底」双层 background——保持盖线
+   能力（旧 .source-pill-bg 线穿字修复的盒模型版）。色全走 --c-* 与 --card、--border channel，
+   深浅主题自动适配；svg g[data-branch-id] 系旧选择器照常命中（RF 边层内自建 g）。 */
+.prune-node {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-sizing: border-box;
+  padding: 8px 6px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--card));
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.prune-node-vuln {
+  border-color: hsl(var(--c-red) / 0.55);
+  background: linear-gradient(hsl(var(--c-red) / 0.1), hsl(var(--c-red) / 0.1)), hsl(var(--card));
+}
+.prune-node-safe {
+  border-color: hsl(var(--c-green) / 0.55);
+  background: linear-gradient(hsl(var(--c-green) / 0.1), hsl(var(--c-green) / 0.1)), hsl(var(--card));
+}
+/* 圆点（节点级身份）：verdict 配色对齐旧 .node-box-vuln/safe */
+.prune-dot-wrap {
+  position: relative;
+  flex: none;
+}
+.prune-dot {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+}
+.prune-dot-vuln {
+  background: linear-gradient(hsl(var(--c-red) / 0.1), hsl(var(--c-red) / 0.1)), hsl(var(--card));
+  border-color: hsl(var(--c-red) / 0.55);
+}
+.prune-dot-safe {
+  background: linear-gradient(hsl(var(--c-green) / 0.1), hsl(var(--c-green) / 0.1)), hsl(var(--card));
+  border-color: hsl(var(--c-green) / 0.55);
+}
+/* 盾环（绕圆点，不占布局）：黄=绕过 / 绿=有效 */
+.prune-shield-yellow {
+  box-shadow: 0 0 0 3px hsl(var(--c-yellow) / 0.4), 0 0 0 5px hsl(var(--c-yellow) / 0.18);
+}
+.prune-shield-green {
+  box-shadow: 0 0 0 3px hsl(var(--c-green) / 0.4), 0 0 0 5px hsl(var(--c-green) / 0.18);
+}
+/* 剪刀（剪断点圆点右上）与残端（盒右缘外挂渐隐虚线，svg path 复用 .branch-remnant） */
+.prune-scissors {
+  position: absolute;
+  top: -6px;
+  right: -16px;
+  color: hsl(var(--c-green));
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+.prune-remnant {
+  position: absolute;
+  left: 100%;
+  top: 13px; /* 圆点中线（8 padding + 11 半径） */
+  pointer-events: none;
+}
+/* 函数名标签（自动换行——估宽只定行数，盒高钉死，偏差被盒吞） */
+.prune-label {
+  margin-top: 6px;
+  font-size: 10px;
+  line-height: 13px;
+  color: hsl(var(--foreground));
+  max-width: 100%;
+}
+.prune-pubfunc {
+  margin-top: 2px;
+  font-size: 9px;
+  color: hsl(var(--c-cyan));
+  opacity: 0.9;
+}
+/* source 青色 pill（HTML 版；tint+卡底双层 background 盖住穿盒边线） */
+.prune-source {
+  align-items: flex-start;
+  padding: 4px 12px;
+  border: 1.5px solid hsl(var(--c-cyan));
+  border-radius: 999px;
+  background: linear-gradient(hsl(var(--c-cyan) / 0.16), hsl(var(--c-cyan) / 0.16)), hsl(var(--card));
+}
+.prune-source-txt {
+  font-size: 11px;
+  line-height: 13px;
+  color: hsl(var(--c-cyan));
+}
+.prune-source-meta {
+  font-size: 8.5px;
+  line-height: 11px;
+  color: hsl(var(--c-cyan) / 0.8);
+}
+.prune-storage-relay {
+  font-size: 8.5px;
+  line-height: 11px;
+  font-weight: 600;
+  color: hsl(var(--c-amber));
+}
+/* sink 靶心节点：内嵌 svg 自带视觉（.sink-pulse/.sink-idle 直用），盒透明 */
+.prune-sink {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+/* 折叠行：贯穿线 + 居中文案（线 svg 复用 .folded-safe） */
+.prune-fold {
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  justify-content: center;
+}
+.prune-fold-line {
+  position: absolute;
+  inset: 0;
+}
+.prune-fold-txt {
+  position: relative;
+  padding: 0 8px;
+  background: hsl(var(--card));
+  color: hsl(var(--c-green));
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 28px;
+}
+.prune-fold[data-hovered] .prune-fold-line path,
+.prune-fold:hover .prune-fold-line path {
+  stroke: hsl(var(--c-green));
+  stroke-width: 2.5;
+}
+.prune-fold[data-hovered] .prune-fold-txt,
+.prune-fold:hover .prune-fold-txt {
+  font-weight: 700;
+}
+/* source 节点键盘聚焦轮廓（旧 g[data-branch][tabindex]:focus 的 HTML 宿主版） */
+.prune-node[data-branch][tabindex]:focus {
+  outline: 1.5px dashed hsl(var(--c-cyan));
+  outline-offset: 3px;
+}
+/* React Flow 容器对接：透明底融入卡面、pane 抓取光标、attribution 低调、
+   画布外层 wrapper（ZoomBar absolute 定位宿主） */
+.prune-flow-wrap {
+  position: relative;
+  border-radius: inherit;
+}
+.prune-flow,
+.react-flow {
+  background: transparent;
+}
+.react-flow__pane {
+  cursor: grab;
+}
+.react-flow__pane:active {
+  cursor: grabbing;
+}
+.react-flow__attribution {
+  opacity: 0.45;
+  font-size: 9px;
+}
+/* 边命中层（20px 透明描边） */
+.prune-edge-hit {
+  pointer-events: stroke;
+  cursor: pointer;
 }
 
 /* —— Task 13：认证/授权关卡链（GuardChain）+ 目录定位闪烁 ——

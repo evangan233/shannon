@@ -1,0 +1,1579 @@
+{
+ "schema_version": 1,
+ "summary": {
+  "total_sinks": 22,
+  "vulnerable_sinks": 22,
+  "safe_only_sinks": 0
+ },
+ "trees": [
+  {
+   "tree_id": "app/routes/contributions.js:ContributionsHandler:eval:32:23",
+   "vuln_class": "injection",
+   "sink": {
+    "label": "eval",
+    "file": "app/routes/contributions.js",
+    "line": 32,
+    "rule_id": "ts-eval",
+    "category": "command",
+    "code": "\n    this.handleContributionsUpdate = (req, res, next) => {\n\n        /*jslint evil: true */\n        // Insecure use of eval() to parse inputs\n        const preTax = eval(req.body.preTax);\n        const afterTax = eval(req.body.afterTax);\n        const roth = eval(req.body.roth);\n\n        /*"
+   },
+   "findings": [
+    {
+     "id": "INJ-GN-01",
+     "merge_source": "gitnexus-only",
+     "title": "injection：preTax → app/routes/contributions.js:ContributionsHandler:eval:32:23",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "app/routes/contributions.js:ContributionsHandler:7->app/routes/contributions.js:ContributionsHandler:eval:32:23",
+     "track": "gitnexus",
+     "verdict": "vulnerable",
+     "verdict_reason": "llm chain-verdict pass failed; needs human/LLM-track review",
+     "source": {
+      "label": "req.body.roth",
+      "type": "body",
+      "entry": "app/routes/contributions.js:ContributionsHandler:7",
+      "file": "app/routes/contributions.js",
+      "line": 40
+     },
+     "nodes": [],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "app/routes/contributions.js:ContributionsHandler:eval:33:25",
+   "vuln_class": "injection",
+   "sink": {
+    "label": "eval",
+    "file": "app/routes/contributions.js",
+    "line": 33,
+    "rule_id": "ts-eval",
+    "category": "command",
+    "code": "    this.handleContributionsUpdate = (req, res, next) => {\n\n        /*jslint evil: true */\n        // Insecure use of eval() to parse inputs\n        const preTax = eval(req.body.preTax);\n        const afterTax = eval(req.body.afterTax);\n        const roth = eval(req.body.roth);\n\n        /*\n        //Fix for A1 -1 SSJS Injection attacks - uses alternate method to eval"
+   },
+   "findings": [
+    {
+     "id": "INJ-GN-02",
+     "merge_source": "gitnexus-only",
+     "title": "injection：preTax → app/routes/contributions.js:ContributionsHandler:eval:33:25",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "app/routes/contributions.js:ContributionsHandler:7->app/routes/contributions.js:ContributionsHandler:eval:33:25",
+     "track": "gitnexus",
+     "verdict": "vulnerable",
+     "verdict_reason": "llm chain-verdict pass failed; needs human/LLM-track review",
+     "source": {
+      "label": "req.body.roth",
+      "type": "body",
+      "entry": "app/routes/contributions.js:ContributionsHandler:7",
+      "file": "app/routes/contributions.js",
+      "line": 40
+     },
+     "nodes": [],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "app/routes/contributions.js:ContributionsHandler:eval:34:21",
+   "vuln_class": "injection",
+   "sink": {
+    "label": "eval",
+    "file": "app/routes/contributions.js",
+    "line": 34,
+    "rule_id": "ts-eval",
+    "category": "command",
+    "code": "\n        /*jslint evil: true */\n        // Insecure use of eval() to parse inputs\n        const preTax = eval(req.body.preTax);\n        const afterTax = eval(req.body.afterTax);\n        const roth = eval(req.body.roth);\n\n        /*\n        //Fix for A1 -1 SSJS Injection attacks - uses alternate method to eval\n        const preTax = parseInt(req.body.preTax);"
+   },
+   "findings": [
+    {
+     "id": "INJ-GN-03",
+     "merge_source": "gitnexus-only",
+     "title": "injection：preTax → app/routes/contributions.js:ContributionsHandler:eval:34:21",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "app/routes/contributions.js:ContributionsHandler:7->app/routes/contributions.js:ContributionsHandler:eval:34:21",
+     "track": "gitnexus",
+     "verdict": "vulnerable",
+     "verdict_reason": "llm chain-verdict pass failed; needs human/LLM-track review",
+     "source": {
+      "label": "req.body.roth",
+      "type": "body",
+      "entry": "app/routes/contributions.js:ContributionsHandler:7",
+      "file": "app/routes/contributions.js",
+      "line": 40
+     },
+     "nodes": [],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "llm:INJ-VULN-01",
+   "vuln_class": "injection",
+   "sink": {
+    "label": "allocationsCol.find($where) MongoDB 服务端 JS 执行",
+    "file": "app/data/allocations-dao.js",
+    "line": 86,
+    "rule_id": null,
+    "category": null,
+    "code": null
+   },
+   "findings": [
+    {
+     "id": "INJ-VULN-01",
+     "merge_source": "llm-only",
+     "title": "NoSQL 注入：GET /allocations/:userId 的 threshold 查询参数被未校验地拼入 MongoDB $where 服务端 JS 表达式",
+     "confidence": "needs_review",
+     "witness_payload": "1'; return 1 == '1",
+     "mismatch_reason": "threshold 查询参数未经验证直接模板字符串拼接进 $where 服务器端 JS 表达式；修复代码 (parseInt + 范围校验) 被整体注释掉，无任何白名单/类型校验防护。"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "INJ-VULN-01",
+     "track": "llm",
+     "verdict": "vulnerable",
+     "verdict_reason": "threshold 查询参数未经验证直接模板字符串拼接进 $where 服务器端 JS 表达式；修复代码 (parseInt + 范围校验) 被整体注释掉，无任何白名单/类型校验防护。",
+     "source": {
+      "label": "AllocationsHandler.displayAllocations 读取 threshold(读 req.query)",
+      "type": null,
+      "entry": "GET /allocations/:userId [isLoggedInMiddleware]",
+      "file": "app/routes/allocations.js",
+      "line": 20
+     },
+     "nodes": [
+      {
+       "func": "AllocationsDAO.getByUserIdAndThreshold 接收 threshold",
+       "file": "app/data/allocations-dao.js",
+       "line": 57,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "threshold 直接模板字符串拼接进 $where",
+       "file": "app/data/allocations-dao.js",
+       "line": 78,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      }
+     ],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "llm:INJ-VULN-02",
+   "vuln_class": "injection",
+   "sink": {
+    "label": "eval 后的 isNaN/值域校验 (已迟，代码已执行)",
+    "file": "app/routes/contributions.js",
+    "line": 47,
+    "rule_id": null,
+    "category": null,
+    "code": null
+   },
+   "findings": [
+    {
+     "id": "INJ-VULN-02",
+     "merge_source": "llm-only",
+     "title": "服务端 JS 代码执行（eval RCE）：POST /contributions 的 preTax/afterTax/roth 请求体被直接传入 eval()",
+     "confidence": "needs_review",
+     "witness_payload": "preTax=require('child_process').execSync('id').toString();afterTax=1;roth=1",
+     "mismatch_reason": "攻击者可注入任意 JavaScript 表达式作为 preTax/afterTax/roth 的值，eval() 会在请求进程内执行。isNaN 校验发生在 eval 返回之后，无法阻止代码已执行；攻击者可通过表达式的副作用（如 require('child_process').execSync('id')）实现服务器 RCE。"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "INJ-VULN-02",
+     "track": "llm",
+     "verdict": "vulnerable",
+     "verdict_reason": "攻击者可注入任意 JavaScript 表达式作为 preTax/afterTax/roth 的值，eval() 会在请求进程内执行。isNaN 校验发生在 eval 返回之后，无法阻止代码已执行；攻击者可通过表达式的副作用（如 require('child_process').execSync('id')）实现服务器 RCE。",
+     "source": {
+      "label": "ContributionsHandler.handleContributionsUpdate 读取 req.body.preTax/afterTax/roth",
+      "type": null,
+      "entry": "POST /contributions [isLoggedInMiddleware]",
+      "file": "app/routes/contributions.js",
+      "line": 42
+     },
+     "nodes": [
+      {
+       "func": "eval(req.body.preTax/afterTax/roth) 服务端 JS 求值",
+       "file": "app/routes/contributions.js",
+       "line": 34,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      }
+     ],
+     "sanitizers": [
+      {
+       "name": "isNaN (post-execution)",
+       "defense_type": null,
+       "file": "app/routes/contributions.js",
+       "line": 47,
+       "effective": null
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "tree_id": "app/routes/contributions.js:ContributionsHandler:render:21:19",
+   "vuln_class": "xss",
+   "sink": {
+    "label": "res.render",
+    "file": "app/routes/contributions.js",
+    "line": 21,
+    "rule_id": "ts-res-render",
+    "category": "xss",
+    "code": "\n        contributionsDAO.getByUserId(userId, (error, contrib) => {\n            if (error) return next(error);\n\n            contrib.userId = userId; //set for nav menu items\n            return res.render(\"contributions\", {\n                ...contrib,\n                environmentalScripts\n            });\n        });"
+   },
+   "findings": [
+    {
+     "id": "XSS-GN-01",
+     "merge_source": "gitnexus-only",
+     "title": "xss：preTax → app/routes/contributions.js:ContributionsHandler:render:21:19",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    },
+    {
+     "id": "XSS-GN-05",
+     "merge_source": "gitnexus-only",
+     "title": "xss：afterTax → app/routes/contributions.js:ContributionsHandler:render:21:19",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    },
+    {
+     "id": "XSS-GN-09",
+     "merge_source": "gitnexus-only",
+     "title": "xss：roth → app/routes/contributions.js:ContributionsHandler:render:21:19",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "app/routes/contributions.js:ContributionsHandler:7->app/routes/contributions.js:ContributionsHandler:render:21:19",
+     "track": "gitnexus",
+     "verdict": "vulnerable",
+     "verdict_reason": "llm chain-verdict pass failed; needs human/LLM-track review",
+     "source": {
+      "label": "req.body.roth",
+      "type": "body",
+      "entry": "app/routes/contributions.js:ContributionsHandler:7",
+      "file": "app/routes/contributions.js",
+      "line": 40
+     },
+     "nodes": [],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "app/routes/contributions.js:ContributionsHandler:render:50:19",
+   "vuln_class": "xss",
+   "sink": {
+    "label": "res.render",
+    "file": "app/routes/contributions.js",
+    "line": 50,
+    "rule_id": "ts-res-render",
+    "category": "xss",
+    "code": "\n        //validate contributions\n        const validations = [isNaN(preTax), isNaN(afterTax), isNaN(roth), preTax < 0, afterTax < 0, roth < 0];\n        const isInvalid = validations.some(validation => validation);\n        if (isInvalid) {\n            return res.render(\"contributions\", {\n                updateError: \"Invalid contribution percentages\",\n                userId,\n                environmentalScripts\n            });"
+   },
+   "findings": [
+    {
+     "id": "XSS-GN-02",
+     "merge_source": "gitnexus-only",
+     "title": "xss：preTax → app/routes/contributions.js:ContributionsHandler:render:50:19",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    },
+    {
+     "id": "XSS-GN-06",
+     "merge_source": "gitnexus-only",
+     "title": "xss：afterTax → app/routes/contributions.js:ContributionsHandler:render:50:19",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    },
+    {
+     "id": "XSS-GN-10",
+     "merge_source": "gitnexus-only",
+     "title": "xss：roth → app/routes/contributions.js:ContributionsHandler:render:50:19",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "app/routes/contributions.js:ContributionsHandler:7->app/routes/contributions.js:ContributionsHandler:render:50:19",
+     "track": "gitnexus",
+     "verdict": "vulnerable",
+     "verdict_reason": "llm chain-verdict pass failed; needs human/LLM-track review",
+     "source": {
+      "label": "req.body.roth",
+      "type": "body",
+      "entry": "app/routes/contributions.js:ContributionsHandler:7",
+      "file": "app/routes/contributions.js",
+      "line": 40
+     },
+     "nodes": [],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "app/routes/contributions.js:ContributionsHandler:render:58:19",
+   "vuln_class": "xss",
+   "sink": {
+    "label": "res.render",
+    "file": "app/routes/contributions.js",
+    "line": 58,
+    "rule_id": "ts-res-render",
+    "category": "xss",
+    "code": "                environmentalScripts\n            });\n        }\n        // Prevent more than 30% contributions\n        if (preTax + afterTax + roth > 30) {\n            return res.render(\"contributions\", {\n                updateError: \"Contribution percentages cannot exceed 30 %\",\n                userId,\n                environmentalScripts\n            });"
+   },
+   "findings": [
+    {
+     "id": "XSS-GN-03",
+     "merge_source": "gitnexus-only",
+     "title": "xss：preTax → app/routes/contributions.js:ContributionsHandler:render:58:19",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    },
+    {
+     "id": "XSS-GN-07",
+     "merge_source": "gitnexus-only",
+     "title": "xss：afterTax → app/routes/contributions.js:ContributionsHandler:render:58:19",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    },
+    {
+     "id": "XSS-GN-11",
+     "merge_source": "gitnexus-only",
+     "title": "xss：roth → app/routes/contributions.js:ContributionsHandler:render:58:19",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "app/routes/contributions.js:ContributionsHandler:7->app/routes/contributions.js:ContributionsHandler:render:58:19",
+     "track": "gitnexus",
+     "verdict": "vulnerable",
+     "verdict_reason": "llm chain-verdict pass failed; needs human/LLM-track review",
+     "source": {
+      "label": "req.body.roth",
+      "type": "body",
+      "entry": "app/routes/contributions.js:ContributionsHandler:7",
+      "file": "app/routes/contributions.js",
+      "line": 40
+     },
+     "nodes": [],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "app/routes/contributions.js:ContributionsHandler:render:70:19",
+   "vuln_class": "xss",
+   "sink": {
+    "label": "res.render",
+    "file": "app/routes/contributions.js",
+    "line": 70,
+    "rule_id": "ts-res-render",
+    "category": "xss",
+    "code": "        contributionsDAO.update(userId, preTax, afterTax, roth, (err, contributions) => {\n\n            if (err) return next(err);\n\n            contributions.updateSuccess = true;\n            return res.render(\"contributions\", {\n                ...contributions,\n                environmentalScripts\n            });\n        });"
+   },
+   "findings": [
+    {
+     "id": "XSS-GN-04",
+     "merge_source": "gitnexus-only",
+     "title": "xss：preTax → app/routes/contributions.js:ContributionsHandler:render:70:19",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    },
+    {
+     "id": "XSS-GN-08",
+     "merge_source": "gitnexus-only",
+     "title": "xss：afterTax → app/routes/contributions.js:ContributionsHandler:render:70:19",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    },
+    {
+     "id": "XSS-GN-12",
+     "merge_source": "gitnexus-only",
+     "title": "xss：roth → app/routes/contributions.js:ContributionsHandler:render:70:19",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "app/routes/contributions.js:ContributionsHandler:7->app/routes/contributions.js:ContributionsHandler:render:70:19",
+     "track": "gitnexus",
+     "verdict": "vulnerable",
+     "verdict_reason": "llm chain-verdict pass failed; needs human/LLM-track review",
+     "source": {
+      "label": "req.body.roth",
+      "type": "body",
+      "entry": "app/routes/contributions.js:ContributionsHandler:7",
+      "file": "app/routes/contributions.js",
+      "line": 40
+     },
+     "nodes": [],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "app/routes/memos.js:MemosHandler:render:27:19",
+   "vuln_class": "xss",
+   "sink": {
+    "label": "res.render",
+    "file": "app/routes/memos.js",
+    "line": 27,
+    "rule_id": "ts-res-render",
+    "category": "xss",
+    "code": "            userId\n        } = req.session;\n\n        memosDAO.getAllMemos((err, docs) => {\n            if (err) return next(err);\n            return res.render(\"memos\", {\n                memosList: docs,\n                userId: userId,\n                environmentalScripts\n            });"
+   },
+   "findings": [
+    {
+     "id": "XSS-GN-13",
+     "merge_source": "gitnexus-only",
+     "title": "xss：memo → app/routes/memos.js:MemosHandler:render:27:19",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "app/routes/memos.js:MemosHandler:6->app/routes/memos.js:MemosHandler:render:27:19",
+     "track": "gitnexus",
+     "verdict": "vulnerable",
+     "verdict_reason": "llm chain-verdict pass failed; needs human/LLM-track review",
+     "source": {
+      "label": "req.body.memo",
+      "type": "body",
+      "entry": "app/routes/memos.js:MemosHandler:6",
+      "file": "app/routes/memos.js",
+      "line": 18
+     },
+     "nodes": [],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "app/routes/research.js:ResearchHandler:render:31:15",
+   "vuln_class": "xss",
+   "sink": {
+    "label": "res.render",
+    "file": "app/routes/research.js",
+    "line": 31,
+    "rule_id": "ts-res-render",
+    "category": "xss",
+    "code": "                }\n                return res.end();\n            });\n        }\n\n        return res.render(\"research\", {\n            environmentalScripts\n        });\n    };\n"
+   },
+   "findings": [
+    {
+     "id": "XSS-GN-14",
+     "merge_source": "gitnexus-only",
+     "title": "xss：symbol → app/routes/research.js:ResearchHandler:render:31:15",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    },
+    {
+     "id": "XSS-GN-15",
+     "merge_source": "gitnexus-only",
+     "title": "xss：url → app/routes/research.js:ResearchHandler:render:31:15",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "app/routes/research.js:ResearchHandler:7->app/routes/research.js:ResearchHandler:render:31:15",
+     "track": "gitnexus",
+     "verdict": "vulnerable",
+     "verdict_reason": "llm chain-verdict pass failed; needs human/LLM-track review",
+     "source": {
+      "label": "req.query.url",
+      "type": "query",
+      "entry": "app/routes/research.js:ResearchHandler:7",
+      "file": "app/routes/research.js",
+      "line": 21
+     },
+     "nodes": [],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "llm:XSS-VULN-01",
+   "vuln_class": "xss",
+   "sink": {
+    "label": "swig autoescape:false",
+    "file": "server.js",
+    "line": 137,
+    "rule_id": null,
+    "category": null,
+    "code": null
+   },
+   "findings": [
+    {
+     "id": "XSS-VULN-01",
+     "merge_source": "llm-only",
+     "title": "存储型 XSS：POST /memos 的 memo 内容经 marked@0.3.5 原样渲染到 memos.html:31",
+     "confidence": "needs_review",
+     "witness_payload": "[Nice try](javascript:alert(document.cookie))",
+     "mismatch_reason": "autoescape 全局关闭（server.js:137），sink 直接输出原始 HTML；唯一防护 marked 0.3.5 的 sanitize:true 属过时实现，可被 markdown javascript: 链接（如 `[x](javascript:alert(1))`）绕过，故为 HTML_BODY 上下文的存储型 XSS。"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "XSS-VULN-01",
+     "track": "llm",
+     "verdict": "vulnerable",
+     "verdict_reason": "autoescape 全局关闭（server.js:137），sink 直接输出原始 HTML；唯一防护 marked 0.3.5 的 sanitize:true 属过时实现，可被 markdown javascript: 链接（如 `[x](javascript:alert(1))`）绕过，故为 HTML_BODY 上下文的存储型 XSS。",
+     "source": {
+      "label": "addMemos 读 req.body.memo",
+      "type": null,
+      "entry": "GET /memos [isLoggedIn]\nPOST /memos [isLoggedIn]",
+      "file": "app/routes/memos.js",
+      "line": 14
+     },
+     "nodes": [
+      {
+       "func": "memosDAO.insert 写入共享集合并",
+       "file": "app/data/memos-dao.js",
+       "line": 15,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "displayMemos getAllMemos 读取全部文档",
+       "file": "app/data/memos-dao.js",
+       "line": 26,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "res.render('memos') 传入 memosList",
+       "file": "app/routes/memos.js",
+       "line": 29,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "textarea {{ marked(doc.memo) }} raw HTML 渲染（sink）",
+       "file": "app/views/memos.html",
+       "line": 31,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "marked.setOptions({sanitize:true})",
+       "file": "server.js",
+       "line": 126,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      }
+     ],
+     "sanitizers": [
+      {
+       "name": "marked sanitize (可绕过)",
+       "defense_type": null,
+       "file": "server.js",
+       "line": 126,
+       "effective": null
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "tree_id": "llm:XSS-VULN-02",
+   "vuln_class": "xss",
+   "sink": {
+    "label": "swig autoescape:false",
+    "file": "server.js",
+    "line": 137,
+    "rule_id": null,
+    "category": null,
+    "code": null
+   },
+   "findings": [
+    {
+     "id": "XSS-VULN-02",
+     "merge_source": "llm-only",
+     "title": "反射型 XSS：POST /login 的 userName 回显到 login.html:110 的 value 属性",
+     "confidence": "needs_review",
+     "witness_payload": "\"><script>alert(document.cookie)</script>",
+     "mismatch_reason": "userName 未做属性上下文编码直接插入 value=\"...\"，攻击者可闭合双引号注入事件处理器/标签，autoescape 关闭使其落地，构成反射型 XSS。"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "XSS-VULN-02",
+     "track": "llm",
+     "verdict": "vulnerable",
+     "verdict_reason": "userName 未做属性上下文编码直接插入 value=\"...\"，攻击者可闭合双引号注入事件处理器/标签，autoescape 关闭使其落地，构成反射型 XSS。",
+     "source": {
+      "label": "handleLoginRequest 读 req.body.userName",
+      "type": null,
+      "entry": "POST /login [none]",
+      "file": "app/routes/session.js",
+      "line": 54
+     },
+     "nodes": [
+      {
+       "func": "validateLogin 失败分支",
+       "file": "app/routes/session.js",
+       "line": 60,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "res.render('login', {userName})",
+       "file": "app/routes/session.js",
+       "line": 77,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "value=\"{{userName}}\" 属性插值（sink）",
+       "file": "app/views/login.html",
+       "line": 110,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      }
+     ],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "llm:XSS-VULN-03",
+   "vuln_class": "xss",
+   "sink": {
+    "label": "swig autoescape:false",
+    "file": "server.js",
+    "line": 137,
+    "rule_id": null,
+    "category": null,
+    "code": null
+   },
+   "findings": [
+    {
+     "id": "XSS-VULN-03",
+     "merge_source": "llm-only",
+     "title": "反射型 XSS：POST /signup 的 userName 回显到 signup.html:75 的 value 属性（公共未认证路由）",
+     "confidence": "needs_review",
+     "witness_payload": "\"><img src=x onerror=alert(document.domain)>",
+     "mismatch_reason": "userName 未经属性上下文编码直接插入 value=\"...\"，可闭合引号注入事件处理器，autoescape 关闭，构成未认证反射型 XSS。"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "XSS-VULN-03",
+     "track": "llm",
+     "verdict": "vulnerable",
+     "verdict_reason": "userName 未经属性上下文编码直接插入 value=\"...\"，可闭合引号注入事件处理器，autoescape 关闭，构成未认证反射型 XSS。",
+     "source": {
+      "label": "handleSignup 读 req.body.userName",
+      "type": null,
+      "entry": "POST /signup [none]",
+      "file": "app/routes/session.js",
+      "line": 193
+     },
+     "nodes": [
+      {
+       "func": "validateSignup 失败 或 用户名已存在分支",
+       "file": "app/routes/session.js",
+       "line": 216,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "res.render('signup', {...errors})",
+       "file": "app/routes/session.js",
+       "line": 239,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "value=\"{{userName}}\" 属性插值（sink）",
+       "file": "app/views/signup.html",
+       "line": 75,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      }
+     ],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "llm:XSS-VULN-04",
+   "vuln_class": "xss",
+   "sink": {
+    "label": "swig autoescape:false",
+    "file": "server.js",
+    "line": 137,
+    "rule_id": null,
+    "category": null,
+    "code": null
+   },
+   "findings": [
+    {
+     "id": "XSS-VULN-04",
+     "merge_source": "llm-only",
+     "title": "反射型 XSS：POST /signup 的 email 回显到 signup.html:102 的 value 属性（公共未认证路由）",
+     "confidence": "needs_review",
+     "witness_payload": "\"><svg/onload=alert(1)>",
+     "mismatch_reason": "email 未经属性编码直接插入 value=\"...\"，可注入引号与事件处理器；EMAIL_RE 校验存在但仅当回显才触发，且攻击者可提交无需通过该正则即可触发回显（如触发前序 userName 校验失败同样回显 email）。autoescape 关闭。"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "XSS-VULN-04",
+     "track": "llm",
+     "verdict": "vulnerable",
+     "verdict_reason": "email 未经属性编码直接插入 value=\"...\"，可注入引号与事件处理器；EMAIL_RE 校验存在但仅当回显才触发，且攻击者可提交无需通过该正则即可触发回显（如触发前序 userName 校验失败同样回显 email）。autoescape 关闭。",
+     "source": {
+      "label": "handleSignup 读 req.body.email",
+      "type": null,
+      "entry": "POST /signup [none]",
+      "file": "app/routes/session.js",
+      "line": 193
+     },
+     "nodes": [
+      {
+       "func": "validateSignup 失败分支",
+       "file": "app/routes/session.js",
+       "line": 216,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "res.render('signup', {...errors})",
+       "file": "app/routes/session.js",
+       "line": 239,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "value=\"{{email}}\" 属性插值（sink）",
+       "file": "app/views/signup.html",
+       "line": 102,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      }
+     ],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "llm:XSS-VULN-05",
+   "vuln_class": "xss",
+   "sink": {
+    "label": "swig autoescape:false",
+    "file": "server.js",
+    "line": 137,
+    "rule_id": null,
+    "category": null,
+    "code": null
+   },
+   "findings": [
+    {
+     "id": "XSS-VULN-05",
+     "merge_source": "llm-only",
+     "title": "反射型 XSS：POST /profile 的 firstName 在 bankRouting 校验失败时回显到 profile.html:78 的 href 链接与 :41 的 value 属性",
+     "confidence": "needs_review",
+     "witness_payload": "\"><img src=x onerror=alert(document.cookie)>",
+     "mismatch_reason": "firstNameSafeString 在 error 分支取原始 req.body.firstName 且不编码；同一变量既落入 value 属性（需属性编码）又落入 href URL 上下文（需 URL 编码），均无对应防护，hybrid 上下文下的反射型 XSS。（displayProfile 的 website 用 encodeForHTML 属于典型\"HTML 上下文编码用于 URL 上下文\"的错配，代码内 FIXME 已明示。）"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "XSS-VULN-05",
+     "track": "llm",
+     "verdict": "vulnerable",
+     "verdict_reason": "firstNameSafeString 在 error 分支取原始 req.body.firstName 且不编码；同一变量既落入 value 属性（需属性编码）又落入 href URL 上下文（需 URL 编码），均无对应防护，hybrid 上下文下的反射型 XSS。（displayProfile 的 website 用 encodeForHTML 属于典型\"HTML 上下文编码用于 URL 上下文\"的错配，代码内 FIXME 已明示。）",
+     "source": {
+      "label": "handleProfileUpdate 读 req.body.firstName 与 bankRouting",
+      "type": null,
+      "entry": "POST /profile [isLoggedIn]",
+      "file": "app/routes/profile.js",
+      "line": 42
+     },
+     "nodes": [
+      {
+       "func": "bankRouting 正则校验失败分支",
+       "file": "app/routes/profile.js",
+       "line": 52,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "firstNameSafeString = firstName（未编码）",
+       "file": "app/routes/profile.js",
+       "line": 61,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "res.render('profile', {firstNameSafeString})",
+       "file": "app/routes/profile.js",
+       "line": 62,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "value=\"{{firstNameSafeString}}\" 属性 sink",
+       "file": "app/views/profile.html",
+       "line": 41,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "<a href=\"{{firstNameSafeString}}\"> 链接 sink",
+       "file": "app/views/profile.html",
+       "line": 78,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      }
+     ],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "llm:XSS-VULN-06",
+   "vuln_class": "xss",
+   "sink": {
+    "label": "{{allocation.firstName}} {{allocation.lastName}} 原始渲染",
+    "file": "app/views/allocations.html",
+    "line": 151,
+    "rule_id": null,
+    "category": null,
+    "code": null
+   },
+   "findings": [
+    {
+     "id": "XSS-VULN-06",
+     "merge_source": "llm-only",
+     "title": "存储型 XSS：allocations.html:35 原样渲染 DB 中的 allocation.firstName/lastName（可由任意用户经 profile 写入并 IDOR 触达）",
+     "confidence": "needs_review",
+     "witness_payload": "<img src=x onerror=alert(document.cookie)>",
+     "mismatch_reason": "DB 姓名在 HTML_BODY 上下文中原样渲染，无 HTML 实体编码；由于 names 可被任意用户经 profile 写入，属可污染存储的存储型 XSS 载体。"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "XSS-VULN-06",
+     "track": "llm",
+     "verdict": "vulnerable",
+     "verdict_reason": "DB 姓名在 HTML_BODY 上下文中原样渲染，无 HTML 实体编码；由于 names 可被任意用户经 profile 写入，属可污染存储的存储型 XSS 载体。",
+     "source": {
+      "label": "handleProfileUpdate 存 raw firstName/lastName",
+      "type": null,
+      "entry": "GET /allocations/:userId [isLoggedIn]",
+      "file": "app/routes/profile.js",
+      "line": 79
+     },
+     "nodes": [
+      {
+       "func": "displayAllocations 读 req.params.userId（IDOR）",
+       "file": "app/routes/allocations.js",
+       "line": 15,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "allocations-dao join user.firstName/lastName",
+       "file": "app/data/allocations-dao.js",
+       "line": 96,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      }
+     ],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "llm:XSS-VULN-07",
+   "vuln_class": "xss",
+   "sink": {
+    "label": "{{user.firstName}} {{user.lastName}} 原始渲染",
+    "file": "app/views/benefits.html",
+    "line": 51,
+    "rule_id": null,
+    "category": null,
+    "code": null
+   },
+   "findings": [
+    {
+     "id": "XSS-VULN-07",
+     "merge_source": "llm-only",
+     "title": "存储型 XSS：benefits.html:51-52 原样渲染 users 集合中所有非 admin 用户的姓名区",
+     "confidence": "needs_review",
+     "witness_payload": "<img src=x onerror=alert(document.domain)>",
+     "mismatch_reason": "管理员面板把 DB 中的姓名以 HTML_BODY 上下文原样输出，无实体编码；姓名由任意用户可写，任何看到该面板的登录用户均触发，是与 XSS-VULN-06 同源不同 sink 的存储型 XSS。"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "XSS-VULN-07",
+     "track": "llm",
+     "verdict": "vulnerable",
+     "verdict_reason": "管理员面板把 DB 中的姓名以 HTML_BODY 上下文原样输出，无实体编码；姓名由任意用户可写，任何看到该面板的登录用户均触发，是与 XSS-VULN-06 同源不同 sink 的存储型 XSS。",
+     "source": {
+      "label": "handleProfileUpdate 存 raw firstName/lastName",
+      "type": null,
+      "entry": "GET /benefits [isLoggedIn（isAdmin 未挂载）]\nPOST /benefits [isLoggedIn（isAdmin 未挂载）]",
+      "file": "app/routes/profile.js",
+      "line": 79
+     },
+     "nodes": [
+      {
+       "func": "displayBenefits getAllNonAdminUsers",
+       "file": "app/routes/benefits.js",
+       "line": 14,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "benefits-db 读全部非 admin 用户",
+       "file": "app/data/benefits-dao.js",
+       "line": 15,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      }
+     ],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "llm:XSS-VULN-08",
+   "vuln_class": "xss",
+   "sink": {
+    "label": "{{error}} HTML 正文（sink）",
+    "file": "app/views/error-template.html",
+    "line": 11,
+    "rule_id": null,
+    "category": null,
+    "code": null
+   },
+   "findings": [
+    {
+     "id": "XSS-VULN-08",
+     "merge_source": "llm-only",
+     "title": "反射型 XSS：error-template.html:11 原样渲染全局 error 对象，NoSQL 注入阈值可经错误信息回显为 HTML",
+     "confidence": "needs_review",
+     "witness_payload": "1');throw '<img src=x onerror=alert(1)>';//",
+     "mismatch_reason": "error 对象在 HTML_BODY 上下文原样输出且无任何编码；当错误信息中嵌入攻击者可控字符串（如 threshold 注入词）时可构成反射型 XSS 载体。可达性依赖具体报错信息格式是否逐字回显用户串，故置信度低。"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "XSS-VULN-08",
+     "track": "llm",
+     "verdict": "vulnerable",
+     "verdict_reason": "error 对象在 HTML_BODY 上下文原样输出且无任何编码；当错误信息中嵌入攻击者可控字符串（如 threshold 注入词）时可构成反射型 XSS 载体。可达性依赖具体报错信息格式是否逐字回显用户串，故置信度低。",
+     "source": {
+      "label": "displayAllocations 读 req.query.threshold",
+      "type": null,
+      "entry": "GET /allocations/:userId [isLoggedIn]",
+      "file": "app/routes/allocations.js",
+      "line": 18
+     },
+     "nodes": [
+      {
+       "func": "threshold 拼接进 $where 字面串",
+       "file": "app/data/allocations-dao.js",
+       "line": 79,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "Mongo $where 报错 next(err)",
+       "file": "app/routes/allocations.js",
+       "line": 24,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "errorHandler res.render 渲染 error 对象",
+       "file": "app/routes/error.js",
+       "line": 10,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      }
+     ],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "llm:XSS-VULN-09",
+   "vuln_class": "xss",
+   "sink": {
+    "label": "value=\"{{user.benefitStartDate}}\" 属性 sink",
+    "file": "app/views/benefits.html",
+    "line": 57,
+    "rule_id": null,
+    "category": null,
+    "code": null
+   },
+   "findings": [
+    {
+     "id": "XSS-VULN-09",
+     "merge_source": "llm-only",
+     "title": "存储型 XSS：POST /benefits 将任意 userId 的 benefitStartDate 原样入库后在 benefits.html:57 的 value 属性渲染（IDOR 写入 + 属性越权回显）",
+     "confidence": "needs_review",
+     "witness_payload": "\"><svg/onload=alert(document.cookie)>",
+     "mismatch_reason": "攻击者可控的 benefitStartDate 未编码入库并在 value 属性上下文原样回显，可闭合引号注入事件处理器；(isAdmin 未挂载 + userId 来自 body) 使任意登录用户都能写任意目标，构成存储型 XSS 并横向投放。"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "XSS-VULN-09",
+     "track": "llm",
+     "verdict": "vulnerable",
+     "verdict_reason": "攻击者可控的 benefitStartDate 未编码入库并在 value 属性上下文原样回显，可闭合引号注入事件处理器；(isAdmin 未挂载 + userId 来自 body) 使任意登录用户都能写任意目标，构成存储型 XSS 并横向投放。",
+     "source": {
+      "label": "updateBenefits 读 req.body.userId + benefitStartDate",
+      "type": null,
+      "entry": "POST /benefits [isLoggedIn（isAdmin 未挂载）]\nGET /benefits [isLoggedIn（isAdmin 未挂载）]",
+      "file": "app/routes/benefits.js",
+      "line": 30
+     },
+     "nodes": [
+      {
+       "func": "benefits-db $set benefitStartDate（IDOR 写入）",
+       "file": "app/data/benefits-dao.js",
+       "line": 27,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "displayBenefits getAllNonAdminUsers 读回",
+       "file": "app/routes/benefits.js",
+       "line": 14,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      }
+     ],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "app/routes/research.js:ResearchHandler:get:16:19",
+   "vuln_class": "ssrf",
+   "sink": {
+    "label": "needle.get",
+    "file": "app/routes/research.js",
+    "line": 16,
+    "rule_id": "ts-needle-get",
+    "category": "ssrf",
+    "code": "\n    this.displayResearch = (req, res) => {\n\n        if (req.query.symbol) {\n            const url = req.query.url + req.query.symbol;\n            return needle.get(url, (error, newResponse, body) => {\n                if (!error && newResponse.statusCode === 200) {\n                    res.writeHead(200, {\n                        \"Content-Type\": \"text/html\"\n                    });"
+   },
+   "findings": [
+    {
+     "id": "SSRF-GN-01",
+     "merge_source": "gitnexus-only",
+     "title": "ssrf：symbol → app/routes/research.js:ResearchHandler:get:16:19",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    },
+    {
+     "id": "SSRF-GN-02",
+     "merge_source": "gitnexus-only",
+     "title": "ssrf：url → app/routes/research.js:ResearchHandler:get:16:19",
+     "confidence": "needs_review",
+     "witness_payload": null,
+     "mismatch_reason": "llm chain-verdict pass failed; needs human/LLM-track review"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "app/routes/research.js:ResearchHandler:7->app/routes/research.js:ResearchHandler:get:16:19",
+     "track": "gitnexus",
+     "verdict": "vulnerable",
+     "verdict_reason": "llm chain-verdict pass failed; needs human/LLM-track review",
+     "source": {
+      "label": "req.query.url",
+      "type": "query",
+      "entry": "app/routes/research.js:ResearchHandler:7",
+      "file": "app/routes/research.js",
+      "line": 21
+     },
+     "nodes": [],
+     "sanitizers": []
+    }
+   ]
+  },
+  {
+   "tree_id": "llm:SSRF-VULN-01",
+   "vuln_class": "ssrf",
+   "sink": {
+    "label": "res.write(body) 回显响应",
+    "file": "app/routes/research.js",
+    "line": 25,
+    "rule_id": null,
+    "category": null,
+    "code": null
+   },
+   "findings": [
+    {
+     "id": "SSRF-VULN-01",
+     "merge_source": "llm-only",
+     "title": "SSRF：GET /research 的 url 参数拼接后经 needle.get 服务端发起任意请求，可访问内网与云元数据",
+     "confidence": "needs_review",
+     "witness_payload": "http://169.254.169.254/latest/meta-data/",
+     "mismatch_reason": "服务端对 url 参数无任何 scheme/host/IP/端口白名单或黑名单校验，url+symbol 原样拼接后直接交给 needle.get"
+    }
+   ],
+   "branches": [
+    {
+     "branch_id": "SSRF-VULN-01",
+     "track": "llm",
+     "verdict": "unknown",
+     "verdict_reason": "服务端对 url 参数无任何 scheme/host/IP/端口白名单或黑名单校验，url+symbol 原样拼接后直接交给 needle.get",
+     "source": {
+      "label": "displayResearch: req.query.url 读取",
+      "type": null,
+      "entry": "GET /research",
+      "file": "app/routes/research.js",
+      "line": 15
+     },
+     "nodes": [
+      {
+       "func": "字符串拼接 url+symbol",
+       "file": "app/routes/research.js",
+       "line": 15,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      },
+      {
+       "func": "needle.get(url) 服务端请求",
+       "file": "app/routes/research.js",
+       "line": 16,
+       "transformation": null,
+       "intermediate_vars": [],
+       "code": null,
+       "has_code": false
+      }
+     ],
+     "sanitizers": []
+    }
+   ]
+  }
+ ],
+ "control_findings": [
+  {
+   "id": "AUTH-VULN-01",
+   "vuln_class": "auth",
+   "endpoint": "POST /login",
+   "chain": [
+    {
+     "label": "登录成功后未轮换会话 ID：handleLoginRequest 直接执行 req.session.userId = user._id，而未调用 req.session.regenerate()；对照 POST /signup 的 session.js:234 已正确 regenerate（修复代码在 session.js:104-115 被注释）。",
+     "status": "missing",
+     "detail": "攻击者可先登录（或访问 pre-auth 路由获得一个 connect.sid），在受害者尚未认证时把该会话 ID 注入/设置到受害者浏览器；受害者随后用该固定会话 ID 登录成功，攻击者复用同一会话 ID 即获得受害者的已认证会话，直接接管其账户，无需知道密码。",
+     "file": "app/routes/session.js",
+     "line": 116
+    }
+   ]
+  },
+  {
+   "id": "AUTH-VULN-02",
+   "vuln_class": "auth",
+   "endpoint": "POST /login",
+   "chain": [
+    {
+     "label": "登录/注册流程没有任何速率限制、账户锁定/退避或 CAPTCHA：全代码库无 express-rate-limit、无失败计数、无 lockout 逻辑（grep 无命中），express-session 配置亦无防滥用项。",
+     "status": "missing",
+     "detail": "攻击者可以无限制地对 POST /login 发起批量口令猜测（暴力破解/撞库/口令喷洒），直到命中正确密码登录成功；对本应用中已公开的默认口令（admin/Admin_123）更是直接确认即可登录管理账户。由于登录错误信息可区分用户名与密码（AUTH-VULN-05），攻击者还能先枚举有效用户名再定向爆破。",
+     "file": "app/routes/session.js:53-119（handleLoginRequest）；app/routes/index.js",
+     "line": 34
+    }
+   ]
+  },
+  {
+   "id": "AUTH-VULN-03",
+   "vuln_class": "auth",
+   "endpoint": "POST /login",
+   "chain": [
+    {
+     "label": "express-session 的 cookie 选项块被整体注释（server.js:92-100），导致会话 cookie connect.sid 无 httpOnly、无 Secure、无 SameSite 标志。同时 express-session 未设 maxAge/idle/absolute timeout（server.js:94 TODO 被注释），会话无过期时限。",
+     "status": "missing",
+     "detail": "应用存在大量存储/反射 XSS（autoescape 关闭、marked 0.3.5 原样渲染），配合无 httpOnly 的 connect.sid cookie，攻击者可用 JS 读取会话 cookie 并通过 document.cookie 窃取；在明文 HTTP 下 Secure 缺失使 cookie 可被网络嗅探；无过期时限使被盗会话长期有效。窃取会话 ID 后攻击者即可冒充受害者（含 admin）在线会话执行任意操作。",
+     "file": "server.js:78-102（express-session 配置；cookie 选项块 92-100 被注释）",
+     "line": null
+    }
+   ]
+  },
+  {
+   "id": "AUTH-VULN-04",
+   "vuln_class": "auth",
+   "endpoint": "POST /login",
+   "chain": [
+    {
+     "label": "服务只以明文 HTTP 监听（server.js:145-147），HTTPS 监听与 TLS 密钥加载被注释（149-155），HSTS/helmet 未启用（server.js:40-65）。登录/认证响应也未设置 Cache-Control: no-store（全代码库无该头）。",
+     "status": "missing",
+     "detail": "攻击者可在同一网络的旁路/中间人位置嗅探 POST /login 的纯文本凭据或 connect.sid 会话 cookie（无 Secure 标志），提取明文的密码与已认证会话；结合无缓存防护，浏览器中间设备也可能缓存含认证状态的页面。成功后直接获得受害者的登录口令与在线会话。",
+     "file": "server.js:145-147（http.createServer）；server.js:18-28,149-155（https 被注释）；server.js:40-65（helmet/HSTS 被注释）",
+     "line": null
+    }
+   ]
+  },
+  {
+   "id": "AUTH-VULN-05",
+   "vuln_class": "auth",
+   "endpoint": "POST /login",
+   "chain": [
+    {
+     "label": "handleLoginRequest 对 err.noSuchUser 返回 \"Invalid username\"（session.js:85），对 err.invalidPassword 返回 \"Invalid password\"（session.js:94），两条错误分支可区分；统一为 \"Invalid username and/or password\" 的修复在 session.js:86-87,95-96 被注释。",
+     "status": "missing",
+     "detail": "攻击者可通过批量提交候选用户名 + 任意密码，根据不同的登录错误文案判定目标用户名是否真实存在，从而枚举系统内全部有效账户；随后对已确认的用户名实施定向爆破或口令喷洒，提升命中率并锁定攻击对象（如 admin）。",
+     "file": "app/routes/session.js:60-61,85,94（错误信息分支）",
+     "line": null
+    }
+   ]
+  },
+  {
+   "id": "AUTH-VULN-06",
+   "vuln_class": "auth",
+   "endpoint": "POST /signup",
+   "chain": [
+    {
+     "label": "addUser 将 password 直接存为明文（user-dao.js:25 `password`），bcrypt.hashSync 修复在 26-30 被注释；validateLogin 的 comparePassword 用 `fromDB === fromUser` 明文比较（user-dao.js:61），bcrypt.compareSync 修复在 62-66 被注释。",
+     "status": "missing",
+     "detail": "一旦数据库或备份泄露（MongoDB :27017 无认证暴露），所有用户密码以明文形式直接可读；攻击者无需哈希破解即可获得全部口令，并可用于对本站及其他站点（同名复用密码）实施撞库。即使无数据泄露，明文比较也允许对 db 值进行直接猜测。",
+     "file": "app/data/user-dao.js:25（addUser 明文存储）；app/data/user-dao.js:60-61（comparePassword 明文等于比较）",
+     "line": null
+    }
+   ]
+  },
+  {
+   "id": "AUTH-VULN-07",
+   "vuln_class": "auth",
+   "endpoint": "POST /signup",
+   "chain": [
+    {
+     "label": "validateSignup 只校验密码为 1-20 任意字符（session.js:144 `PASS_RE=/^.{1,20}$/`），服务端强密码正则（需含数字与大小写、至少 8 位）在 145-149 被注释；注释中的纯客户端错误文案与强制策略不符。",
+     "status": "missing",
+     "detail": "攻击者可注册（或诱导他人注册）密码为单个字符的极弱账户，便于后续口令猜测；更重要的是系统内既有账户（尤其 admin/Admin_123、user1/User1_123、user2/User2_123）密码均为简单可猜测组合，可被高频口令喷洒轻松命中。",
+     "file": "app/routes/session.js:144（PASS_RE=/^.{1,20}$/）",
+     "line": null
+    }
+   ]
+  },
+  {
+   "id": "AUTH-VULN-08",
+   "vuln_class": "auth",
+   "endpoint": "GET /tutorial/a7",
+   "chain": [
+    {
+     "label": "上传通无认证的 /tutorial 路由（index.js:79）在 a7.html:31 明文公开 \"user: admin, password: Admin_123\"；种子脚本 artifacts/db-reset.js:15-18 以明文创建该 admin 默认口令，README.md:22 亦公开。系统无强制修改默认口令机制。",
+     "status": "missing",
+     "detail": "攻击者访问公开的 /tutorial/a7 页面直接获得 admin 的精确口令，随后以 admin 身份登录 /login 获得最高权限会话，接管整个后台（admin 可在 /benefits 查看/修改所有员工福利数据），实现从匿名到 admin 的垂直权限接管。",
+     "file": "app/views/tutorial/a7.html:31；artifacts/db-reset.js:15-18；README.md",
+     "line": 22
+    }
+   ]
+  },
+  {
+   "id": "AUTH-VULN-09",
+   "vuln_class": "auth",
+   "endpoint": "POST /login",
+   "chain": [
+    {
+     "label": "express-session 的签名密钥在 config/env/all.js:8 硬编码为占位符明文 \"session_cookie_secret_key_here\"，且 config/config.js:12-13 在启动日志中明文输出整个 config；密钥无环境变量隔离或轮换机制。",
+     "status": "missing",
+     "detail": "攻击者从公开源码/日志即可获知会话签名密钥，可构造/伪造合法的 connect.sid 签名 cookie；配合会话固定（AUTH-VULN-01，connect.sid 无 regenerate）与 MemoryStore 无超时的会话机制，攻击者得以在受害者的浏览器注入预签名会话 ID，实现确定性会话伪造与冒用，无需拦截真实会话。",
+     "file": "config/env/all.js:8（cookieSecret：\"session_cookie_secret_key_here\"）；config/config.js:12-13（日志打印）",
+     "line": null
+    }
+   ]
+  },
+  {
+   "id": "AUTH-VULN-10",
+   "vuln_class": "auth",
+   "endpoint": "POST /login",
+   "chain": [
+    {
+     "label": "express-session 仅配置 secret/saveUninitialized/resave（server.js:82-85），未设置 cookie.maxAge、rolling、绝对超时或空闲超时；server.js:94 的 `// TODO: Add \"maxAge\"` 与整块 cookie 选项被注释，会话在 MemoryStore 中永久有效直至用户主动 /logout。",
+     "status": "missing",
+     "detail": "一旦攻击者窃取到某个 connect.sid（通过 XSS、嗅探或会话固定注入），该会话在没有用户主动登出的情况下永不过期；受害者可能长期不再登录，被盗会话成为长期后门，攻击者可随时以受害者身份（含 admin）操作账户。",
+     "file": "server.js:78-102（express-session 配置无 maxAge/cookie.expires；server.js:94 TODO 被注释）",
+     "line": null
+    }
+   ]
+  },
+  {
+   "id": "AUTH-VULN-11",
+   "vuln_class": "auth",
+   "endpoint": "GET /logout",
+   "chain": [
+    {
+     "label": "/logout 以 GET 方法挂载并在 index.js:41 无任何 CSRF 防护（csurf 全局被注释 server.js:104-113）；session.js:121-123 直接 req.session.destroy() 无方法限定/令牌校验。logout 也作为 pre-auth 路由注册。",
+     "status": "missing",
+     "detail": "攻击者可在恶意页面嵌入 <img src=\"/logout\"> 或诱导点击链接，受害者在已登录状态下浏览器自动发起 GET /logout，其会话被强制销毁并重定向；反复触发可造成用户无法维持登录，作为低危骚扰/诱导配合钓鱼（受害者重新登录时可配合会话固定）使用。",
+     "file": "app/routes/session.js:121-123（displayLogoutPage 绑定为 GET）；app/routes/index.js",
+     "line": 41
+    }
+   ]
+  },
+  {
+   "id": "AUTHZ-VULN-01",
+   "vuln_class": "authz",
+   "endpoint": "GET /benefits + POST /benefits",
+   "chain": [
+    {
+     "label": "isAdminUserMiddleware 在 session.js:25-34 定义但从未挂载到任何路由，index.js:57-60 的修复被注释；两个路由仅用 isLoggedIn；benefits.js:21-24 还把 user.isAdmin 硬编码为 true",
+     "status": "ineffective",
+     "detail": "isAdminUserMiddleware 在 session.js:25-34 定义但从未挂载到任何路由，index.js:57-60 的修复被注释；两个路由仅用 isLoggedIn；benefits.js:21-24 还把 user.isAdmin 硬编码为 true",
+     "file": "app/routes/index.js:55-60（isAdmin 挂载被注释）",
+     "line": null
+    }
+   ]
+  },
+  {
+   "id": "AUTHZ-VULN-02",
+   "vuln_class": "authz",
+   "endpoint": "GET /allocations/:userId",
+   "chain": [
+    {
+     "label": "authz guard",
+     "status": "ineffective",
+     "detail": "目标 userId 取自 req.params 而非 req.session，isLoggedIn 只验证已登录，无任何所有权校验，直接查询任意 user 的 allocations 并回填其姓名",
+     "file": "app/routes/allocations.js:16-18 → app/data/allocations-dao.js:57-110",
+     "line": null
+    }
+   ]
+  },
+  {
+   "id": "AUTHZ-VULN-04",
+   "vuln_class": "authz",
+   "endpoint": "GET /tutorial/a7",
+   "chain": [
+    {
+     "label": "authz guard",
+     "status": "ineffective",
+     "detail": "tutorial 路由未加认证中间件，且教程源码内置生产默认管理员口令，未认证即可获知会凭据实现垂直提权",
+     "file": "app/views/tutorial/a7.html:31（tutorial 路由 index.js:79 无认证）",
+     "line": null
+    }
+   ]
+  },
+  {
+   "id": "AUTHZ-VULN-05",
+   "vuln_class": "authz",
+   "endpoint": "GET /memos + POST /memos",
+   "chain": [
+    {
+     "label": "authz guard",
+     "status": "ineffective",
+     "detail": "看板设计为全局共享但无 per-user 隔离，任何用户内容可触达所有用户包括 admin，叠加 marked 渲染的存储型 XSS 形成面向高权限的交付通道",
+     "file": "app/data/memos-dao.js:15-24,26-35",
+     "line": null
+    }
+   ]
+  },
+  {
+   "id": "AUTHZ-VULN-06",
+   "vuln_class": "authz",
+   "endpoint": "POST /profile, /contributions, /memos, /benefits",
+   "chain": [
+    {
+     "label": "authz guard",
+     "status": "ineffective",
+     "detail": "无 CSRF token 校验、无 SameSite 属性，攻击者可跨站伪造已认证会话的请求，驱动会话绑定用户执行任意状态变更",
+     "file": "server.js:104-113（csrf 中间件被注释）",
+     "line": null
+    }
+   ]
+  }
+ ],
+ "safe_vectors": [
+  {
+   "subject": "userName (POST /login)",
+   "location": "app/routes/session.js:54-58",
+   "defense_mechanism": "作为 MongoDB findOne 查询对象的值传入 `{userName}`，非字符串拼接，value 槽无注入风险",
+   "render_context": null
+  },
+  {
+   "subject": "password (POST /login)",
+   "location": "app/routes/session.js:57 / user-dao.js:60-66",
+   "defense_mechanism": "仅作返回值与数据库明文密码做相等比较，未进入任何查询/命令字符串，无注入表面",
+   "render_context": null
+  },
+  {
+   "subject": "userName / email (POST /signup)",
+   "location": "app/routes/session.js:191-198 / user-dao.js:17-47",
+   "defense_mechanism": "经 structured insert 写入 `{userName,email,...}` 文档，非字符串拼接查询，无注入风险",
+   "render_context": null
+  },
+  {
+   "subject": "benefitStartDate (POST /benefits)",
+   "location": "app/routes/benefits.js:30-33 / benefits-dao.js:23-39",
+   "defense_mechanism": "作为 `$set:{benefitStartDate}` 结构化更新值传入，userId 经 parseInt 转数字，无字符串注入",
+   "render_context": null
+  },
+  {
+   "subject": "memo (POST /memos)",
+   "location": "app/routes/memos.js:13 / memos-dao.js:15-24",
+   "defense_mechanism": "作为 `{memo}` 文档字段结构化 insert，非查询/指令拼接，无后端命令注入（但存在 marked 渲染 XSS，属另一分析面）",
+   "render_context": null
+  },
+  {
+   "subject": "firstName/lastName/ssn/dob/address/bankAcc/bankRouting (POST /profile)",
+   "location": "app/routes/profile.js:42-50 / profile-dao.js:42-92",
+   "defense_mechanism": "作为结构化 `$set` 值写入，无字符串拼接进查询/命令；仅存在 ReDoS 与明文存储/自 XSS 等其它面",
+   "render_context": null
+  },
+  {
+   "subject": "userId (GET /allocations/:userId)",
+   "location": "app/routes/allocations.js:16-18 / allocations-dao.js:58",
+   "defense_mechanism": "userId 在 DAO line58 经 parseInt 转数字后再进入 $where 模板，故该源不可注入（IDOR 属越权面）",
+   "render_context": null
+  },
+  {
+   "subject": "password（POST /login）",
+   "location": "app/routes/session.js:88,97",
+   "defense_mechanism": "登录失败分支将 password 置为空串再回显，不反射用户输入",
+   "render_context": "HTML_ATTRIBUTE"
+  },
+  {
+   "subject": "updateError（POST /contributions）",
+   "location": "app/routes/contributions.js:54,64",
+   "defense_mechanism": "updateError 为固定字面量（\"Invalid contribution percentages\" / \"cannot exceed 30%\"），非用户可控",
+   "render_context": "HTML_BODY"
+  },
+  {
+   "subject": "preTax/afterTax/roth（POST /contributions）",
+   "location": "app/routes/contributions.js:32-34",
+   "defense_mechanism": "经 eval 求值后为数值类型，模板内 default(0) 显示百分比数字；RCE 属注入分析范畴而非 XSS sink",
+   "render_context": "HTML_BODY"
+  },
+  {
+   "subject": "environmentalScripts（config）",
+   "location": "app/views/layout.html:126 / login.html:146 / signup.html:126",
+   "defense_mechanism": "源为 config/env 的静态数组（非用户输入），虽以 {{script}} 原样输出但内容不受外部控制",
+   "render_context": "JAVASCRIPT_STRING"
+  },
+  {
+   "subject": "website（GET /profile）",
+   "location": "app/routes/profile.js:28",
+   "defense_mechanism": "displayProfile 对 doc.website 用 ESAPI.encodeForHTML 编码后再渲染，故在 value 属性上下文无注入",
+   "render_context": "HTML_ATTRIBUTE"
+  },
+  {
+   "subject": "href=/allocations/{{userId}}（layout 导航）",
+   "location": "app/views/layout.html:56",
+   "defense_mechanism": "userId 来自 req.session 且为强类型数值 ID，虽未编码但不可控，风险低",
+   "render_context": "URL_PARAM"
+  }
+ ]
+}
