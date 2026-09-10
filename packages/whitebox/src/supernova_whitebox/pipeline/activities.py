@@ -5,7 +5,7 @@ import logging
 import time
 import os
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from temporalio import activity
@@ -49,6 +49,7 @@ from supernova_core.config.concurrency import (
 from supernova_core.prompts.manager import PromptManager
 from supernova_core.session import SessionManager
 from supernova_whitebox.audit.session import AuditSession
+from supernova_whitebox.audit.session_registry import get_audit_session
 from supernova_core.audit.session_recovery import (
     build_headless_audit_session,
     ensure_audit_session,
@@ -2419,14 +2420,18 @@ def _sink_file_key(card: object) -> str:
     2. dataflow_steps 末步 file——GN 轨卡（sink_function 常为裸 'render'）。
     3. 都提不出 → ""（authz 等非 taint 卡无 sink 概念，同类卡共享
        handler/middleware 读码，按序聚片恰好合理）。
+
+    输入两种形态都吃：queue pydantic 模型（poc-agent 路径）与原始 dict
+    （adversarial review 从 JSON 直读的 queue entries，2026-09-10）。
     """
     for attr in ("sink_call", "sink_function"):
-        v = getattr(card, attr, None)
+        v = card.get(attr) if isinstance(card, dict) else getattr(card, attr, None)
         if isinstance(v, str):
             m = _SINK_FILE_RE.search(v)
             if m:
                 return m.group(1)
-    steps = getattr(card, "dataflow_steps", None)
+    steps = (card.get("dataflow_steps") if isinstance(card, dict)
+             else getattr(card, "dataflow_steps", None))
     if isinstance(steps, list) and steps:
         last = steps[-1]
         if isinstance(last, dict):
@@ -2585,6 +2590,292 @@ async def _write_agent_pocs(
     # 失败均不阻塞其余。结果按类序拼接（稳定输出序）。
     results = await asyncio.gather(*(_one_class(vc) for vc in classes))
     return [vid for r in results for vid in r]
+
+
+@activity.defn
+async def run_adversarial_review(input: ActivityInput) -> None:
+    """对抗性审查（spec 2026-09-10）：merge 后逐卡反驳，refuted 剔卡+归档。
+
+    POC 同款组织：sink 文件聚类分片 + scan 级 Semaphore 并发；片失败/
+    打捞失败/预算超限 → unreviewed 保守放行（通道失败 ≠ 判了误报）。
+    non-fatal（审查挂了保守放行，不阻塞主流程），开关关时直接 return。
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        await ensure_audit_session(input)  # worker 重启后可观测恢复(幂等)
+        _, deliverables, _ = _get_paths(input)
+        # spec §4.3 activity 骨架：ensure_audit_session → _get_paths →
+        # track_step（phase/step slug 均 "adversarial-review"，对齐
+        # gn-finding-enrichment :1624 的 async with 形态）。
+        async with get_audit_session().track_step(
+                "adversarial-review", "adversarial-review",
+                intent=intent_for("adversarial-review")):
+            await _run_adversarial_review_for_classes(
+                deliverables=deliverables, repo_path=str(input.repo_path),
+                provider_config=input.provider_config)
+    except Exception as exc:  # noqa: BLE001 — non-fatal：审查挂了保守放行
+        log.warning("adversarial review failed (non-blocking): %s", exc)
+
+
+async def _run_adversarial_review_for_classes(
+    *, deliverables: Path, repo_path: str, provider_config: dict | None,
+) -> None:
+    """对抗性审查内核（壳 run_adversarial_review 的可测主体，对齐
+    write_agent_poc → _write_agent_pocs 拆法）。deliverables 是 whitebox 桶根
+    （_get_paths 中位，同 _write_agent_pocs 口径）。
+
+    五类各读 <vc>_exploitation_queue.json，目标卡按 sink 文件聚类分片，每片
+    一次 run_gitnexus_verdict_agent（多轮可 grep/read 回读源码找反证）→
+    validate_review_cards L0-L4 校验（refuted 高门槛 + 证据存在性）→ 类级
+    gather 后统一写回 queue + dismissed 归档一次。产物
+    intermediate/adversarial_review.json 即 checkpoint：已有终态
+    （survived/refuted）记录的卡不重审；refuted 剔卡 +
+    dismissed_findings.json 归档（dismissed_at_stage=adversarial-review）。
+    """
+    from supernova_core.collectors.adversarial_review import (
+        ADVERSARIAL_REVIEW_AGENT_SCHEMA, extract_review_payload,
+        validate_review_cards,
+    )
+    from supernova_core.config.concurrency import (
+        get_adversarial_review_concurrency, get_adversarial_review_max_agents,
+        get_adversarial_review_max_turns, get_adversarial_review_shard_max_cards,
+        is_adversarial_review_enabled,
+    )
+    from supernova_core.services.dismissed_archive import append_dismissed
+
+    if not is_adversarial_review_enabled():
+        return
+    prompts_dir = Path(__file__).resolve().parents[5] / "prompts"
+    prompt_manager = PromptManager(prompts_dir)
+    max_turns = get_adversarial_review_max_turns()
+    shard_max = get_adversarial_review_shard_max_cards()
+    budget = get_adversarial_review_max_agents()
+    classes = ("injection", "xss", "ssrf", "authz", "auth")
+    # 类间并行（对齐 _write_agent_pocs 的 5 类 gather 先例——spec §4.3）+
+    # 类内片间并行：一个 scan 级 Semaphore 统一限流（防类×片并发叠加放大
+    # 429 暴露面）。
+    sem = asyncio.Semaphore(get_adversarial_review_concurrency())
+    review_path = intermediate_path(deliverables, "adversarial_review.json")
+    dismissed_path = intermediate_path(deliverables, "dismissed_findings.json")
+
+    # 产物即 checkpoint：已有终态（survived/refuted）记录的卡不重审。
+    # 键 = (vuln_class, finding_id)：卡 ID 命名空间跨类不保证唯一（不同类都
+    # 可能有 F-001），单 ID 键会跨类误跳审——保守不误删但 unreviewed 卡永远
+    # 补不了审，语义错。
+    prior_records: dict[tuple[str, str], dict] = {}
+    if review_path.exists():
+        try:
+            prior = json.loads(review_path.read_text(encoding="utf-8"))
+            for r in prior.get("records", []):
+                if isinstance(r, dict) and r.get("review_verdict") in (
+                        "survived", "refuted"):
+                    prior_records[(str(r.get("vuln_class")),
+                                   str(r.get("finding_id")))] = r
+        except (json.JSONDecodeError, OSError):
+            pass  # 损坏 → 当作无 checkpoint 全量重审
+
+    launched = 0  # 预算护栏计数
+
+    async def _one_class(vuln_class: str) -> tuple[list[dict], list[dict], list[dict]]:
+        """返回 (kept_entries, new_records, dismissed_entries)，由调用方统一落盘。"""
+        queue_path = resolve_intermediate(deliverables,
+                                          f"{vuln_class}_exploitation_queue.json")
+        if queue_path is None or not queue_path.exists():
+            return [], [], []
+        # queue 读兜底（fix 2026-09-11 review I2）：坏文件该类按空处理
+        # （records 空 → 收口处不覆写 queue），不让单类坏文件炸整轮审查。
+        try:
+            data = json.loads(queue_path.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as exc:  # JSONDecodeError/UnicodeDecodeError/IO
+            logger.warning("adversarial review: %s queue unreadable, "
+                           "class skipped: %s", vuln_class, exc)
+            return [], [], []
+        entries = data.get("vulnerabilities") if isinstance(data, dict) else None
+        if not isinstance(entries, list):
+            return [], [], []
+        targets = [e for e in entries
+                   if isinstance(e, dict)
+                   and e.get("verdict") != "not_vulnerable"
+                   and (vuln_class, str(e.get("ID", ""))) not in prior_records]
+        shards = _group_poc_targets(targets, shard_max)
+
+        def _all_unreviewed(shard: list[dict]) -> list[tuple[dict, dict]]:
+            return [(e, _record(vuln_class, e, "unreviewed", None,
+                                {"action": "kept"})) for e in shard]
+
+        async def _one_shard(idx: int, shard: list[dict]) -> list[tuple[dict, dict]]:
+            """单片 → 该片 (entry, record) 对；失败 → 全部 unreviewed。"""
+            nonlocal launched
+            agent_name = f"adv-review-{vuln_class}-{idx + 1:02d}"
+            by_id = {str(e.get("ID")): e for e in shard}
+            try:
+                async with sem:
+                    if launched >= budget:
+                        return _all_unreviewed(shard)
+                    launched += 1
+                    prompt = prompt_manager.load_sync(
+                        "adversarial-review", variables={
+                            "VULN_CLASS": vuln_class,
+                            "REPO_ROOT": repo_path,
+                            "FINDING_CARDS": json.dumps(
+                                shard, ensure_ascii=False, indent=2),
+                        })
+                    result = await run_gitnexus_verdict_agent(
+                        prompt=prompt, repo_path=repo_path,
+                        structured_output_schema=ADVERSARIAL_REVIEW_AGENT_SCHEMA,
+                        audit_session=get_audit_session(),
+                        provider_config=provider_config,
+                        max_turns=max_turns, agent_name=agent_name)
+                # validate 及其后处理留在兜内（fix 2026-09-11 review I2）：
+                # validate 层任何未预见的畸形（实证一例：null-byte location 曾
+                # 使 fpath.resolve() 抛 ValueError）按全片 unreviewed 保守放行，
+                # 不逃逸炸掉剩余类 → 已剔卡失去审查记录且重试不重建。
+                raw = result.structured_output
+                if raw is None and getattr(result, "text", None):
+                    # 打捞兜底（对齐 _write_agent_pocs）：structured_output=None 但
+                    # text 里常有成型/围栏 JSON——救不回走 unreviewed。
+                    raw = extract_review_payload(result.text)
+                cards = raw.get("cards") if isinstance(raw, dict) else None
+                if not cards:
+                    logger.warning("adversarial review: %s returned no cards "
+                                   "(findings left unreviewed)", agent_name)
+                    return _all_unreviewed(shard)
+                # valid_ids 限片内（不是全类）：片 A agent 幻觉返回片 B 的 ID
+                # 不越片生效（对齐 validate_pocs 用法）。
+                res = validate_review_cards(
+                    cards, valid_ids=set(by_id), vuln_class=vuln_class,
+                    repo_root=Path(repo_path))
+                for _rej, reason in res.rejected:
+                    logger.warning("adversarial review: %s card rejected: %s",
+                                   agent_name, reason)
+                out: list[tuple[dict, dict]] = []
+                seen: set[str] = set()
+                for card in res.accepted:
+                    fid = card["vulnerability_id"]
+                    if fid in seen or fid not in by_id:
+                        continue
+                    seen.add(fid)
+                    entry = by_id[fid]
+                    verdict = card["review_verdict"]
+                    after = ({"action": "dismissed"} if verdict == "refuted"
+                             else {"action": "kept"})
+                    out.append((entry, _record(vuln_class, entry, verdict, card, after)))
+                for e in shard:  # agent 漏答的卡 → unreviewed
+                    if str(e.get("ID")) not in seen:
+                        out.append((e, _record(vuln_class, e, "unreviewed", None,
+                                               {"action": "kept"})))
+                return out
+            except Exception as exc:  # noqa: BLE001 — 诚实缺失/后处理兜底
+                logger.warning("adversarial review: %s failed: %s",
+                               agent_name, exc)
+                return _all_unreviewed(shard)
+
+        # return_exceptions 兜底（fix 2026-09-11 review I2）：任何单点异常只
+        # 降级该片（全 unreviewed），不逃逸中断其余片/类。
+        shard_results = await asyncio.gather(
+            *(_one_shard(i, s) for i, s in enumerate(shards)),
+            return_exceptions=True)
+        pairs: list[tuple[dict, dict]] = []
+        for i, r in enumerate(shard_results):
+            if isinstance(r, BaseException):
+                logger.warning("adversarial review: adv-review-%s-%02d "
+                               "crashed: %s", vuln_class, i + 1, r)
+                pairs.extend(_all_unreviewed(shards[i]))
+            else:
+                pairs.extend(r)
+        # refuted 剔卡用 ID 集合差集（不依赖对象恒等——queue entries 反序列化
+        # 后与片内引用同源，但 ID 差集对任何引用形态都稳）。
+        refuted_ids = {p[1]["finding_id"] for p in pairs
+                       if p[1]["review_verdict"] == "refuted"}
+        kept = [e for e in entries
+                if not (isinstance(e, dict) and str(e.get("ID")) in refuted_ids)]
+        dismissed = [_dismissed_entry(vuln_class, e, rec)
+                     for e, rec in pairs if rec["review_verdict"] == "refuted"]
+        return kept, [p[1] for p in pairs], dismissed
+
+    def _record(vc: str, entry: dict, verdict: str, card: dict | None,
+                after: dict) -> dict:
+        card = card or {}
+        return {
+            "vuln_class": vc,
+            "finding_id": str(entry.get("ID", "")),
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+            "before": {k: entry.get(k) for k in
+                       ("ID", "title", "verdict", "merge_source",
+                        "confidence", "source_track")},
+            "review_verdict": verdict,
+            "dimension_results": card.get("dimension_results", []),
+            "failed_dimensions": card.get("failed_dimensions", []),
+            "rebuttal_reason": card.get("rebuttal_reason"),
+            "survival_reason": card.get("survival_reason"),
+            "evidence": [e for d in card.get("dimension_results", [])
+                         for e in d.get("evidence", [])],
+            "confidence": card.get("confidence"),
+            "after": after,
+        }
+
+    def _dismissed_entry(vc: str, entry: dict, record: dict) -> dict:
+        dims = ",".join(record.get("failed_dimensions") or [])
+        reason = str(record.get("rebuttal_reason") or "")[:500]
+        return {
+            "ID": entry.get("ID", ""),
+            "source_track": entry.get("source_track"),
+            "vuln_class": vc,
+            "title": entry.get("title"),
+            "dismiss_reason": f"adversarial-review[{dims}]: {reason}",
+            "evidence": record.get("evidence"),
+            "confidence": record.get("confidence") or entry.get("confidence"),
+            "source": entry.get("source"),
+            "sink_call": entry.get("sink_call"),
+            "dismissed_at_stage": "adversarial-review",
+        }
+
+    # 类间并行（fix 2026-09-11 review I5：对齐 _write_agent_pocs :2591 的 5 类
+    # gather 先例与 spec §4.3 步骤 3；原串行 barrier 会让每类最慢片空转吃窗）。
+    # 各类读/写各自的 queue 文件无共享状态，共享 sem 统一限流；return_exceptions
+    # + 收口处按类序逐类落盘（写盘语义与串行版一致：单类异常按空处理不覆写
+    # queue，adversarial_review.json 恒落盘）。
+    results = await asyncio.gather(*(_one_class(vc) for vc in classes),
+                                   return_exceptions=True)
+    all_records: list[dict] = list(prior_records.values())
+    for vc, outcome in zip(classes, results):
+        if isinstance(outcome, BaseException):
+            # 单类异常不逃逸（fix 2026-09-11 review I2）：该类按空处理、其余类
+            # 照常落盘——否则异常中断循环时已剔卡+归档的类失去整轮审查记录
+            # （adversarial_review.json 只在尾部写，重试也不会重建）。
+            logger.warning("adversarial review: class %s crashed: %s",
+                           vc, outcome)
+            continue
+        kept, records, dismissed = outcome
+        queue_path = resolve_intermediate(deliverables,
+                                          f"{vc}_exploitation_queue.json")
+        if queue_path is not None and queue_path.exists() and records:
+            atomic_write_json(queue_path, {"vulnerabilities": kept})
+            append_dismissed(dismissed_path, dismissed)
+        all_records.extend(records)
+
+    # summary 全量口径（含 prior 终态），产物即下次运行的 checkpoint
+    by_v: dict[str, int] = {}
+    by_class: dict[str, dict[str, int]] = {}
+    for r in all_records:
+        v = r["review_verdict"]
+        by_v[v] = by_v.get(v, 0) + 1
+        c = by_class.setdefault(r["vuln_class"],
+                                {"total": 0, "refuted": 0, "survived": 0,
+                                 "unreviewed": 0})
+        c["total"] += 1
+        c[v] += 1
+    atomic_write_json(review_path, {
+        "summary": {
+            "total": len(all_records),
+            "refuted": by_v.get("refuted", 0),
+            "survived": by_v.get("survived", 0),
+            "unreviewed": by_v.get("unreviewed", 0),
+            "by_class": by_class,
+        },
+        "records": all_records,
+    })
 
 
 @activity.defn
