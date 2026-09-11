@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>数据流视图视觉重设计 — 工程图纸方向</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+/* ============================================================
+   数据流视图视觉重设计 · 设计稿（非生产代码）
+   方向：工程图纸（engineering drawing）——受众是安全工程师，
+   视觉素材来自示波器/电路图/蓝图，而非营销页。
+
+   六个动作（对应六处丑源）：
+   1. 字号阶梯 8.5/9/10/10.5/11 → 11/12/13，最小 11px
+   2. 色彩 6 色相 → verdict 三色 + cyan 单角色；轨道徽章中性化
+   3. emoji（✂ 🛡）→ 内联 SVG 细线图标
+   4. 常驻动画全删 → 默认静止，hover 才「读线」
+   5. 单枝树紧凑模式（链行高度 ~64px，不再 200-520px 大画布）
+   6. 树头八件套 → 两行收纳；卡级左缘 verdict 色轨
+
+   色值取自 app tokens.css 的 --c-* channel（dark/light 两套）。
+   ============================================================ */
+:root, [data-theme="dark"] {
+  --background: 213 33% 6%; --foreground: 213 22% 84%;
+  --card: 216 26% 10%; --muted: 217 26% 15%; --muted-fg: 213 12% 46%;
+  --border: 217 26% 19%; --border-strong: 217 26% 27%;
+  --primary: 190 94% 53%;
+  --c-cyan: 190 65% 45%;
+  --c-green: 142 38% 46%;
+  --c-red: 5 70% 58%;
+  --c-amber: 36 80% 60%;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-sans: "IBM Plex Sans", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --grid-dot: 217 26% 60%;
+}
+[data-theme="light"] {
+  --background: 210 30% 97%; --foreground: 213 26% 15%;
+  --card: 0 0% 100%; --muted: 220 28% 95%; --muted-fg: 213 12% 44%;
+  --border: 213 25% 87%; --border-strong: 213 25% 76%;
+  --primary: 190 92% 32%;
+  --c-cyan: 190 85% 30%;
+  --c-green: 142 45% 36%;
+  --c-red: 5 68% 48%;
+  --c-amber: 35 85% 38%;
+  --grid-dot: 213 30% 70%;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: hsl(var(--background)); color: hsl(var(--foreground));
+  font-family: var(--font-sans); font-size: 14px; line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+code, .mono { font-family: var(--font-mono); }
+
+/* ── 页面骨架 ── */
+.topbar { position: sticky; top: 0; z-index: 50; height: 48px; display: flex; align-items: center; gap: 16px;
+  padding: 0 20px; background: hsl(var(--background) / 0.88); backdrop-filter: blur(8px);
+  border-bottom: 1px solid hsl(var(--border)); }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+.brand-mark { width: 18px; height: 18px; background: hsl(var(--primary)); border-radius: 2px; position: relative; }
+.brand-mark::after { content:""; position:absolute; inset:4px; border:1.5px solid hsl(var(--background)); border-radius:1px; }
+.crumb { color: hsl(var(--muted-fg)); font-size: 12px; }
+.topbar .spacer { flex: 1; }
+.theme-btn { font-family: var(--font-mono); font-size: 11px; color: hsl(var(--muted-fg));
+  background: hsl(var(--muted)); border: 1px solid hsl(var(--border)); padding: 5px 10px;
+  border-radius: 4px; cursor: pointer; }
+.theme-btn:hover { color: hsl(var(--foreground)); }
+.shell { max-width: 1080px; margin: 0 auto; padding: 28px 24px 120px; }
+
+/* ── 说明区 ── */
+.thesis h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 4px; }
+.thesis p { margin: 0; color: hsl(var(--muted-fg)); font-size: 13px; max-width: 72ch; }
+.moves { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px; margin: 20px 0 36px; }
+.move { display: flex; gap: 10px; align-items: baseline; padding: 10px 12px; border: 1px solid hsl(var(--border));
+  border-radius: 6px; background: hsl(var(--card)); font-size: 12.5px; }
+.move b { font-family: var(--font-mono); font-size: 11px; color: hsl(var(--primary)); white-space: nowrap; }
+.sect-h { display: flex; align-items: baseline; gap: 10px; margin: 36px 0 12px; }
+.sect-h h2 { font-size: 15px; font-weight: 600; margin: 0; }
+.sect-h span { font-size: 12px; color: hsl(var(--muted-fg)); }
+.sect-h .rule { flex: 1; border-top: 1px solid hsl(var(--border)); transform: translateY(-4px); }
+
+/* ============================================================
+   ★ 树卡（重设计核心）——左缘 verdict 色轨 + 图纸点阵画布
+   ============================================================ */
+.treecard {
+  position: relative; border: 1px solid hsl(var(--border)); border-radius: 8px;
+  background: hsl(var(--card)); overflow: hidden;
+}
+/* 卡级 verdict 色轨：有打通=红 / 全剪断=绿 / 仅未判定=琥珀——扫页即知危险分布 */
+.treecard[data-verdict="vuln"]   { box-shadow: inset 3px 0 0 hsl(var(--c-red)); }
+.treecard[data-verdict="safe"]   { box-shadow: inset 3px 0 0 hsl(var(--c-green)); }
+.treecard[data-verdict="unknown"]{ box-shadow: inset 3px 0 0 hsl(var(--c-amber)); }
+
+/* ── 树头：两行收纳 ── */
+.treehead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 12px 16px 10px 18px; }
+.th-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.th-dot.vuln { background: hsl(var(--c-red)); }
+.th-dot.safe { background: hsl(var(--c-green)); }
+.th-name { font-size: 13px; font-weight: 600; }
+.th-loc { font-family: var(--font-mono); font-size: 11.5px; color: hsl(var(--muted-fg)); }
+.chip { font-family: var(--font-mono); font-size: 10.5px; color: hsl(var(--muted-fg));
+  background: hsl(var(--muted)); border: 1px solid hsl(var(--border)); border-radius: 4px;
+  padding: 1.5px 6px; white-space: nowrap; }
+.th-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.th-count { font-size: 11.5px; color: hsl(var(--muted-fg)); }
+.th-count b { color: hsl(var(--foreground)); font-weight: 600; }
+.th-count .r { color: hsl(var(--c-red)); } .th-count .g { color: hsl(var(--c-green)); }
+/* 比例条：高度收紧、圆角小、描边细 */
+.minibar { display: inline-flex; height: 6px; width: 72px; border-radius: 2px; overflow: hidden;
+  border: 1px solid hsl(var(--border)); vertical-align: middle; }
+.minibar .r { background: hsl(var(--c-red)); } .minibar .g { background: hsl(var(--c-green)); }
+
+/* ── 画布：图纸点阵底 + 细线 ── */
+.canvas-wrap { position: relative; margin: 0 10px; border: 1px solid hsl(var(--border)); border-radius: 6px;
+  background:
+    radial-gradient(circle 1px at center, hsl(var(--grid-dot) / 0.13) 1px, transparent 1.2px);
+  background-size: 22px 22px; background-position: 11px 11px;
+  background-color: hsl(var(--background) / 0.35);
+}
+.canvas-wrap svg { display: block; width: 100%; height: auto; }
+
+/* 画布元素（SVG 内 class）——线宽 1.5、圆角端点、无动画默认 */
+.edge { fill: none; stroke-width: 1.5; stroke-linecap: round; }
+.edge.vuln { stroke: hsl(var(--c-red)); stroke-dasharray: 6 4; }
+.edge.safe { stroke: hsl(var(--c-green)); }
+.edge.remnant { stroke: hsl(var(--c-green)); stroke-dasharray: 2 5; opacity: 0.45; }
+.edge.unknown { stroke: hsl(var(--c-amber)); stroke-dasharray: 4 4; }
+/* 「读线」动效只在 hover（顺着正在看的链走）——默认静止 */
+.edge-group { cursor: pointer; }
+.edge-group:hover .edge.vuln { animation: readflow 1s linear infinite; }
+@keyframes readflow { to { stroke-dashoffset: -20; } }
+@media (prefers-reduced-motion: reduce) { .edge-group:hover .edge.vuln { animation: none; } }
+
+/* source 胶囊（入口身份：cyan 唯一角色）——12px、细描边 */
+.src-pill { fill: hsl(var(--card)); stroke: hsl(var(--c-cyan) / 0.75); stroke-width: 1.2; }
+.src-pill-bg { fill: hsl(var(--card)); stroke: none; }
+.src-txt { font: 500 12px var(--font-mono); fill: hsl(var(--c-cyan)); }
+.src-meta { font: 400 10.5px var(--font-mono); fill: hsl(var(--c-cyan) / 0.75); }
+
+/* step 圆点：20px 描边圈 + 6px 实心内点（去掉 tint 填充，更利落） */
+.step-ring { fill: hsl(var(--card)); stroke: hsl(var(--border-strong)); stroke-width: 1.2; }
+.step-ring.on-vuln { stroke: hsl(var(--c-red) / 0.8); }
+.step-ring.on-safe { stroke: hsl(var(--c-green) / 0.8); }
+.step-core { fill: hsl(var(--muted-fg)); }
+.step-core.on-vuln { fill: hsl(var(--c-red)); }
+.step-core.on-safe { fill: hsl(var(--c-green)); }
+.step-label { font: 400 12px var(--font-mono); fill: hsl(var(--foreground)); text-anchor: middle; }
+.step-sub { font: 400 10.5px var(--font-mono); fill: hsl(var(--c-cyan) / 0.8); text-anchor: middle; }
+/* 盾环：单环细描（黄并入琥珀家族，形状与色阶区分语义） */
+.shield { fill: none; stroke-width: 1.4; }
+.shield.bypassed { stroke: hsl(var(--c-amber)); stroke-dasharray: 3 2.5; }
+.shield.effective { stroke: hsl(var(--c-green)); }
+
+/* sink 端子：双圈静止（无脉动）。红=有打通枝到达，灰虚线=无输入到达 */
+.term-outer { fill: none; stroke-width: 1.6; }
+.term-outer.vuln { stroke: hsl(var(--c-red)); }
+.term-outer.idle { stroke: hsl(var(--muted-fg) / 0.7); stroke-dasharray: 3 3; }
+.term-inner { fill: hsl(var(--c-red)); }
+.term-inner.idle { fill: hsl(var(--muted-fg) / 0.5); }
+.term-label { font: 600 12px var(--font-mono); fill: hsl(var(--foreground)); text-anchor: middle; }
+
+/* SVG 细线图标（替代 ✂ 🛡 emoji）——继承 currentColor */
+.ico-scissors { color: hsl(var(--c-green)); }
+.ico-scissors line { stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; }
+.ico-scissors circle { fill: none; stroke: currentColor; stroke-width: 1.1; }
+.ico-shield { color: hsl(var(--c-amber)); }
+.ico-shield path { fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linejoin: round; }
+
+/* 折叠行 */
+.foldline { display: flex; align-items: center; gap: 10px; margin: 6px 16px 2px 18px; cursor: pointer; }
+.foldline .line { flex: 1; border-top: 1px dashed hsl(var(--c-green) / 0.45); }
+.foldline .txt { font-size: 11.5px; color: hsl(var(--c-green)); background: hsl(var(--card)); padding: 0 8px; white-space: nowrap; }
+
+/* ── 枝条明细行（BranchRow 重设计）── */
+.branchrow { border-left: 2px solid transparent; padding: 7px 16px 8px 14px; margin: 0 0 0 4px;
+  border-radius: 0 6px 6px 0; transition: background 0.12s; }
+.branchrow:hover { background: hsl(var(--muted) / 0.55); }
+.branchrow[data-tone="vuln"] { border-left-color: hsl(var(--c-red)); }
+.branchrow[data-tone="safe"] { border-left-color: hsl(var(--c-green)); }
+.branchrow[data-tone="unknown"] { border-left-color: hsl(var(--c-amber)); }
+.br-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.br-verdict { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; }
+.br-verdict .d { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.br-verdict.vuln { color: hsl(var(--c-red)); } .br-verdict.vuln .d { background: hsl(var(--c-red)); }
+.br-verdict.safe { color: hsl(var(--c-green)); } .br-verdict.safe .d { background: hsl(var(--c-green)); }
+.br-verdict.unknown { color: hsl(var(--c-amber)); } .br-verdict.unknown .d { background: hsl(var(--c-amber)); }
+/* 轨道徽章：中性 chip（溯源信息，不是 verdict——不再 magenta/cyan 双色描边） */
+.track { font: 500 10.5px var(--font-mono); letter-spacing: 0.04em; color: hsl(var(--muted-fg));
+  border: 1px solid hsl(var(--border)); border-radius: 4px; padding: 1px 5px; }
+.br-reason { margin: 3px 0 0; font-size: 12px; color: hsl(var(--muted-fg)); max-width: 88ch;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* 链摘要：等宽「车站带」——节点是可点下划线，箭头低对比 */
+.br-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 5px;
+  font-family: var(--font-mono); font-size: 12px; }
+.br-chain .stop { color: hsl(var(--foreground) / 0.85); border-bottom: 1px dotted hsl(var(--muted-fg)); cursor: pointer; padding: 0 1px; }
+.br-chain .stop:hover { color: hsl(var(--primary)); border-bottom-color: hsl(var(--primary)); }
+.br-chain .stop.src { color: hsl(var(--c-cyan)); border-bottom-color: hsl(var(--c-cyan) / 0.5); }
+.br-chain .stop.snk { color: hsl(var(--c-red)); border-bottom-color: hsl(var(--c-red) / 0.5); }
+.br-chain .arrow { color: hsl(var(--muted-fg) / 0.55); font-size: 11px; }
+/* 展开的 code 块 */
+.br-code { margin: 6px 0 0; padding: 8px 10px; border-radius: 6px; border: 1px solid hsl(var(--border));
+  background: hsl(var(--background) / 0.6); font-family: var(--font-mono); font-size: 11.5px; line-height: 1.55;
+  overflow-x: auto; white-space: pre; color: hsl(var(--foreground) / 0.9); }
+
+/* ── 图例条重设计 ── */
+.legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px;
+  padding: 9px 14px; border: 1px solid hsl(var(--border)); border-radius: 8px; background: hsl(var(--card)); }
+.legend .t { font-size: 12px; font-weight: 600; margin-right: 2px; }
+.lg { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; color: hsl(var(--muted-fg)); }
+.lg svg { flex: none; }
+
+/* ── 对照区 ── */
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.compare .col { border: 1px solid hsl(var(--border)); border-radius: 8px; overflow: hidden; }
+.compare .cap { padding: 7px 12px; font-family: var(--font-mono); font-size: 11px;
+  border-bottom: 1px solid hsl(var(--border)); background: hsl(var(--muted) / 0.5); color: hsl(var(--muted-fg)); }
+.compare .body { padding: 14px; background: hsl(var(--card)); }
+.compare .cap .bad { color: hsl(var(--c-red)); } .compare .cap .good { color: hsl(var(--c-green)); }
+.before { font-size: 9px; color: hsl(var(--muted-fg)); }
+.before .emoji-row { font-size: 14px; }
+.specnote { margin-top: 40px; padding: 14px 16px; border: 1px dashed hsl(var(--border-strong)); border-radius: 8px;
+  font-size: 12.5px; color: hsl(var(--muted-fg)); }
+.specnote b { color: hsl(var(--foreground)); }
+.specnote code { font-size: 11.5px; }
+
+@media (max-width: 760px) { .compare { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand"><span class="brand-mark"></span>supernova</span>
+  <span class="crumb">design-preview / <b>数据流视图 · 视觉重设计</b></span>
+  <span class="spacer"></span>
+  <button class="theme-btn" onclick="const h=document.documentElement;h.dataset.theme=h.dataset.theme==='dark'?'light':'dark'">◐ theme</button>
+</div>
+
+<div class="shell">
+
+  <div class="thesis">
+    <h1>数据流视图 · 工程图纸方向</h1>
+    <p>受众是看行号、HTTP 参数和 <code>$where</code> 操作符的安全工程师——这个视图的气质应该像测量仪器：等宽标识符、1.5px 细线、点阵图纸底、默认全静止。数据取自 NodeGoat-20260910 真实扫描产物。</p>
+  </div>
+
+  <div class="moves">
+    <div class="move"><b>01 字号</b><span>8.5/9/10/10.5/11px 五档小字 → 11/12/13 三档，最小 11px</span></div>
+    <div class="move"><b>02 色彩</b><span>6 色相并存 → verdict 三色 + cyan 只做入口身份；轨道徽章中性化</span></div>
+    <div class="move"><b>03 图标</b><span>✂ 🛡 emoji → 内联 SVG 细线图标，跟随语义色</span></div>
+    <div class="move"><b>04 动效</b><span>靶心脉动删除，默认静止；hover 才「读线」（流动沿正在看的链）</span></div>
+    <div class="move"><b>05 疏密</b><span>单枝树紧凑模式：整卡约 4 行高，不再 200px+ 大画布画一条直线</span></div>
+    <div class="move"><b>06 层级</b><span>树头八件套两行收纳；卡级左缘 verdict 色轨——扫页即知危险分布</span></div>
+  </div>
+
+  <!-- ═══════════ 区块 1：图例条 ═══════════ -->
+  <div class="sect-h"><h2>图例条</h2><span>5 项，静态样例，无 emoji</span><span class="rule"></span></div>
+  <div class="legend">
+    <span class="t">图例</span>
+    <span class="lg"><svg width="40" height="10" viewBox="0 0 40 10"><path class="edge vuln" d="M1 5 H39"/></svg>打通 · 一路无有效防护</span>
+    <span class="lg"><svg width="52" height="12" viewBox="0 0 52 12">
+      <path class="edge safe" d="M1 6 H18"/>
+      <circle cx="20" cy="6" r="4.5" class="step-ring on-safe"/><circle cx="20" cy="6" r="1.8" class="step-core on-safe"/>
+      <path class="edge remnant" d="M27 6 H51"/></svg>剪断 · 防护在此拦下</span>
+    <span class="lg"><svg width="16" height="16" viewBox="0 0 16 16">
+      <circle cx="8" cy="8" r="6" class="shield bypassed"/><circle cx="8" cy="8" r="2" class="step-core"/></svg>防护被绕过</span>
+    <span class="lg"><svg width="16" height="16" viewBox="0 0 16 16">
+      <circle cx="8" cy="8" r="6" class="shield effective"/><circle cx="8" cy="8" r="2" class="step-core on-safe"/></svg>防护有效</span>
+    <span class="lg"><svg width="58" height="16" viewBox="0 0 58 16">
+      <circle cx="8" cy="8" r="6.5" class="term-outer vuln"/><circle cx="8" cy="8" r="2.4" class="term-inner"/>
+      <circle cx="40" cy="8" r="6.5" class="term-outer idle"/><circle cx="40" cy="8" r="2.4" class="term-inner idle"/></svg>危险端子 · 有数据打通到达 / 无输入到达</span>
+    <span class="lg"><svg width="36" height="12" viewBox="0 0 36 12"><path d="M2 10 Q 12 0, 22 6 T 34 10" fill="none" stroke="hsl(var(--c-cyan) / 0.7)" stroke-width="1.2" stroke-dasharray="1 3.5"/></svg>同一函数（跨枝同一性）</span>
+  </div>
+
+  <!-- ═══════════ 区块 2：多枝树卡（真实数据 contributions.js eval 树）═══════════ -->
+  <div class="sect-h"><h2>多枝树卡</h2><span>app/routes/contributions.js:34 · eval · 2 枝打通 — 点阵图纸画布</span><span class="rule"></span></div>
+
+  <div class="treecard" data-verdict="vuln">
+    <div class="treehead">
+      <span class="th-dot vuln"></span>
+      <span class="th-name">eval</span>
+      <span class="th-loc">app/routes/contributions.js:34</span>
+      <span class="chip">ts-eval</span>
+      <span class="chip">command</span>
+      <span class="th-right">
+        <span class="th-count">INJ-VULN-02</span>
+        <span class="th-count"><b class="r">2</b> 打通 · <b class="g">0</b> 剪断</span>
+        <span class="minibar"><span class="r" style="width:100%"></span><span class="g" style="width:0"></span></span>
+      </span>
+    </div>
+
+    <div class="canvas-wrap">
+      <svg viewBox="0 0 760 190" role="img" aria-label="eval 树：两个入口均打通">
+        <!-- 枝 1（GN 轨）：req.body.roth → ContributionsHandler → 端子 -->
+        <g class="edge-group">
+          <path class="edge vuln" d="M186 46 H 300"/>
+          <path class="edge vuln" d="M348 46 C 430 46, 470 85, 540 89"/>
+        </g>
+        <!-- 枝 2（LLM 轨）：req.body.preTax → eval → 端子 -->
+        <g class="edge-group">
+          <path class="edge vuln" d="M196 148 H 300"/>
+          <path class="edge vuln" d="M348 148 C 430 148, 470 110, 540 96"/>
+        </g>
+
+        <!-- source 胶囊（cyan = 入口身份） -->
+        <g>
+          <rect class="src-pill-bg" x="24" y="28" width="162" height="36" rx="18"/>
+          <rect class="src-pill" x="24" y="28" width="162" height="36" rx="18"/>
+          <text class="src-txt" x="40" y="43">req.body.roth</text>
+          <text class="src-meta" x="40" y="56">body · POST /contributions</text>
+        </g>
+        <g>
+          <rect class="src-pill-bg" x="24" y="130" width="172" height="36" rx="18"/>
+          <rect class="src-pill" x="24" y="130" width="172" height="36" rx="18"/>
+          <text class="src-txt" x="40" y="145">req.body.preTax</text>
+          <text class="src-meta" x="40" y="158">LLM · POST /contributions</text>
+        </g>
+
+        <!-- step 圆点：描边圈 + 实心内点，无 tint 填充 -->
+        <g>
+          <circle cx="324" cy="46" r="10" class="step-ring on-vuln"/>
+          <circle cx="324" cy="46" r="3.5" class="step-core on-vuln"/>
+          <text class="step-label" x="324" y="76">ContributionsHandler:34</text>
+          <text class="step-sub" x="324" y="90">⟳ 2 枝经过</text>
+        </g>
+        <g>
+          <circle cx="324" cy="148" r="10" class="step-ring on-vuln"/>
+          <circle cx="324" cy="148" r="3.5" class="step-core on-vuln"/>
+          <text class="step-label" x="324" y="178">eval:34</text>
+        </g>
+
+        <!-- sink 端子：双圈静止（红=有打通到达） -->
+        <g>
+          <circle cx="566" cy="92" r="15" class="term-outer vuln"/>
+          <circle cx="566" cy="92" r="5.5" class="term-inner"/>
+          <text class="term-label" x="566" y="126">eval</text>
+        </g>
+
+        <!-- 同一函数弧（cyan 点线） -->
+        <path d="M324 60 Q 290 100, 324 134" fill="none" stroke="hsl(var(--c-cyan) / 0.55)" stroke-width="1.2" stroke-dasharray="1 3.5"/>
+      </svg>
+    </div>
+
+    <!-- 枝条明细行 -->
+    <div style="padding: 4px 0 8px;">
+      <div class="branchrow" data-tone="vuln">
+        <div class="br-head">
+          <span class="br-verdict vuln"><span class="d"></span>打通 · 一路无有效防护</span>
+          <span class="track">GN</span>
+        </div>
+        <p class="br-reason">sink 参数实际为 eval(req.body.roth)（表达式整体即危险调用），确定性标注的 arg 表达式 req.body.roth 与源码一致，无净化、无后置拼接，且路由已注册可达（仅要求登录）。</p>
+        <div class="br-chain">
+          <span class="stop src">req.body.roth</span>
+          <span class="arrow">→</span>
+          <span class="stop">ContributionsHandler:34</span>
+          <span class="arrow">→</span>
+          <span class="stop snk">eval</span>
+        </div>
+      </div>
+      <div class="branchrow" data-tone="vuln">
+        <div class="br-head">
+          <span class="br-verdict vuln"><span class="d"></span>打通 · 一路无有效防护</span>
+          <span class="track">LLM</span>
+        </div>
+        <p class="br-reason">用户输入直接作为 JavaScript 表达式求值，可执行任意代码，是直接的 RCE 入口。</p>
+        <div class="br-chain">
+          <span class="stop src">req.body.preTax</span>
+          <span class="arrow">→</span>
+          <span class="stop">eval:34</span>
+          <span class="arrow">→</span>
+          <span class="stop snk">eval</span>
+        </div>
+        <pre class="br-code">/*jslint evil: true */
+// Insecure use of eval() to parse inputs
+const preTax = eval(req.body.preTax);
+const afterTax = eval(req.body.afterTax);
+const roth = eval(req.body.roth);</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ 区块 3：多枝树卡（含剪断 + 盾，展示 verdict 全谱）═══════════ -->
+  <div class="sect-h"><h2>多枝树卡 · verdict 全谱</h2><span>打通 / 剪断（✂ SVG）/ 盾绕过 / 折叠行</span><span class="rule"></span></div>
+
+  <div class="treecard" data-verdict="vuln">
+    <div class="treehead">
+      <span class="th-dot vuln"></span>
+      <span class="th-name">db.collection().find</span>
+      <span class="th-loc">app/data/allocations-dao.js:42</span>
+      <span class="chip">mongo-query</span>
+      <span class="th-right">
+        <span class="th-count">INJ-VULN-07</span>
+        <span class="th-count"><b class="r">1</b> 打通 · <b class="g">3</b> 剪断</span>
+        <span class="minibar"><span class="r" style="width:25%"></span><span class="g" style="width:75%"></span></span>
+      </span>
+    </div>
+
+    <div class="canvas-wrap">
+      <svg viewBox="0 0 760 210" role="img" aria-label="find 树：一条打通，多条剪断">
+        <!-- 枝 1：打通（红虚线直达端子） -->
+        <g class="edge-group">
+          <path class="edge vuln" d="M180 40 H 300"/>
+          <path class="edge vuln" d="M348 40 C 430 40, 470 82, 540 92"/>
+        </g>
+        <!-- 枝 2：剪断（绿实线至防护点 + ✂ + 渐隐残端） -->
+        <g class="edge-group">
+          <path class="edge safe" d="M186 112 H 310"/>
+          <path class="edge remnant" d="M338 112 H 400"/>
+        </g>
+        <!-- 枝 3：盾绕过（琥珀虚线环 + 线继续红） -->
+        <g class="edge-group">
+          <path class="edge vuln" d="M160 182 H 240"/>
+          <path class="edge vuln" d="M286 182 C 400 182, 460 130, 540 100"/>
+        </g>
+
+        <g>
+          <rect class="src-pill-bg" x="22" y="22" width="158" height="36" rx="18"/>
+          <rect class="src-pill" x="22" y="22" width="158" height="36" rx="18"/>
+          <text class="src-txt" x="38" y="37">req.query.url</text>
+          <text class="src-meta" x="38" y="50">query · GET /research</text>
+        </g>
+        <g>
+          <rect class="src-pill-bg" x="22" y="94" width="164" height="36" rx="18"/>
+          <rect class="src-pill" x="22" y="94" width="164" height="36" rx="18"/>
+          <text class="src-txt" x="38" y="109">req.body.lastName</text>
+          <text class="src-meta" x="38" y="122">body · POST /profile</text>
+        </g>
+        <g>
+          <rect class="src-pill-bg" x="10" y="164" width="150" height="36" rx="18"/>
+          <rect class="src-pill" x="10" y="164" width="150" height="36" rx="18"/>
+          <text class="src-txt" x="26" y="179">req.params.id</text>
+          <text class="src-meta" x="26" y="192">params · GET /memos</text>
+        </g>
+
+        <!-- 剪断点：盾（绿=有效）+ 剪刀 SVG 图标 + 残端 -->
+        <g>
+          <circle cx="324" cy="112" r="11" class="shield effective"/>
+          <circle cx="324" cy="112" r="4" class="step-core on-safe"/>
+          <text class="step-label" x="324" y="142">mongodb-sanitize:28</text>
+          <g class="ico-scissors" transform="translate(338,96) scale(1)">
+            <line x1="1" y1="1" x2="9" y2="9"/><line x1="9" y1="1" x2="1" y2="9"/>
+            <circle cx="2.6" cy="10" r="1.9"/><circle cx="10" cy="10" r="1.9"/>
+          </g>
+        </g>
+        <!-- 盾绕过点：琥珀虚线环，线继续红 -->
+        <g>
+          <circle cx="263" cy="182" r="11" class="shield bypassed"/>
+          <circle cx="263" cy="182" r="4" class="step-core on-vuln"/>
+          <text class="step-label" x="263" y="212">escapeHtml:64</text>
+        </g>
+        <!-- 打通枝 step -->
+        <g>
+          <circle cx="324" cy="40" r="10" class="step-ring on-vuln"/>
+          <circle cx="324" cy="40" r="3.5" class="step-core on-vuln"/>
+          <text class="step-label" x="324" y="70">getByUserId:31</text>
+        </g>
+
+        <g>
+          <circle cx="566" cy="95" r="15" class="term-outer vuln"/>
+          <circle cx="566" cy="95" r="5.5" class="term-inner"/>
+          <text class="term-label" x="566" y="129">find</text>
+        </g>
+      </svg>
+    </div>
+
+    <div class="foldline"><span class="line"></span><span class="txt">2 条剪断的枝已折叠 — 展开看防护点</span><span class="line"></span></div>
+
+    <div style="padding: 2px 0 8px;">
+      <div class="branchrow" data-tone="vuln">
+        <div class="br-head">
+          <span class="br-verdict vuln"><span class="d"></span>打通 · 一路无有效防护</span>
+          <span class="track">LLM</span>
+        </div>
+        <div class="br-chain">
+          <span class="stop src">req.query.url</span>
+          <span class="arrow">→</span>
+          <span class="stop">getByUserId:31</span>
+          <span class="arrow">→</span>
+          <span class="stop snk">find</span>
+        </div>
+      </div>
+      <div class="branchrow" data-tone="unknown">
+        <div class="br-head">
+          <span class="br-verdict unknown"><span class="d"></span>未判定 · 无法确认防护是否生效</span>
+          <span class="track">LLM</span>
+          <span class="lg"><svg width="13" height="13" viewBox="0 0 13 13" class="ico-shield"><path d="M6.5 1 L11.5 3 V6.5 C11.5 9.5 9.3 11.4 6.5 12.3 C3.7 11.4 1.5 9.5 1.5 6.5 V3 Z"/></svg>
+            escapeHtml:64 · 被绕过</span>
+        </div>
+        <div class="br-chain">
+          <span class="stop src">req.params.id</span>
+          <span class="arrow">→</span>
+          <span class="stop">escapeHtml:64</span>
+          <span class="arrow">→</span>
+          <span class="stop snk">find</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ 区块 4：单枝树紧凑卡 ═══════════ -->
+  <div class="sect-h"><h2>单枝树 · 紧凑模式</h2><span>90% 的树只有一条枝——不再起大画布，链即卡身，约 4 行高</span><span class="rule"></span></div>
+
+  <div class="treecard" data-verdict="vuln">
+    <div class="treehead" style="padding-bottom: 10px;">
+      <span class="th-dot vuln"></span>
+      <span class="th-name">$where</span>
+      <span class="th-loc">app/data/allocations-dao.js:78</span>
+      <span class="th-right">
+        <span class="th-count">INJ-VULN-01 · needs_review</span>
+        <span class="th-count"><b class="r">1</b> 打通</span>
+        <span class="minibar"><span class="r" style="width:100%"></span></span>
+      </span>
+    </div>
+    <div style="padding: 0 0 8px;">
+      <div class="branchrow" data-tone="vuln">
+        <div class="br-head">
+          <span class="br-verdict vuln"><span class="d"></span>打通 · 一路无有效防护</span>
+          <span class="track">LLM</span>
+        </div>
+        <p class="br-reason">threshold 为任意字符串，直接拼接进 $where 的 JS 执行上下文（单引号字符串内），可闭合引号执行任意服务器端 JS。</p>
+        <div class="br-chain">
+          <span class="stop src">req.query.threshold</span>
+          <span class="arrow">→</span>
+          <span class="stop">getByUserIdAndThreshold:23</span>
+          <span class="arrow">→</span>
+          <span class="stop snk">$where:78</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="treecard" data-verdict="safe" style="margin-top: 10px;">
+    <div class="treehead">
+      <span class="th-dot safe"></span>
+      <span class="th-name">res.render</span>
+      <span class="th-loc">app/routes/benefits.js:51</span>
+      <span class="th-right">
+        <span class="th-count">无 finding</span>
+        <span class="th-count"><b class="g">1</b> 剪断</span>
+        <span class="minibar"><span class="r" style="width:0"></span><span class="g" style="width:100%"></span></span>
+      </span>
+    </div>
+    <div style="padding: 0 0 8px;">
+      <div class="branchrow" data-tone="safe">
+        <div class="br-head">
+          <span class="br-verdict safe"><span class="d"></span>剪断 · 在 escapeHtml 被拦下</span>
+          <span class="track">GN</span>
+        </div>
+        <div class="br-chain">
+          <span class="stop src">req.body.note</span>
+          <span class="arrow">→</span>
+          <span class="stop">escapeHtml:17</span>
+          <span class="arrow">→</span>
+          <span class="stop snk">res.render:51</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ 区块 5：前后对照 ═══════════ -->
+  <div class="sect-h"><h2>关键细节 · 前后对照</h2><span class="rule"></span></div>
+  <div class="compare">
+    <div class="col">
+      <div class="cap"><span class="bad">before</span> — emoji 图标 + 8.5px 小字 + 彩色轨道徽章</div>
+      <div class="body before">
+        <div class="emoji-row">✂ 🛡 <span style="font-size:13px">（系统 emoji，饱和度失控）</span></div>
+        <div style="margin-top:8px; font-size:9px;">8.5px 的 source 副信息几乎不可读</div>
+        <div style="margin-top:8px;">
+          <span style="font-size:10px; color:hsl(var(--c-cyan)); border:1px solid hsl(var(--c-cyan)); border-radius:3px; padding:0 4px;">GN 轨</span>
+          <span style="font-size:10px; color:hsl(var(--c-magenta,280 70% 78%)); border:1px solid hsl(var(--c-magenta,280 70% 78%)); border-radius:3px; padding:0 4px; margin-left:4px;">LLM 轨</span>
+        </div>
+        <div style="margin-top:10px;"><span style="display:inline-block;width:22px;height:22px;border-radius:50%;background:linear-gradient(hsl(var(--c-red)/0.1),hsl(var(--c-red)/0.1)),hsl(var(--card));border:1px solid hsl(var(--c-red)/0.55);box-shadow:0 0 0 3px hsl(var(--c-amber)/0.4),0 0 0 5px hsl(var(--c-amber)/0.18);"></span>
+          <span style="font-size:10px;"> 22px 双环 tint 圆点 + 盾环堆叠</span></div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="cap"><span class="good">after</span> — SVG 细线图标 + 11px 起步 + 中性轨道 chip</div>
+      <div class="body">
+        <div style="display:flex; align-items:center; gap:14px;">
+          <svg width="15" height="15" viewBox="0 0 13 13" class="ico-scissors"><line x1="1" y1="1" x2="11" y2="11"/><line x1="11" y1="1" x2="1" y2="11"/><circle cx="2.6" cy="10.4" r="2"/><circle cx="10.4" cy="10.4" r="2"/></svg>
+          <svg width="14" height="14" viewBox="0 0 13 13" class="ico-shield"><path d="M6.5 1 L11.5 3 V6.5 C11.5 9.5 9.3 11.4 6.5 12.3 C3.7 11.4 1.5 9.5 1.5 6.5 V3 Z"/></svg>
+          <span style="font-size:12px;color:hsl(var(--muted-fg))">细线、跟随语义色、任意尺寸不糊</span>
+        </div>
+        <div style="margin-top:10px;"><span class="track">GN</span> <span class="track" style="margin-left:4px;">LLM</span>
+          <span style="font-size:12px;color:hsl(var(--muted-fg));margin-left:8px;">溯源信息，不再抢 verdict 的色</span></div>
+        <div style="margin-top:10px; display:flex; align-items:center; gap:8px;">
+          <svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" class="step-ring on-vuln"/><circle cx="10" cy="10" r="3" class="step-core on-vuln"/></svg>
+          <span style="font-size:12px;color:hsl(var(--muted-fg))">20px 描边圈 + 实心内点，去 tint 填充</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="specnote">
+    <b>落地范围（生产代码，若此方向确认）：</b>全部为视觉层改动，不动信息架构与数据流——
+    <code>styles/tokens.css</code> 剪枝树段（字号/线宽/色彩/图标类）、
+    <code>prune/nodes.tsx</code>（emoji → SVG、圆点结构）、
+    <code>BranchRow.tsx</code>（轨道徽章中性化、链行排版）、
+    <code>PruningTreeFig.tsx</code> 树头（两行收纳 + 卡级色轨）、
+    <code>LegendBar.tsx</code>（图例对齐新视觉）、单枝树紧凑分支（layout 常量）。
+    锚点契约（data-* testid）与图↔行联动逻辑保持不变。
+  </div>
+
+</div>
+</body>
+</html>
