@@ -36,6 +36,34 @@ def test_boundary_serialization():
     assert data["exposure"] == "external"
 
 
+def test_boundary_from_dict_tolerates_missing_and_extra_fields():
+    """2026-09-11 cross-repo-20260910-193903 attempt1 崩溃回归锚点：edge agent
+    LLM 输出偶发缺 reachable_from（曾致 TrustBoundary(**b) TypeError 炸整单
+    correlation，靠 temporal 重试运气兜底）。from_dict 对齐 TopologyEdge.from_json
+    （final-review MINOR 7）防御语义：可选字段补默认、未知键过滤、核心字段缺 →
+    None 丢弃（调用方 warning 记账）。"""
+    full = {"service": "community", "method": "/debug/pprof/*",
+            "exposure": "external", "reachable_from": ["web"],
+            "reason": "routes.go:43-45", "confidence": "high"}
+    b = TrustBoundary.from_dict(full)
+    assert b is not None
+    assert b.reachable_from == ["web"] and b.confidence == "high"
+
+    # 缺 reachable_from → []（可达来源未断定，exposure/reason 仍有安全价值）
+    b2 = TrustBoundary.from_dict(
+        {k: v for k, v in full.items() if k != "reachable_from"})
+    assert b2 is not None and b2.reachable_from == []
+
+    # 缺 confidence/reason → low/""；未知键过滤不炸
+    b3 = TrustBoundary.from_dict(
+        {"service": "s", "method": "m", "exposure": "internal", "bogus": "x"})
+    assert b3 is not None and b3.confidence == "low" and b3.reason == ""
+
+    # 核心字段（service/method/exposure）缺 → None 丢弃；非 dict → None
+    assert TrustBoundary.from_dict({"service": "s", "method": "m"}) is None
+    assert TrustBoundary.from_dict("not-a-dict") is None
+
+
 def test_edge_status_declared_missing():
     e = TopologyEdge(from_="gateway", to="ghost-svc", protocol="grpc",
                      calls=[], status="declared-missing", error=None)

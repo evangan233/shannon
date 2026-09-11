@@ -202,6 +202,21 @@ async def run_correlation_phase(
     heartbeat = HeartbeatManager(out_ws, on_cancel=main_task.cancel)
     await heartbeat.__aenter__()
 
+    # temporalio failure traceback 重定向到本会话目录（2026-09-11 日志串台修复）：
+    # 常驻 worker 单进程跑 wb/bb/corr 多 queue，corr activity 的崩溃 traceback 此前
+    # 被 wb 会话的最后安装重定向抢走（NodeGoat-20260910-193720 目录躺 corr 崩溃
+    # 实证）。共享 routing handler 按 record 内 workflow_id 路由；activity 上下文
+    # 外（测试/CLI 直跑）workflow_id=None → 注册为 fallback。best-effort 不炸扫描。
+    try:
+        from supernova_core.logging.temporalio_redirect import (
+            current_temporal_workflow_id, install_temporalio_log_redirect,
+        )
+        install_temporalio_log_redirect(
+            out_ws / "activity_failures.log",
+            workflow_id=current_temporal_workflow_id())
+    except Exception:  # noqa: BLE001 - logging 故障不上行成扫描故障
+        logger.warning("corr temporalio redirect install failed", exc_info=True)
+
     # 3. per-edge 关联 Agent(asyncio.Semaphore 限并发, B5)
     role_map = {
         service: sorted(spec.effective_roles, key=("entrypoint", "backend").index)
@@ -222,7 +237,26 @@ async def run_correlation_phase(
         "properties": {
             "from": {"type": "string"}, "to": {"type": "string"},
             "protocol": {"type": "string"}, "status": {"type": "string"},
-            "calls": {"type": "array"}, "boundaries": {"type": "array"},
+            "calls": {"type": "array"},
+            # boundaries item 收紧（2026-09-11 cross-repo attempt1 崩溃回归，双防线的
+            # 生产端）：6 字段 required——openai 引擎 structured outputs 对嵌套 required
+            # 有强制力（漏字段在引擎侧被拒），claude 引擎无害；契约对齐
+            # cross-repo-correlation.txt:57-59。消费端容错见 :310 附近 from_dict。
+            "boundaries": {"type": "array", "items": {
+                "type": "object",
+                "properties": {
+                    "service": {"type": "string"},
+                    "method": {"type": "string"},
+                    "exposure": {"type": "string"},
+                    "reachable_from": {"type": "array",
+                                       "items": {"type": "string"}},
+                    "reason": {"type": "string"},
+                    "confidence": {"type": "string"},
+                },
+                "required": ["service", "method", "exposure",
+                             "reachable_from", "reason", "confidence"],
+                "additionalProperties": True,   # LLM 多吐键容忍（消费端白名单过滤）
+            }},
             "flows": {"type": "array"},  # A2 per-edge 候选攻击链(不入 required:旧 prompt 无 flows 也合法)
         },
         "required": ["from", "to", "status"],
@@ -307,7 +341,27 @@ async def run_correlation_phase(
                                    for c in e.get("calls", [])],
                             status=e["status"], error=e.get("error"))
                for e in validated_edges])
-    boundaries = [TrustBoundary(**b) for b in merged["boundaries"]]
+    # 容错反序列化（2026-09-11 cross-repo attempt1 崩溃回归）：LLM 偶发漏字段不再
+    # TypeError 炸整单（曾致 5 edge agent 整段无检查点重烧）。缺可选字段补默认保留
+    # 条目；核心字段缺丢弃；两路均落 events.ndjson warning（可观测，不留到构造点炸）。
+    boundaries: list[TrustBoundary] = []
+    for b in merged["boundaries"]:
+        tb = TrustBoundary.from_dict(b)
+        if tb is None:
+            await corr_writer.raw({
+                "category": "WARNING", "type": "LogEvent", "level": "WARNING",
+                "message": "boundary dropped (missing core field "
+                           "service/method/exposure): "
+                           + json.dumps(b, ensure_ascii=False, default=str)[:200],
+            })
+            continue
+        if not b.get("reachable_from"):
+            await corr_writer.raw({
+                "category": "WARNING", "type": "LogEvent", "level": "WARNING",
+                "message": f"boundary {tb.service} {tb.method} missing "
+                           "reachable_from; defaulted to [] (source undetermined)",
+            })
+        boundaries.append(tb)
 
     # 5. 合并 queue(B1 四字段)+ 组装 flows(A2 透传)+ 落盘
     merged_queues = {vc: merge_exploitation_queues(

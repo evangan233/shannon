@@ -105,6 +105,54 @@ async def test_agent_failure_leaves_unreviewed(env, monkeypatch):
     assert review["records"][0]["after"] == {"action": "kept"}
 
 
+async def test_rate_limited_shard_records_channel_error(env, monkeypatch, caplog):
+    """2026-09-11 NodeGoat-20260910-193720 回归（injection-02 429 三连挂）：通道失败
+    （runner 层重试耗尽 → success=False / text="" / structured_output=None）≠ 良性
+    零卡——record 记 review_error 供补审筛选与报告呈现，日志 ERROR 级带 error_code
+    （原与零卡同句 WARNING，排障只能翻 AgentEvent）。保守放行语义不变。"""
+    from types import SimpleNamespace
+    import logging
+
+    async def fake_agent(**kw):
+        return SimpleNamespace(
+            structured_output=None, text="", success=False,
+            error_code="RateLimitError",
+            error="Error code: 429 - {'error': {'code': '1302'}}")
+    monkeypatch.setattr(activities, "run_gitnexus_verdict_agent", fake_agent)
+    with caplog.at_level(logging.ERROR, logger=activities.__name__):
+        await activities._run_adversarial_review_for_classes(
+            deliverables=env["deliverables"], repo_path=str(env["repo"]),
+            provider_config=None)
+    q = json.loads((env["intermediate"] /
+                    "injection_exploitation_queue.json").read_text())
+    assert len(q["vulnerabilities"]) == 1  # 保守放行不变
+    review = json.loads((env["intermediate"] /
+                         "adversarial_review.json").read_text())
+    rec = review["records"][0]
+    assert rec["review_verdict"] == "unreviewed"
+    assert rec["review_error"]["error_code"] == "RateLimitError"
+    assert "1302" in rec["review_error"]["error"]
+    assert any("agent failed (RateLimitError)" in r.message for r in caplog.records)
+
+
+async def test_zero_cards_on_success_has_no_review_error(env, monkeypatch):
+    """良性零卡（success=True 且无 cards）不带 review_error——与通道失败可区分。"""
+    from types import SimpleNamespace
+
+    async def fake_agent(**kw):
+        return SimpleNamespace(structured_output=None, text="", success=True,
+                               error_code=None, error=None)
+    monkeypatch.setattr(activities, "run_gitnexus_verdict_agent", fake_agent)
+    await activities._run_adversarial_review_for_classes(
+        deliverables=env["deliverables"], repo_path=str(env["repo"]),
+        provider_config=None)
+    review = json.loads((env["intermediate"] /
+                         "adversarial_review.json").read_text())
+    rec = review["records"][0]
+    assert rec["review_verdict"] == "unreviewed"
+    assert "review_error" not in rec
+
+
 async def test_validate_crash_degrades_shard_not_round(env, monkeypatch):
     """reviewer fix I2：validate 层任何未预见的异常（实证一例：null-byte
     location → fpath.resolve() 抛 ValueError）只降级该片 unreviewed，不逃逸

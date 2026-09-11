@@ -33,6 +33,13 @@ def _clean_logging_singletons():
             tio.removeHandler(h)
             h.close()
         tio.propagate = True
+    # routing handler 模块单例重置（2026-09-11 路由架构）：不重置则带旧 registry
+    # （指向已删 tmp_path 的 FileHandler）跨测试存活。
+    import supernova_core.logging.temporalio_redirect as _tr
+    for fh in list(_tr._routing_handler._targets.values()) \
+            if _tr._routing_handler else []:
+        fh.close()
+    _tr._routing_handler = None
     # LogBus：P3c 阶段 3 已 dict 化（_BUSES 按 workflow_id 索引），清注册表所有 bus。
     # （旧版写 LogBus._xxx 落在 _LogBusProxy 代理 instance __dict__、不触达真实 bus，
     # 且污染代理后续 __getattr__ → 跨测试串读。）

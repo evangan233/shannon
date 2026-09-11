@@ -43,6 +43,8 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import threading
 from pathlib import Path
 
 _LOGGER_NAME = "temporalio.activity"
@@ -52,6 +54,11 @@ _LOGGER_NAME = "temporalio.activity"
 _MANAGED_LOGGERS = ("temporalio.activity", "temporalio.worker")
 
 _DEFAULT_LEVEL = "WARNING"
+
+# record 消息内 workflow_id 提取：temporalio 的 activity failure record 把 details
+# dict repr 嵌进 message（"{'workflow_id': 'ws-x-corr', ...}"，2026-09-11 实证），
+# kwargs 形态（workflow_id='...'）一并覆盖。
+_WORKFLOW_ID_RE = re.compile(r"workflow_id['\"]?\s*[:=]\s*['\"]([^'\"]+)['\"]")
 
 
 def _resolve_level() -> int:
@@ -79,52 +86,128 @@ def _resolved_handler_path(h: logging.FileHandler) -> Path | None:
         return None
 
 
-def _has_file_handler_on(logger: logging.Logger, target: Path) -> bool:
-    for h in logger.handlers:
-        if isinstance(h, logging.FileHandler):
-            p = _resolved_handler_path(h)
-            if p is not None and p == target:
-                return True
-    return False
+class _WorkflowRoutingHandler(logging.Handler):
+    """按 record 消息内 workflow_id 路由到所属会话目录的共享 handler。
+
+    2026-09-11 日志串台修复：常驻 worker 单进程消费 wb/bb/corr 多个 task queue，
+    进程级 logger 是全局单例——旧「每次 install 挂自己的 FileHandler + 摘别人的」
+    语义在并发会话下变成「最后安装者赢」，corr 的崩溃 traceback 落进 wb 会话目录
+    （NodeGoat-20260910-193720 实证，排查方向被带偏）。
+
+    新语义：每个被管 logger 挂同一 routing handler 实例；registry 维护
+    workflow_id → FileHandler（前缀匹配覆盖 -resume-N / -corr 等后缀变体，多 key
+    命中取最长）；无 workflow_id 的 record（worker 执行边界 DEBUG 等）fallback 到
+    最近 install 的目标（与旧行为对齐）。level 过滤由本 handler 承担（env 决定），
+    内部 FileHandler 恒不过滤——``Handler.handle`` 不查 level，直接转发会绕过。
+    """
+
+    def __init__(self, level: int) -> None:
+        super().__init__(level=level)
+        self.setLevel(level)
+        self._lock = threading.Lock()
+        self._targets: dict[str, logging.FileHandler] = {}
+        self._fallback: logging.FileHandler | None = None
+
+    def register(self, handler: logging.FileHandler,
+                 workflow_id: str | None) -> None:
+        """注册目标：workflow_id 具名注册（有 id record 按前缀路由至此）；无论
+        是否具名都接管 fallback（无 id record 落最近安装目录，对齐旧行为）——
+        wb/corr 任一会话后装时，无 id 的 worker 边界 DEBUG 落它目录，与旧
+        「最后安装者赢」一致；有 id record 不受 fallback 换代影响。"""
+        with self._lock:
+            self._replace("_fallback", handler)
+            if workflow_id is not None:
+                self._replace(workflow_id, handler)
+
+    def _replace(self, key: str, handler: logging.FileHandler) -> None:
+        old = self._targets.get(key)
+        self._targets[key] = handler
+        # 换代关旧（防双写/句柄泄漏，2026-08-18 同款隐患）——但同一 handler 可同时
+        # 挂在 _fallback 与具名 key（register 双注册），fallback 换代不得 close 仍被
+        # 具名引用的 handler（否则 stream=None → 该会话 record 静默丢失）。
+        if (old is not None and old is not handler
+                and old not in self._targets.values()):
+            old.close()
+
+    def _match(self, workflow_id: str) -> logging.FileHandler | None:
+        """精确 or 前缀（key + "-"）匹配；多 key 命中取最长（防前缀重叠误路由）。"""
+        best_key: str | None = None
+        for key in self._targets:
+            if workflow_id == key or workflow_id.startswith(key + "-"):
+                if best_key is None or len(key) > len(best_key):
+                    best_key = key
+        return self._targets.get(best_key) if best_key is not None else None
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            m = _WORKFLOW_ID_RE.search(record.getMessage())
+            with self._lock:
+                h = (self._match(m.group(1))
+                     if m else None) or self._targets.get("_fallback")
+                if h is None or h.stream is None:
+                    return
+                h.emit(record)
+        except Exception:  # logging 故障不上行成扫描故障（对齐 _resolve_level）
+            self.handleError(record)
 
 
-def install_temporalio_log_redirect(log_path: Path) -> Path:
+_routing_handler: _WorkflowRoutingHandler | None = None
+
+
+def _get_routing_handler(level: int) -> _WorkflowRoutingHandler:
+    global _routing_handler
+    if _routing_handler is None:
+        _routing_handler = _WorkflowRoutingHandler(level)
+    else:
+        _routing_handler.setLevel(level)   # env 变化时同步（重装跟随最新 env）
+    return _routing_handler
+
+
+def current_temporal_workflow_id() -> str | None:
+    """activity 运行时上下文里的真实 temporal workflow_id；不在 activity 上下文
+    （CLI/测试）返回 None。注册 key 用它（与 record 消息内的 id 同形态），
+    scan_id 形态（无 ws 前缀）前缀匹配不上 record。"""
+    try:
+        import temporalio.activity as _ta
+        if not _ta.in_activity():
+            return None
+        return _ta.info().workflow_id
+    except Exception:  # temporalio 未装/上下文异常 → None（调用方回落）
+        return None
+
+
+def install_temporalio_log_redirect(log_path: Path,
+                                    *, workflow_id: str | None = None) -> Path:
     """Divert every managed temporalio logger's records to *log_path*; suppress from terminal.
 
-    - 对每个被管 logger(``_MANAGED_LOGGERS``)挂一个 ``FileHandler``, 级别由
-      ``SUPERNOVA_TEMPORALIO_LOG_LEVEL`` 决定(默认 ``WARNING`` = 现状零回归, 只收 failure
-      trace; ``DEBUG`` 收 activity 执行边界日志, 排 10min 空窗之用)。
+    - 每个被管 logger(``_MANAGED_LOGGERS``)挂**共享** routing handler，级别由
+      ``SUPERNOVA_TEMPORALIO_LOG_LEVEL`` 决定(默认 ``WARNING`` = 现状零回归, 只收
+      failure trace; ``DEBUG`` 收 activity 执行边界日志, 排 10min 空窗之用)。
+    - ``workflow_id`` 提供 → record 按消息内 workflow_id（前缀匹配，覆盖
+      -resume-N/-corr 变体）路由到本目录；``None`` → 本目录设为 fallback
+      （无 id record 落最近安装目录，与旧「最后安装者赢」行为对齐）。
     - ``propagate=False`` → 截断到 root LogBus, DEBUG 不污染 display 流(终端干净)。
     - ``logger.setLevel(DEBUG)`` → logger 不滤, handler 按 env 决定(不丢任何 record)。
-    - 幂等: 同 logger 上同路径 FileHandler 不重复挂; 指向其它路径的旧 FileHandler
-      (上一会话残留)被摘除 + close(防双写/句柄泄漏)。
+    - 幂等: 共享 handler 只挂一次；同 workflow_id 重装换代（旧 FileHandler close，
+      防双写/句柄泄漏）；不再摘其它会话的目标（并发会话各自路由，2026-09-11 修复）。
     """
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    target = log_path.resolve()
-    level = _resolve_level()
-    formatter = logging.Formatter(
-        "%(asctime)s %(levelname)s %(name)s: %(message)s")
+    routing = _get_routing_handler(_resolve_level())
+    handler = logging.FileHandler(log_path)
+    routing.register(handler, workflow_id)
 
     for name in _MANAGED_LOGGERS:
         logger = logging.getLogger(name)
-        # 摘掉指向其它路径的旧 FileHandler（上一会话残留）：不摘则同一条 record 被
-        # 新旧 handler 双写（两个会话目录的 activity_failures.log 内容相同）且旧文件
-        # 句柄泄漏（2026-08-18 实测两目录 md5 相同坐实）。同路径幂等跳过保留。
+        # 防御迁移：摘掉旧形态直挂的 FileHandler（历史版本残留），统一走 routing。
+        # 不摘则 record 被 routing + 旧 handler 双写。
         for h in list(logger.handlers):
-            if not isinstance(h, logging.FileHandler):
-                continue
-            p = _resolved_handler_path(h)
-            if p is not None and p != target:
+            if isinstance(h, logging.FileHandler) and h is not routing:
                 logger.removeHandler(h)
                 h.close()
-        if _has_file_handler_on(logger, target):
-            continue  # already installed on this path for this logger
-        handler = logging.FileHandler(log_path)
-        handler.setLevel(level)
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
+        if not any(h is routing for h in logger.handlers):
+            logger.addHandler(routing)
         logger.propagate = False
         logger.setLevel(logging.DEBUG)   # don't filter at logger level; handler decides
 

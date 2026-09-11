@@ -64,15 +64,15 @@ def test_install_failure_redirect_sets_path_and_propagate(tmp_path):
         wf_log.with_name("activity_failures.log"))
     # propagate=False is the defense-in-depth against a root stderr handler.
     assert logging.getLogger(_LOGGER_NAME).propagate is False
-    # And a FileHandler now points at that resolved path.
-    handlers = [h for h in logging.getLogger(_LOGGER_NAME).handlers
-                if isinstance(h, logging.FileHandler)]
-    assert handlers, "expected a FileHandler attached to temporalio.activity"
-    assert all(
-        Path(h.baseFilename).resolve()
+    # 路由架构（2026-09-11）：logger 挂共享 routing handler，其 fallback 目标
+    # （workflow_logger 不带 workflow_id 安装 → fallback）指向该路径。
+    routing = [h for h in logging.getLogger(_LOGGER_NAME).handlers
+               if not isinstance(h, logging.FileHandler)]
+    assert routing, "expected the shared routing handler on temporalio.activity"
+    fh = routing[0]._targets.get("_fallback")
+    assert fh is not None, "expected a fallback FileHandler registered"
+    assert Path(fh.baseFilename).resolve() \
         == (tmp_path / "activity_failures.log").resolve()
-        for h in handlers
-    )
 
 
 def test_install_failure_redirect_degrades_silently_on_error(tmp_path):

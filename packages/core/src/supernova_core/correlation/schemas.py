@@ -105,6 +105,26 @@ class TrustBoundary:
     def to_json(self) -> str:
         return json.dumps(_s(self), ensure_ascii=False)
 
+    @staticmethod
+    def from_dict(d: object) -> "TrustBoundary | None":
+        """LLM 输出容错构造（2026-09-11 cross-repo-20260910-193903 attempt1 崩溃
+        回归：edge agent 偶发漏 reachable_from 曾致 TrustBoundary(**b) TypeError
+        炸整单 correlation，靠 temporal 重试运气兜底）。对齐 TopologyEdge.from_json
+        （final-review MINOR 7）防御语义：未知键过滤；可选字段 reachable_from/
+        confidence/reason 缺则补默认（[]/"low"/""——条目仍有安全价值）；核心字段
+        service/method/exposure 缺 → None（调用方丢弃 + warning 记账，不炸整单）。"""
+        if not isinstance(d, dict):
+            return None
+        if not all(d.get(k) for k in ("service", "method", "exposure")):
+            return None
+        rf = d.get("reachable_from")
+        return TrustBoundary(
+            service=str(d["service"]), method=str(d["method"]),
+            exposure=str(d["exposure"]),
+            reachable_from=[str(x) for x in rf] if isinstance(rf, list) else [],
+            reason=str(d.get("reason") or ""),
+            confidence=str(d.get("confidence") or "low"))
+
 
 @dataclass
 class CorrelationResult:

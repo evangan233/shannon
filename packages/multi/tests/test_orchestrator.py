@@ -416,3 +416,150 @@ async def test_adjudication_failure_does_not_break_phase_a(tmp_path, monkeypatch
     cards = log["cards"] if isinstance(log, dict) else log
     assert cards and cards[0]["direction"] == "error"
     assert result["edge_statuses"] == []                          # 无边,不抛
+
+
+@pytest.mark.asyncio
+async def test_run_correlation_phase_tolerates_llm_boundary_missing_fields(
+        tmp_path, monkeypatch):
+    """2026-09-11 cross-repo-20260910-193903 attempt1 崩溃回归锚点：edge agent 输出的
+    boundary 缺 reachable_from/confidence（LLM 偶发漏字段，实证 edge:web→community
+    的 /debug/pprof/* 条目）不应 TypeError 炸整单 correlation——补默认保留条目 +
+    events 记 warning；核心字段缺的条目丢弃不炸。"""
+    import json as _json
+    from supernova_multi.orchestrator import run_correlation_phase
+
+    gw_ws, be_ws = tmp_path / "gw-scan", tmp_path / "be-scan"
+    for w in (gw_ws, be_ws):
+        (w / "deliverables").mkdir(parents=True)
+    out_ws = tmp_path / "corr-scan"
+    out_ws.mkdir()
+    event_file = out_ws / "events.ndjson"
+    cfg = MultiRepoConfig(
+        repos={"gateway": RepoSpec(path="/r/gw", role="entrypoint"),
+               "order-svc": RepoSpec(path="/r/be", role="backend")},
+        relations=[Relation(**{"from": "gateway", "to": "order-svc"})],
+        correlation=CorrelationConfig(out_workspace="corr-scan"))
+
+    async def fake_execute(self, **kw):
+        class _M:
+            structured_output = {
+                "from": "gateway", "to": "order-svc", "protocol": "grpc",
+                "calls": [], "status": "ok",
+                "boundaries": [
+                    # 实证样本：缺 reachable_from + confidence
+                    {"service": "community", "method": "/debug/pprof/*",
+                     "exposure": "external",
+                     "reason": "routes.go:43-45 DEBUG=1 挂载 pprof，无认证"},
+                    # 核心字段缺（exposure）→ 丢弃
+                    {"service": "ghost", "method": "m", "reason": "r"},
+                ],
+            }
+        return _M()
+
+    import supernova_core.agents.executor as executor_mod
+    monkeypatch.setattr(executor_mod.AgentExecutor, "execute", fake_execute)
+
+    result = await run_correlation_phase(
+        cfg, {"gateway": gw_ws, "order-svc": be_ws}, out_ws, event_file,
+        write_scan_end=False)
+
+    dlv = out_ws / "deliverables"
+    boundaries = _json.loads(
+        (dlv / "trust-boundaries.json").read_text(encoding="utf-8"))
+    assert len(boundaries) == 1                       # 核心字段缺的丢弃，其余保留
+    kept = boundaries[0]
+    assert kept["method"] == "/debug/pprof/*"
+    assert kept["reachable_from"] == []               # 补默认（未断定）
+    assert kept["confidence"] == "low"
+    # 可观测性：丢弃/补默认落 events.ndjson warning，不留到构造点才炸
+    events = [_json.loads(l) for l in
+              event_file.read_text(encoding="utf-8").splitlines() if l]
+    warn_txt = _json.dumps(events, ensure_ascii=False)
+    assert "ghost" in warn_txt and "reachable_from" in warn_txt
+    assert result["edge_statuses"] == ["ok"]
+
+
+@pytest.mark.asyncio
+async def test_edge_output_schema_constrains_boundary_items(tmp_path, monkeypatch):
+    """生产端收紧（2026-09-11 双防线之一）：boundaries item 写完整 JSON Schema——
+    openai 引擎 structured outputs 对嵌套 required 有强制力（LLM 漏字段在引擎侧
+    即被拒），claude 引擎无害；字段契约与 cross-repo-correlation.txt 对齐。
+    消费端容错见 test_run_correlation_phase_tolerates_llm_boundary_missing_fields。"""
+    import json as _json
+    from supernova_multi.orchestrator import run_correlation_phase
+
+    gw_ws, be_ws = tmp_path / "gw-scan", tmp_path / "be-scan"
+    for w in (gw_ws, be_ws):
+        (w / "deliverables").mkdir(parents=True)
+    out_ws = tmp_path / "corr-scan"
+    out_ws.mkdir()
+    event_file = out_ws / "events.ndjson"
+    cfg = MultiRepoConfig(
+        repos={"gateway": RepoSpec(path="/r/gw", role="entrypoint"),
+               "order-svc": RepoSpec(path="/r/be", role="backend")},
+        relations=[Relation(**{"from": "gateway", "to": "order-svc"})],
+        correlation=CorrelationConfig(out_workspace="corr-scan"))
+
+    captured: dict = {}
+
+    async def fake_execute(self, **kw):
+        captured["schema"] = kw.get("structured_output_schema")
+
+        class _M:
+            structured_output = {"from": "gateway", "to": "order-svc",
+                                 "protocol": "grpc", "calls": [], "status": "ok",
+                                 "boundaries": []}
+        return _M()
+
+    import supernova_core.agents.executor as executor_mod
+    monkeypatch.setattr(executor_mod.AgentExecutor, "execute", fake_execute)
+
+    await run_correlation_phase(
+        cfg, {"gateway": gw_ws, "order-svc": be_ws}, out_ws, event_file,
+        write_scan_end=False)
+
+    items = captured["schema"]["properties"]["boundaries"].get("items")
+    assert isinstance(items, dict), "boundaries item 必须有 schema 约束"
+    assert set(items.get("required", [])) >= {
+        "service", "method", "exposure", "reachable_from",
+        "reason", "confidence"}
+    props = items.get("properties", {})
+    assert props.get("reachable_from") == {"type": "array", "items": {"type": "string"}}
+
+
+@pytest.mark.asyncio
+async def test_run_correlation_phase_installs_failure_redirect(tmp_path, monkeypatch):
+    """2026-09-11 日志串台修复接线：corr 主行装 temporalio redirect 到本会话目录
+    ——corr 的 activity failure traceback 不再落并发 wb 会话目录（NodeGoat 目录
+    躺 corr 崩溃的实证）。activity 上下文外 workflow_id=None → 注册为 fallback，
+    无 id record 落 corr 目录。"""
+    import logging as _logging
+    from supernova_multi.orchestrator import run_correlation_phase
+
+    gw_ws, be_ws = tmp_path / "gw-scan", tmp_path / "be-scan"
+    for w in (gw_ws, be_ws):
+        (w / "deliverables").mkdir(parents=True)
+    out_ws = tmp_path / "corr-scan"
+    out_ws.mkdir()
+    event_file = out_ws / "events.ndjson"
+    cfg = MultiRepoConfig(
+        repos={"gateway": RepoSpec(path="/r/gw", role="entrypoint"),
+               "order-svc": RepoSpec(path="/r/be", role="backend")},
+        relations=[],
+        correlation=CorrelationConfig(out_workspace="corr-scan"))
+
+    async def fake_execute(self, **kw):
+        raise RuntimeError("not used")   # 无 edge，不执行
+
+    import supernova_core.agents.executor as executor_mod
+    monkeypatch.setattr(executor_mod.AgentExecutor, "execute", fake_execute)
+
+    await run_correlation_phase(
+        cfg, {"gateway": gw_ws, "order-svc": be_ws}, out_ws, event_file,
+        write_scan_end=False)
+
+    # corr 安装后：temporalio failure record 落 corr 会话目录（fallback 被接管）
+    _logging.getLogger("temporalio.activity").warning(
+        "Completing activity as failed ({'activity_type': 'run_correlation_activity'})")
+    assert "run_correlation_activity" in (
+        out_ws / "activity_failures.log").read_text(encoding="utf-8")

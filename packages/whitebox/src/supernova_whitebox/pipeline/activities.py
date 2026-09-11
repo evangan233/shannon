@@ -2700,9 +2700,12 @@ async def _run_adversarial_review_for_classes(
                    and (vuln_class, str(e.get("ID", ""))) not in prior_records]
         shards = _group_poc_targets(targets, shard_max)
 
-        def _all_unreviewed(shard: list[dict]) -> list[tuple[dict, dict]]:
+        def _all_unreviewed(shard: list[dict],
+                            review_error: dict | None = None
+                            ) -> list[tuple[dict, dict]]:
             return [(e, _record(vuln_class, e, "unreviewed", None,
-                                {"action": "kept"})) for e in shard]
+                                {"action": "kept"},
+                                review_error=review_error)) for e in shard]
 
         async def _one_shard(idx: int, shard: list[dict]) -> list[tuple[dict, dict]]:
             """单片 → 该片 (entry, record) 对；失败 → 全部 unreviewed。"""
@@ -2738,6 +2741,22 @@ async def _run_adversarial_review_for_classes(
                     raw = extract_review_payload(result.text)
                 cards = raw.get("cards") if isinstance(raw, dict) else None
                 if not cards:
+                    # 通道失败与良性零卡分流（2026-09-11 NodeGoat injection-02 回归：
+                    # 429 三连挂被混报成 no cards，排障只能翻 AgentEvent）。失败
+                    # result.success=False（run_claude_prompt 全捕获恒返回，429/超时
+                    # 不抛异常）——ERROR 级带 error_code，review_error 入 record 供
+                    # 补审筛选与报告呈现「未审查原因」；零卡维持 WARNING。保守放行
+                    # 语义两路相同（429 重试收敛 runner 层单点，此处不重试）。
+                    if getattr(result, "success", True) is False:
+                        review_error = {
+                            "error_code": getattr(result, "error_code", None),
+                            "error": str(getattr(result, "error", None) or "")[:500],
+                        }
+                        logger.error(
+                            "adversarial review: %s agent failed (%s); "
+                            "findings left unreviewed", agent_name,
+                            review_error["error_code"] or "unknown")
+                        return _all_unreviewed(shard, review_error=review_error)
                     logger.warning("adversarial review: %s returned no cards "
                                    "(findings left unreviewed)", agent_name)
                     return _all_unreviewed(shard)
@@ -2795,9 +2814,9 @@ async def _run_adversarial_review_for_classes(
         return kept, [p[1] for p in pairs], dismissed
 
     def _record(vc: str, entry: dict, verdict: str, card: dict | None,
-                after: dict) -> dict:
+                after: dict, review_error: dict | None = None) -> dict:
         card = card or {}
-        return {
+        rec = {
             "vuln_class": vc,
             "finding_id": str(entry.get("ID", "")),
             "reviewed_at": datetime.now(timezone.utc).isoformat(),
@@ -2814,6 +2833,9 @@ async def _run_adversarial_review_for_classes(
             "confidence": card.get("confidence"),
             "after": after,
         }
+        if review_error:  # 通道失败（429/超时等）才写——与良性零卡可区分
+            rec["review_error"] = review_error
+        return rec
 
     def _dismissed_entry(vc: str, entry: dict, record: dict) -> dict:
         dims = ",".join(record.get("failed_dimensions") or [])

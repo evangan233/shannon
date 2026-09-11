@@ -721,6 +721,11 @@ class ScanManager:
 
         await self._check_temporal()
         # 并发闸门已下沉 worker（spec §7）：resume 同样不拒绝，排队在 worker 闸门。
+        # 双跑守卫（2026-09-11 NodeGoat-20260910-193720 实证）：failed 免判活放行的
+        # 假设「Temporal 已终态」不总成立——activity 挂在 temporal 默认无限重试中时
+        # execution 阴魂不散，resume-N 提交后双跑（agent 并发翻倍撞 429 + checkpoint
+        # last-writer-wins 覆写丢审查结论）。提交前 terminate 上一个在途 execution。
+        await self._terminate_inflight_prior_execution(ws, scan_id)
         data = mgr.get_session_data(scan_dir)
         event_file = scan_dir / "events.ndjson"
         scan_key = (ws, scan_id)
@@ -857,6 +862,32 @@ class ScanManager:
         self._handles[scan_key] = handle
         self._tasks[scan_key] = asyncio.create_task(self._watch(scan_key, event_file, scan_dir))
         return ws, scan_id
+
+    async def _terminate_inflight_prior_execution(self, ws: str,
+                                                  scan_id: str) -> None:
+        """resume 双跑守卫：terminate 上一个 workflow 的在途 execution（best-effort）。
+
+        2026-09-11 NodeGoat-20260910-193720 实证：session 已标 failed（web 判死）但
+        temporal execution 挂在 activity 默认无限重试中并未终态——resume 提交后新旧
+        两个 execution 并发：agent 并发翻倍撞 429（injection-02 三连挂）+ checkpoint
+        last-writer-wins 覆写丢审查结论。prior id = 递增 resumeAttempts 前的
+        _resolve_workflow_id（读盘即时值，组合/非组合两分支共用）。describe 异常
+        （不存在/网络）与已终态均跳过，不阻断 resume（守卫不引入新失败面）。
+        """
+        prior_id = self._resolve_workflow_id(ws, scan_id)
+        try:
+            from temporalio.client import WorkflowExecutionStatus
+            client = await Client.connect(self._temporal_address())
+            handle = client.get_workflow_handle(prior_id)
+            desc = await handle.describe()
+            if desc.status == WorkflowExecutionStatus.RUNNING:
+                await handle.terminate(
+                    reason=f"superseded by resume of {ws}/{scan_id}")
+                _log.info("resume %s/%s: terminated inflight execution %s",
+                          ws, scan_id, prior_id)
+        except Exception:
+            _log.info("resume %s/%s: prior execution %s absent/terminal; "
+                      "skip terminate", ws, scan_id, prior_id, exc_info=True)
 
     async def resume_preview(self, ws: str, scan_id: str) -> dict:
         """断点详情（spec 2026-08-27-web-resume-breakpoint §4.5，只读不动状态）。

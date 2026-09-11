@@ -210,3 +210,70 @@ async def test_resume_no_longer_rejects_when_handles_full(tmp_path, monkeypatch)
     mgr._handles[("other", "s0")] = object()  # 占位（历史在跑）
     _make_scan_dir(tmp_path, "WS", scan_id="s1", status="interrupted")
     await mgr.resume("WS", "s1")  # 不抛 TooManyScans，照常续跑
+
+
+# ── resume 双跑守卫（2026-09-11 NodeGoat-20260910-193720 实证）─────────────────
+
+def _patch_client_with_prior_handle(monkeypatch, prior_handle):
+    mock_client = AsyncMock()
+    mock_client.start_workflow = AsyncMock(return_value=MagicMock())
+    mock_client.get_workflow_handle = MagicMock(return_value=prior_handle)
+    monkeypatch.setattr("supernova_web.components.scan_manager.Client.connect",
+                       AsyncMock(return_value=mock_client))
+    return mock_client
+
+
+@pytest.mark.asyncio
+async def test_resume_terminates_inflight_prior_execution(tmp_path, monkeypatch):
+    """failed（免判活路径）resume 前若上一 workflow execution 仍 RUNNING（挂在
+    activity 无限重试中「阴魂不散」），先 terminate 再提交 resume-N——否则双跑：
+    agent 并发翻倍撞 429 + checkpoint last-writer-wins 覆写丢审查结论。"""
+    from temporalio.client import WorkflowExecutionStatus
+    mgr = ScanManager(tmp_path, tmp_path / "r", None)
+    _patch_temporal_ok(monkeypatch, mgr)
+    prior = AsyncMock()
+    prior.describe.return_value = MagicMock(status=WorkflowExecutionStatus.RUNNING)
+    mock_client = _patch_client_with_prior_handle(monkeypatch, prior)
+    _make_scan_dir(tmp_path, "WS", scan_id="20260911-010101", status="failed")
+
+    await mgr.resume("WS", "20260911-010101")
+
+    prior.terminate.assert_awaited_once()   # 在途先终止
+    got = mock_client.get_workflow_handle.call_args
+    assert got.args[0] == "WS-20260911-010101"   # 上一个（原始）workflow id
+    assert mock_client.start_workflow.call_args.kwargs["id"] \
+        == "WS-20260911-010101-resume-1"
+
+
+@pytest.mark.asyncio
+async def test_resume_skips_terminate_when_prior_finished(tmp_path, monkeypatch):
+    """上一 execution 已终态（COMPLETED/FAILED）→ 不 terminate，直接提交。"""
+    from temporalio.client import WorkflowExecutionStatus
+    mgr = ScanManager(tmp_path, tmp_path / "r", None)
+    _patch_temporal_ok(monkeypatch, mgr)
+    prior = AsyncMock()
+    prior.describe.return_value = MagicMock(
+        status=WorkflowExecutionStatus.COMPLETED)
+    mock_client = _patch_client_with_prior_handle(monkeypatch, prior)
+    _make_scan_dir(tmp_path, "WS", scan_id="20260911-010102", status="failed")
+
+    await mgr.resume("WS", "20260911-010102")
+
+    prior.terminate.assert_not_awaited()
+    assert mock_client.start_workflow.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_prior_absent_does_not_block(tmp_path, monkeypatch):
+    """describe 抛（execution 不存在/网络错）→ best-effort 跳过，resume 照常提交。"""
+    mgr = ScanManager(tmp_path, tmp_path / "r", None)
+    _patch_temporal_ok(monkeypatch, mgr)
+    prior = AsyncMock()
+    prior.describe.side_effect = RuntimeError("workflow not found")
+    mock_client = _patch_client_with_prior_handle(monkeypatch, prior)
+    _make_scan_dir(tmp_path, "WS", scan_id="20260911-010103", status="failed")
+
+    await mgr.resume("WS", "20260911-010103")
+
+    prior.terminate.assert_not_awaited()
+    assert mock_client.start_workflow.await_count == 1

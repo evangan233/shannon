@@ -12,7 +12,9 @@ from supernova_core.display.events import (
 )
 from supernova_core.display.file_renderer import FileLogRenderer
 from supernova_core.display.formatters import format_log_time
-from supernova_core.logging.temporalio_redirect import install_temporalio_log_redirect
+from supernova_core.logging.temporalio_redirect import (
+    current_temporal_workflow_id, install_temporalio_log_redirect,
+)
 from supernova_core.models.audit import AgentLogDetails, ResumeInfo, WorkflowSummary
 from supernova_core.models.metrics import SessionMetadata
 from .log_stream import LogStream
@@ -125,7 +127,17 @@ class WorkflowLogger:
         try:
             failure_path: Path = generate_workflow_log_path(self._meta).with_name(
                 "activity_failures.log")
-            install_temporalio_log_redirect(failure_path)
+            # 具名注册（2026-09-11 日志串台修复）：本会话的 activity failure
+            # record 按消息内 workflow_id（-resume-N 变体前缀匹配）路由回本目录，
+            # 不再被并发会话（corr 等）的最后安装抢走/反向抢走别人。无 id record
+            # 仍 fallback 到最近安装目录（旧行为）。
+            # id 优先取 activity 运行时上下文的真实 temporal workflow_id（record
+            # 消息里的形态，如 "__legacy__-<scan>-resume-1"）；_workflow_id 是
+            # scan_id（无 ws 前缀），前缀匹配对不上 record，仅作回落。
+            install_temporalio_log_redirect(
+                failure_path,
+                workflow_id=current_temporal_workflow_id()
+                or getattr(self, "_workflow_id", None))
             self._activity_failure_log_path = str(failure_path)
         except Exception:
             logger.warning(
