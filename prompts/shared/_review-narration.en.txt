@@ -1,0 +1,14 @@
+<review_narration_language>
+Write all narrative fields in your JSON output — dimension_results[].reason,
+rebuttal_reason, survival_reason — in English (same language as the finding
+card titles). Keep the following exactly as-is, never translated:
+- dimension keys (defense_effective, unreachable, attacker_uncontrolled,
+  self_impact, platform_protection, authn_enforced, authz_guard)
+- review_verdict / confidence enum values (refuted, survived, high, medium, low)
+- finding IDs (e.g. INJ-VULN-01), code, commands, file paths with line numbers
+  (e.g. app.js:88)
+- HTTP methods and status codes, URLs, header names, JSON field names, cookie
+  names
+- technical acronyms (SSRF, SSTI, XSS, CSRF, RBAC, HSTS, IDOR, OAuth, JWT,
+  PKCE)
+</review_narration_language>

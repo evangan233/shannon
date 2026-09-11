@@ -17,6 +17,33 @@ def test_prompt_renders_variables():
     assert "{{" not in text  # 无未替换占位
 
 
+def test_review_narration_lang_partial_included():
+    """语言约定走 lang-aware @include（fix：审查理由英文根因），不写死单一
+    语言——SUPERNOVA_AGENT_NARRATION_LANG=en 时须能切英文，对齐
+    _output-language.txt 双语对模式（manager.py lang-aware fallback）。"""
+    text = (PROMPTS_DIR / "adversarial-review.txt").read_text(encoding="utf-8")
+    assert "@include(shared/_review-narration.txt)" in text
+
+
+def test_review_narration_renders_zh(monkeypatch):
+    monkeypatch.setenv("SUPERNOVA_AGENT_NARRATION_LANG", "zh")
+    text = PromptManager(PROMPTS_DIR).load_sync("adversarial-review", variables={
+        "VULN_CLASS": "injection", "REPO_ROOT": "/repo",
+        "FINDING_CARDS": '[{"ID": "INJ-01"}]'})
+    # zh 档注入中文叙述指令（reason/rebuttal_reason/survival_reason）
+    assert "简体中文" in text
+
+
+def test_review_narration_renders_en(monkeypatch):
+    monkeypatch.setenv("SUPERNOVA_AGENT_NARRATION_LANG", "en")
+    text = PromptManager(PROMPTS_DIR).load_sync("adversarial-review", variables={
+        "VULN_CLASS": "injection", "REPO_ROOT": "/repo",
+        "FINDING_CARDS": '[{"ID": "INJ-01"}]'})
+    # en 档换英文指令且不残留中文——语言随 env 切换（设计不变量）
+    assert "English" in text
+    assert "简体中文" not in text
+
+
 def test_calibration_sentences_present():
     text = (PROMPTS_DIR / "adversarial-review.txt").read_text(encoding="utf-8")
     # 姿态校准硬规则（spec §4.1）与维度清单锚点

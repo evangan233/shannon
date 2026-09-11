@@ -81,6 +81,8 @@ For each card:
    between entry and sink before concluding.
 </methodology>
 
+@include(shared/_review-narration.txt)
+
 <output-format>
 Return a single JSON object:
 {"cards": [{

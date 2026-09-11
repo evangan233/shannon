@@ -1,0 +1,11 @@
+<review_narration_language>
+审查输出 JSON 的全部叙述性字段——dimension_results[].reason、
+rebuttal_reason、survival_reason——用简体中文撰写（与 finding 卡标题同语言）。
+以下内容保留英文原文，不得翻译：
+- dimension 键名（defense_effective、unreachable、attacker_uncontrolled、
+  self_impact、platform_protection、authn_enforced、authz_guard）
+- review_verdict / confidence 枚举值（refuted、survived、high、medium、low）
+- 漏洞编号（如 INJ-VULN-01）、代码、命令、文件路径与行号（如 app.js:88）
+- HTTP 方法与状态码、URL、请求头名、JSON 字段名、cookie 名
+- 技术缩写（SSRF、SSTI、XSS、CSRF、RBAC、HSTS、IDOR、OAuth、JWT、PKCE）
+</review_narration_language>
