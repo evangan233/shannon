@@ -2469,6 +2469,35 @@ class ScanManager:
                 handle = client.get_workflow_handle(workflow_id)
         raise AssertionError("unreachable")
 
+    @staticmethod
+    def _workflow_result_status(result: Any) -> str | None:
+        """workflow 返回值业务 status 双形态读取（dict 或 PipelineState dataclass）。
+
+        temporalio 按返回类型注解反序列化：start_workflow(XxxWorkflow.run) 的
+        handle.result() 返回 dataclass 实例而非 dict（无类型 handle 才是 dict）——
+        isinstance(result, dict) 单分支对真实形态恒 False，曾致黑盒 run 终态漏判
+        failed、被标 completed（2026-09-11 NodeGoat-20260911-032558 口径矛盾根因）。
+        照搬 _combined_orchestrator 白盒双形态范式收编各 run 终态消费点。"""
+        if isinstance(result, dict):
+            return result.get("status")
+        return getattr(result, "status", None)
+
+    @staticmethod
+    def _workflow_result_error(result: Any) -> str:
+        """workflow 返回值失败原因双形态读取（对齐 _workflow_result_status）。
+
+        dict 分支兼容测试 mock 的 error 单键；dataclass 分支取 errors 列表 join /
+        error_code（真实 BlackboxPipelineState 字段），兜底文案与调用方原值一致。"""
+        if isinstance(result, dict):
+            return str(result.get("error")
+                       or "; ".join(result.get("errors") or [])
+                       or "blackbox workflow failed")
+        errs = getattr(result, "errors", None) or []
+        if errs:
+            return "; ".join(errs)
+        return str(getattr(result, "error_code", None)
+                   or "blackbox workflow failed")
+
     async def _check_temporal(self) -> None:
         import socket
 
@@ -2999,7 +3028,15 @@ class ScanManager:
         """
         final_status = "completed"
         try:
-            await self._await_workflow_result(bb_handle)
+            bb_result = await self._await_workflow_result(bb_handle)
+            # 对齐 _run_blackbox_phase 终态口径：workflow 正常返回 status=failed（未
+            # raise）→ run 标 failed、不生成融合报告。返回值此前被整体丢弃（resume
+            # 路径无条件 completed，吞失败——2026-09-11 口径矛盾同族缺口）。
+            if self._workflow_result_status(bb_result) == "failed":
+                await self._mark_run(scan_dir, run_id, "failed",
+                                     reason=self._workflow_result_error(bb_result),
+                                     status="failed")
+                return
             await self._generate_combined_report(scan_dir, run_id)
             await self._mark_run(scan_dir, run_id, "completed", status="completed")
         except Exception as exc:
@@ -3154,10 +3191,11 @@ class ScanManager:
         bb_result = await self._await_workflow_result(bb_handle)
         # 黑盒 workflow 正常返回 status=failed（未 raise）：不生成融合报告，run 标
         # failed（融合报告仅成功路径产出 → combined/run-K/；raise 路径由编排层
-        # except 兜底）。
-        if isinstance(bb_result, dict) and bb_result.get("status") == "failed":
+        # except 兜底）。status 经 _workflow_result_status 双形态读取——temporalio
+        # 按返回注解反序列化出 dataclass，dict 单分支恒漏判（2026-09-11 口径矛盾）。
+        if self._workflow_result_status(bb_result) == "failed":
             await self._mark_run(scan_dir, run_id, "failed",
-                                 reason=str(bb_result.get("error") or "blackbox failed"),
+                                 reason=self._workflow_result_error(bb_result),
                                  status="failed")
             return
         await self._generate_combined_report(scan_dir, run_id)  # → combined/run-K/
@@ -3678,6 +3716,27 @@ class ScanManager:
         except Exception:  # noqa: BLE001 - 超时/断连/workflow 不存在 → None
             return None
 
+    async def _fetch_workflow_result_status(self, workflow_id: str) -> str | None:
+        """读**已终结** workflow 返回值里的业务 status（temporal 执行态 ≠ 业务终态）。
+
+        黑盒 workflow「正常 return state.status=failed 不 raise」时 temporal 执行态是
+        COMPLETED——_query_workflow_status 只见 COMPLETED 会吞业务失败（2026-09-11
+        口径矛盾同族缺口）。终结后 result() 即时返回（非长轮询）。无类型 handle →
+        dict，经 _workflow_result_status 双形态读取。best-effort：异常/超时 → None
+        （reconcile 不阻塞，None 时回落原 completed 口径）。"""
+        timeout = float(
+            os.environ.get("SUPERNOVA_RECONCILE_TEMPORAL_TIMEOUT_SECONDS", "5"))
+
+        async def _probe() -> str | None:
+            client = await Client.connect(self._temporal_address())
+            result = await client.get_workflow_handle(workflow_id).result()
+            return self._workflow_result_status(result)
+
+        try:
+            return await asyncio.wait_for(_probe(), timeout=timeout)
+        except Exception:  # noqa: BLE001 - 超时/断连/result 解码失败 → None
+            return None
+
     async def _reconcile_combined_scan(self, scan_dir: Path) -> None:
         """进程重启后对组合扫描（combined=true）按 bb_phase 补接力/补报告/补 scan_end
         （spec §7.5 崩溃恢复）。
@@ -3688,7 +3747,9 @@ class ScanManager:
 
         - precheck + authcheck workflow COMPLETED + 白盒 COMPLETED → 补 _run_blackbox_phase。
         - pending + 白盒 workflow COMPLETED → 补 _run_blackbox_phase（接力）。
-        - running + 黑盒 workflow COMPLETED → 补 _generate_combined_report + _mark_bb(completed)。
+        - running + 黑盒 workflow COMPLETED → 读返回值业务 status：failed → run 标
+          failed；否则补 _generate_combined_report + _mark_bb(completed)（执行态
+          COMPLETED ≠ 业务成功，2026-09-11 口径矛盾修复）。
         - run 非终态 + workflow 不存在（编排随重启丢失、无可续执行）→ run 标 failed 收口
           （防 bb_runs 永久卡非终态，堵 delete/加 run 的状态门）。
         - 任意 bb_phase + workflow 仍 RUNNING → 不干预（让 temporal 自然完成）。
@@ -3767,9 +3828,19 @@ class ScanManager:
                 if bb_status == "running":
                     wf_active = True
                 elif bb_status == "completed":
-                    # run 黑盒完成（接力最后一步崩溃）→ 补 per-run 融合报告 + 标 completed。
-                    await self._generate_combined_report(scan_dir, run_id)
-                    await self._mark_run(scan_dir, run_id, "completed", status="completed")
+                    # run 黑盒完成（接力最后一步崩溃）→ 补 per-run 融合报告 + 标
+                    # completed。执行态 COMPLETED ≠ 业务成功（黑盒失败走正常 return
+                    # status=failed 不 raise）——须读返回值业务 status 分流，否则
+                    # reconcile 吞失败（2026-09-11 口径矛盾同族缺口）。result 读不
+                    # 到（None，best-effort）→ 维持原 completed 收口不回归。
+                    if await self._fetch_workflow_result_status(
+                            self._resolve_run_workflow_id(ws, scan_id, run_id)) == "failed":
+                        await self._mark_run(
+                            scan_dir, run_id, "failed", status="failed",
+                            reason="blackbox workflow failed (reconciled)")
+                    else:
+                        await self._generate_combined_report(scan_dir, run_id)
+                        await self._mark_run(scan_dir, run_id, "completed", status="completed")
                 else:
                     # workflow 不存在/不可达（None）→ 编排随 web 重启丢失且无 Temporal 执行
                     # 可续 → run 标 failed 收口。否则 bb_runs 永久卡非终态，delete 的 bb_runs
