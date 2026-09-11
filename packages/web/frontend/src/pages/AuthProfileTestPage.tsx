@@ -43,13 +43,12 @@ function verifyBadge(st: VerifyState): { cls: string; icon: string } {
     : { cls: "border-yellow/40 text-yellow", icon: "●" };
 }
 
-/** HostFormState → 测试请求参数（profile 模式 → hostProfileId / url 模式 → hostUrl）。
+/** HostFormState → 测试请求参数（profile 模式 → hostProfileIds 多选 / url 模式 → hostUrl）。
  *  对齐 ScanNewPage.assignHostToBody：未启用 → 空（直连）。供 AuthProfileTestPage 发起测试透传。 */
-export function hostToParams(h: HostFormState): { hostProfileId?: string; hostUrl?: string } {
+export function hostToParams(h: HostFormState): { hostProfileIds?: string[]; hostUrl?: string } {
   if (!h.enabled) return {};
   if (h.mode === "profile") {
-    const id = h.profileId.trim();
-    return id ? { hostProfileId: id } : {};
+    return h.profileIds.length ? { hostProfileIds: [...h.profileIds] } : {};
   }
   const url = h.hostUrl.trim();
   return url ? { hostUrl: url } : {};
@@ -149,10 +148,11 @@ export function AuthProfileTestPage() {
       const ids = profile.credentials.filter((c) => selectedIds.includes(c.id)).map((c) => c.id);
       const allIds = profile.credentials.map((c) => c.id);
       const hp = hostToParams(host);
-      // 全选时省略 cred_ids（后端 None=全选语义）；HOST 选中 → 走代理，未选 → 直连
+      // 全选时省略 cred_ids（后端 None=全选语义）；HOST 选中（可多选，后端合并 mappings）→
+      // 走代理，未选 → 直连
       const { workflow_id } = await testBatch(
         workspace, pid, ids.length === allIds.length ? undefined : ids,
-        hp.hostProfileId, hp.hostUrl);
+        hp.hostProfileIds, hp.hostUrl);
       setBatchWfId(workflow_id);
       setPolling(true);
       setRefreshTick((n) => n + 1);  // 立即重拉（拿首 cred running）

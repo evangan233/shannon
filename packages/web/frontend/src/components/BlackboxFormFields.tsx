@@ -65,6 +65,7 @@ export function BlackboxFormFields({
           authProfileId: detail.auth_profile_id ?? undefined,
           authCredentialIds: detail.auth_credential_ids ?? undefined,
           auth: detail.authentication ?? undefined,
+          hostProfileIds: detail.host_profile_ids?.length ? detail.host_profile_ids : undefined,
           hostProfileId: detail.host_profile_id ?? undefined,
           hostUrl: detail.host_url ?? undefined,
         };

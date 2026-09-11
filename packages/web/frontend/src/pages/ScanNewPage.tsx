@@ -92,14 +92,15 @@ export const DEFAULT_AUTH: AuthFormState = {
 
 /** HOST 解析表单态（blackbox-host-profile, Task 13）。镜像 AuthFormState 的双来源结构：
  *    - enabled=false：不起代理（向后兼容，直连目标）。
- *    - mode="profile"：复用工作区 HOST 档案（host_profile_id，Task 12 已落 backend）。
+ *    - mode="profile"：复用工作区 HOST 档案（host_profile_ids 多选合并，2026-09-11；
+ *      后端逐档案解析后合并 mappings，同 host 不同 IP → 422 冲突报错）。
  *    - mode="url"：临时填 /etc/hosts 风格文本 URL（host_url，后端拉取解析为 mappings）。
  *  与 auth 独立（非互斥）——二者各管各的：auth 管登录态，host 管 DNS 覆盖。 */
 export interface HostFormState {
   enabled: boolean;
   mode: "profile" | "url";
-  /** profile 模式：选定的 HOST 档案 id（GET /workspaces/{ws}/host-profiles 列表中一项）。 */
-  profileId: string;
+  /** profile 模式：选定的 HOST 档案 id 列表（GET /workspaces/{ws}/host-profiles 列表子集，可多选）。 */
+  profileIds: string[];
   /** url 模式：/etc/hosts 风格文本 URL（后端 POST /parse?url=<URL> 拉取解析，不落盘）。 */
   hostUrl: string;
 }
@@ -107,7 +108,7 @@ export interface HostFormState {
 export const DEFAULT_HOST: HostFormState = {
   enabled: false,
   mode: "profile",
-  profileId: "",
+  profileIds: [],
   hostUrl: "",
 };
 
@@ -161,7 +162,9 @@ export interface RerunPreset {
   authProfileId?: string;
   authCredentialIds?: string[];
   /** HOST 解析（Task 13）：原扫描启用了 HOST 解析，重跑时预填。
-   *  hostProfileId 非空 → profile 模式；仅 hostUrl → url 模式；后端 _scan_detail 暂未返（前端先就位）。 */
+   *  hostProfileIds 非空 → profile 模式（多选，2026-09-11）；仅 hostUrl → url 模式。
+   *  hostProfileId 为旧单数字段兜底（历史任务 detail 只有它 → 包成数组预填）。 */
+  hostProfileIds?: string[];
   hostProfileId?: string;
   hostUrl?: string;
   /** MR 增量（spec 2026-09-03 §6）：原扫描的 base/head refs，重跑时预填。
@@ -190,11 +193,15 @@ export function presetToAuthState(preset: RerunPreset): AuthFormState {
   return DEFAULT_AUTH;
 }
 
-/** RerunPreset → HostFormState：profile 模式（hostProfileId 非空）优先于 url 模式（hostUrl）。
- *  与 buildBody 一致：profile 模式发 host_profile_id，url 模式发 host_url。 */
+/** RerunPreset → HostFormState：profile 模式（hostProfileIds 非空；旧单数 hostProfileId
+ *  兜底包数组）优先于 url 模式（hostUrl）。
+ *  与 buildBody 一致：profile 模式发 host_profile_ids，url 模式发 host_url。 */
 export function presetToHostState(preset: RerunPreset): HostFormState {
-  if (preset.hostProfileId) {
-    return { ...DEFAULT_HOST, enabled: true, mode: "profile", profileId: preset.hostProfileId };
+  const presetIds = preset.hostProfileIds?.length
+    ? preset.hostProfileIds
+    : (preset.hostProfileId ? [preset.hostProfileId] : []);
+  if (presetIds.length) {
+    return { ...DEFAULT_HOST, enabled: true, mode: "profile", profileIds: presetIds };
   }
   if (preset.hostUrl) {
     return { ...DEFAULT_HOST, enabled: true, mode: "url", hostUrl: preset.hostUrl };
@@ -205,7 +212,7 @@ export function presetToHostState(preset: RerunPreset): HostFormState {
 function hostValidationKey(h: HostFormState): string | null {
   if (!h.enabled) return null;
   if (h.mode === "profile") {
-    return h.profileId.trim() ? null : "scan.errors.hostProfileRequired";
+    return h.profileIds.length ? null : "scan.errors.hostProfileRequired";
   }
   const url = h.hostUrl.trim();
   if (!url) return "scan.errors.hostUrlRequired";
@@ -306,9 +313,10 @@ export interface FormState {
 }
 
 /** 认证/HOST 字段写入目标：单发 ScanRequest 与批量 BatchScanRequest 的公共字段面
- *  （2026-09-11 批量白盒：两条 body 共用同一映射函数，字段名恒一致）。 */
+ *  （2026-09-11 批量白盒：两条 body 共用同一映射函数，字段名恒一致；
+ *  2026-09-11 HOST 多选：host_profile_ids 复数字段，单选也走复数——后端归一等价）。 */
 type AuthHostBody = Pick<ScanRequest, "authentication" | "auth_accounts" | "auth_profile_id"
-  | "auth_credential_ids" | "host_profile_id" | "host_url">;
+  | "auth_credential_ids" | "host_profile_ids" | "host_url">;
 
 /** 将 AuthFormState 写入 body 认证字段（auth-profile-vault 双来源）：
  *    - inline 模式 → authentication（+附加角色 auth_accounts）。
@@ -334,16 +342,20 @@ function assignAuthToBody(body: AuthHostBody, a: AuthFormState): void {
 }
 
 /** 将 HostFormState 写入 ScanRequest 的 HOST 字段（与 assignAuthToBody 同款共享）：
- *    - profile 模式 -> host_profile_id；url 模式 -> host_url。
+ *    - profile 模式 -> host_profile_ids（多选合并，2026-09-11；单选也走复数字段）；
+ *      url 模式 -> host_url。
  *    - enabled 时发；disabled 不发（向后兼容——不起代理，直连目标）。
- *    - 空值兜底 || undefined（不发空串）。
+ *    - 空值兜底不发空数组/空串。
  *  白盒组合扫描与 correlation（gateway url 开）共用，保证分支字段映射一致。HOST 与认证独立、非互斥。
  *  仅组合模式（combined && url）/correlation+url 调——纯白盒/纯关联（无 url）不发 host
  *  （无黑盒阶段，HOST 代理无意义）。 */
 function assignHostToBody(body: AuthHostBody, h: HostFormState): void {
   if (!h.enabled) return;
-  if (h.mode === "profile") body.host_profile_id = h.profileId || undefined;
-  else body.host_url = h.hostUrl || undefined;
+  if (h.mode === "profile") {
+    if (h.profileIds.length) body.host_profile_ids = [...h.profileIds];
+  } else {
+    body.host_url = h.hostUrl || undefined;
+  }
 }
 
 /**

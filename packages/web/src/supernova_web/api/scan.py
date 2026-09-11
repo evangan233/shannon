@@ -122,6 +122,7 @@ async def create_scan_batch(req: BatchScanRequest, request: Request,
             auth_profile_id=req.auth_profile_id,
             auth_credential_ids=req.auth_credential_ids,
             host_profile_id=req.host_profile_id,
+            host_profile_ids=req.host_profile_ids,
             host_url=req.host_url,
             delete_repo_on_finish=req.delete_repo_on_finish,
         )

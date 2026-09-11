@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { DeleteRepoOnFinishCheckbox } from "./DeleteRepoOnFinishCheckbox";
@@ -523,8 +524,9 @@ function BottomProfileBlock({ auth, setAuth, workspace, refreshSignal }: {
   );
 }
 
-/** HOST 档案选择器（profile 模式内容）：拉取当前 ws 的 host-profiles，下拉单选。
- *  镜像 BottomProfileBlock 的 listAuthProfiles 消费范式，但 HOST 是单选（无角色多选）故用 Select 更轻。 */
+/** HOST 档案选择器（profile 模式内容）：拉取当前 ws 的 host-profiles，多选 checkbox 列表
+ *  （2026-09-11 多选：多档案 mappings 后端合并，同 host 不同 IP 提交时 422 冲突报错）。
+ *  档案数量少（环境级），平铺列表 + 固定高度滚动即够，不引弹层/搜索。 */
 function HostProfilePicker({ host, setHost, workspace }: {
   host: HostFormState;
   setHost: (patch: Partial<HostFormState>) => void;
@@ -541,26 +543,47 @@ function HostProfilePicker({ host, setHost, workspace }: {
   if (loading) {
     return <div className="text-xs text-muted-foreground">{t("common.loading")}</div>;
   }
+  if (profiles.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-border bg-card p-3 text-xs text-muted-foreground">
+        {loadFailed ? t("common.loadFailed") : t("hostProfiles.empty")}
+      </div>
+    );
+  }
+  const toggle = (id: string, on: boolean) =>
+    setHost({ profileIds: on ? [...host.profileIds, id] : host.profileIds.filter((x) => x !== id) });
   return (
-    <Select value={host.profileId} onValueChange={(v) => setHost({ profileId: v })}>
-      <SelectTrigger className="w-full text-xs">
-        <SelectValue placeholder={t("scan.host.selectProfile")} />
-      </SelectTrigger>
-      <SelectContent>
-        {profiles.length === 0 ? (
-          <SelectItem value="__empty__" disabled>
-            {loadFailed ? t("common.loadFailed") : t("hostProfiles.empty")}
-          </SelectItem>
-        ) : profiles.map((p) => (
-          <SelectItem key={p.id} value={p.id}>
-            <span className="font-mono text-xs">{p.name}</span>
-            <span className="ml-1.5 text-[11px] text-muted-foreground">
-              · {p.mappings.length} {t("hostProfiles.mappingsCount")}
-            </span>
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <div data-testid="host-profile-picker" className="overflow-hidden rounded-lg border border-border bg-card">
+      <div className="max-h-56 overflow-y-auto p-1">
+        {profiles.map((p) => {
+          const cbId = `host-profile-opt-${p.id.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+          const checked = host.profileIds.includes(p.id);
+          return (
+            <label
+              key={p.id}
+              htmlFor={cbId}
+              data-testid={`host-profile-option-${p.id}`}
+              className={`flex h-8 items-center gap-2 rounded-md px-2 ${
+                checked ? "cursor-pointer bg-primary/5" : "cursor-pointer hover:bg-muted/60"
+              }`}
+            >
+              <Checkbox
+                id={cbId}
+                checked={checked}
+                onCheckedChange={(v) => toggle(p.id, v === true)}
+              />
+              <span className="min-w-0 flex-1 truncate font-mono text-xs">{p.name}</span>
+              <span className="shrink-0 text-[11px] text-muted-foreground">
+                {p.mappings.length} {t("hostProfiles.mappingsCount")}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+      <div className="border-t border-border px-2.5 py-1.5 text-[11px] text-muted-foreground">
+        {t("scan.host.profilesSelected", { n: host.profileIds.length })}
+      </div>
+    </div>
   );
 }
 
@@ -655,8 +678,8 @@ export function HostFields({ value, onChange, workspace, error }: {
   error?: string | null;
 }) {
   const { t } = useTranslation();
-  // 草稿信号（折叠态按钮显「已配置」标记，折叠不丢配置）--选了档案或填了 url 即视为已配置。
-  const hasDraft = !!(value.profileId || value.hostUrl.trim());
+  // 草稿信号（折叠态按钮显「已配置」标记，折叠不丢配置）--选了档案（多选）或填了 url 即视为已配置。
+  const hasDraft = !!(value.profileIds.length || value.hostUrl.trim());
   return (
     <section className="space-y-2">
       {/* HOST 行：标题 + 状态 + 展开/收起按钮（#1 单一 disclosure：展开即启用） */}

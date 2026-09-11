@@ -284,6 +284,8 @@ export interface SessionData {
   auth_credential_ids?: string[] | null;
   // HOST source for new-scan rerun; resolved mappings remain scan-scoped and are not exposed.
   host_profile_id?: string | null;
+  // 多选（2026-09-11）：完整档案 id 列表（旧任务 detail 只有单数字段 → 后端包数组）。
+  host_profile_ids?: string[];
   host_url?: string | null;
   host_source?: "profile" | "url" | null;
   host_mapping_count?: number;
@@ -1063,9 +1065,11 @@ export interface ScanRequest {
   // inline 多角色附加账号（#2，2026-08-07）：与 authentication 同存，每条 {role,username,password,totp_secret?}。
   // 后端 scan_manager 展开成 accounts[]（多身份对比）；仅 inline 模式（authentication 存在）时合法。
   auth_accounts?: { role: string; username: string; password: string; totp_secret?: string }[];
-  // HOST 档案库（blackbox-host-profile）：黑盒扫描时用 host_profile_id 选档案注入 domain→IP 映射
+  // HOST 档案库（blackbox-host-profile）：黑盒扫描时选 HOST 档案注入 domain→IP 映射
   // （agent-browser --proxy 覆盖 DNS），或 host_url 临时拉取一份 /etc/hosts 风格文本。
+  // host_profile_ids（2026-09-11 多选）：多档案后端合并 mappings；单选也走此复数字段。
   host_profile_id?: string;
+  host_profile_ids?: string[];
   host_url?: string;
   config_name?: string;
   // correlation（spec 2026-08-24，backend models.py 已有——D2 漏加的前端类型补齐）：
@@ -1100,6 +1104,7 @@ export interface BatchScanRequest {
   auth_profile_id?: string;
   auth_credential_ids?: string[];
   host_profile_id?: string;
+  host_profile_ids?: string[];
   host_url?: string;
   delete_repo_on_finish?: boolean;
 }

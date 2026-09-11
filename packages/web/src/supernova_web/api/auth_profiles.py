@@ -4,7 +4,7 @@ test/verify-status 端点在本文件追加(Task 6)。鉴权:看/用 workspace_m
 范式镜像 api/ws_config.py。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from supernova_web.auth.dependencies import workspace_member, workspace_manager
 from supernova_web.components.auth_profile_store import (
@@ -144,16 +144,20 @@ async def fork_profile(ws: str, pid: str, request: Request,
 @router.post("/{ws}/auth-profiles/{pid}/credentials/{cid}/test")
 async def test_credential(ws: str, pid: str, cid: str, request: Request,
                           host_profile_id: str | None = None,
+                          host_profile_ids: list[str] | None = Query(None),
                           host_url: str | None = None,
                           user=Depends(workspace_member)):
     """触发真实登录验证 → 起 AuthValidationWorkflow,返 {workflow_id, probe_dir}(前端轮询)。
 
-    host_profile_id/host_url(query)：选中 HOST → 走代理；都不传 → 直连（复用黑盒 HOST 能力）。
+    host_profile_id/host_profile_ids/host_url(query)：选中 HOST（单选=旧参数、多选=
+    host_profile_ids 重复 query 参数 `?host_profile_ids=a&host_profile_ids=b`）→
+    多档案合并后走代理；都不传 → 直连（复用黑盒 HOST 能力）。
     工作区模型配置缺失/错误 → 422 provider_incomplete（测试登录不降级，对齐 /api/scan 契约）。"""
     from supernova_web.components.ws_config_store import ProviderConfigIncomplete
     try:
         return await request.app.state.scan_manager.start_auth_validation(
-            ws, pid, cid, host_profile_id=host_profile_id, host_url=host_url)
+            ws, pid, cid, host_profile_id=host_profile_id,
+            host_profile_ids=host_profile_ids, host_url=host_url)
     except ProviderConfigIncomplete as e:
         raise HTTPException(422, detail={"code": "provider_incomplete", "missing": e.missing})
     except ValueError as e:
@@ -171,11 +175,13 @@ async def test_batch(ws: str, pid: str, request: Request,
     """
     cred_ids = (body or {}).get("cred_ids")
     host_profile_id = (body or {}).get("host_profile_id")
+    host_profile_ids = (body or {}).get("host_profile_ids")
     host_url = (body or {}).get("host_url")
     from supernova_web.components.ws_config_store import ProviderConfigIncomplete
     try:
         return await request.app.state.scan_manager.start_batch_auth_validation(
-            ws, pid, cred_ids, host_profile_id=host_profile_id, host_url=host_url)
+            ws, pid, cred_ids, host_profile_id=host_profile_id,
+            host_profile_ids=host_profile_ids, host_url=host_url)
     except ProviderConfigIncomplete as e:
         # 测试登录不降级（2026-08-17）：工作区模型配置缺失/错误 → 结构化 422，对齐 /api/scan 契约。
         raise HTTPException(422, detail={"code": "provider_incomplete", "missing": e.missing})

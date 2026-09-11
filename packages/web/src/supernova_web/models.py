@@ -65,8 +65,12 @@ class ScanRequest(BaseModel):
     #   - host_profile_id = 选已保存 HOST 档案（scan_manager 取 store 解析 → mappings）；
     #   - host_url        = 填 /etc/hosts GET 链接（扫描启动时拉取 → mappings，结束可选 upsert）。
     # 都不填 = 不启用 HOST 代理（向后兼容，既有扫描字节不变）。
-    host_profile_id: str | None = None   # 选 HOST 档案
+    host_profile_id: str | None = None   # 选 HOST 档案（单选，向后兼容）
     host_url: str | None = None          # 或填 GET 链接（扫描时拉取）
+    # 多选（2026-09-11）：选多个 HOST 档案，scan_manager 逐档案解析后合并 mappings
+    # （同 host 不同 IP → 422 冲突报错）。与 host_profile_id / host_url 三者互斥；
+    # 空列表 = 启用多选但一个没选 → 拒（对齐单数字段空串语义）。
+    host_profile_ids: list[str] | None = None
     # 扫完即删（2026-09-10）：勾选后扫描到任意终态（completed/failed/cancelled…）
     # 时由 web 仓库级 sweep 删除对应仓库（私有克隆 rmtree；linked 仓不处理）。
     # 标志随扫描行落 session；correlation 传播给本次新建的子仓扫描行。
@@ -80,6 +84,28 @@ class ScanRequest(BaseModel):
         if not isinstance(value, str):
             raise TypeError("HOST source must be a string")
         return value.strip()
+
+    @field_validator("host_profile_ids", mode="before")
+    @classmethod
+    def _normalize_host_profile_ids(cls, value: list[str] | None) -> list[str] | None:
+        """strip 每项 + 过滤空项 + 保序去重；全空 → []（校验层拒，对齐单数空串语义）。"""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            raise TypeError("host_profile_ids must be a list")
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            if not isinstance(item, str):
+                raise TypeError("host_profile_ids items must be strings")
+            s = item.strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            out.append(s)
+        return out
 
     @model_validator(mode="after")
     def _blackbox_requires_reuse(self) -> "ScanRequest":
@@ -176,9 +202,12 @@ class ScanRequest(BaseModel):
 
     @model_validator(mode="after")
     def _host_profile_xor_url(self) -> "ScanRequest":
-        """HOST 字段互斥校验（2026-08-12 Phase 2；2026-08-13 扩到组合模式）。
+        """HOST 字段互斥校验（2026-08-12 Phase 2；2026-08-13 扩到组合模式；
+        2026-09-11 扩多选 host_profile_ids）。
 
         - host_profile_id + host_url 同时填 = 非法（互斥，避免双源冲突）；
+        - host_profile_ids（多选）与 host_profile_id / host_url 三者互斥；
+        - host_profile_ids 空列表 = 启用多选但一个没选 → 非法（对齐单数空串语义）；
         - 单填一个 = 合法；都不填 = 合法（向后兼容，无 HOST 代理）。
         与认证字段完全独立（HOST 可与任意 auth 模式组合：profile/inline/无 auth）。
         对 blackbox 与组合模式（whitebox+url）生效--两条入口都暴露了 HOST 配置；
@@ -199,6 +228,12 @@ class ScanRequest(BaseModel):
                 raise ValueError(
                     "host_profile_id 与 host_url 互斥，不能同时指定（HOST 档案二选一）"
                 )
+            if self.host_profile_ids is not None and not self.host_profile_ids:
+                raise ValueError("host_profile_ids 不能为空；启用 HOST 后必须至少选择一个档案")
+            if self.host_profile_ids is not None and self.host_profile_id is not None:
+                raise ValueError("host_profile_id 与 host_profile_ids 不能同时指定")
+            if self.host_profile_ids is not None and self.host_url is not None:
+                raise ValueError("host_profile_ids 与 host_url 互斥，不能同时指定（HOST 档案二选一）")
             if self.host_url is not None:
                 scheme = (urlparse(self.host_url).scheme or "").lower()
                 if scheme not in ("http", "https"):
@@ -250,6 +285,7 @@ class BatchScanRequest(BaseModel):
     auth_profile_id: str | None = None
     auth_credential_ids: list[str] | None = None
     host_profile_id: str | None = None
+    host_profile_ids: list[str] | None = None
     host_url: str | None = None
     delete_repo_on_finish: bool = False
 
@@ -261,6 +297,28 @@ class BatchScanRequest(BaseModel):
         if not isinstance(value, str):
             raise TypeError("HOST source must be a string")
         return value.strip()
+
+    @field_validator("host_profile_ids", mode="before")
+    @classmethod
+    def _normalize_host_ids(cls, value: list[str] | None) -> list[str] | None:
+        """与 ScanRequest._normalize_host_profile_ids 同规则（复制而非继承——两条 body 契约独立演进）。"""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            raise TypeError("host_profile_ids must be a list")
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            if not isinstance(item, str):
+                raise TypeError("host_profile_ids items must be strings")
+            s = item.strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            out.append(s)
+        return out
 
     @field_validator("repos")
     @classmethod
@@ -306,7 +364,7 @@ class BatchScanRequest(BaseModel):
 
     @model_validator(mode="after")
     def _host_profile_xor_url(self) -> "BatchScanRequest":
-        """移植 ScanRequest._host_profile_xor_url（组合模式段）。"""
+        """移植 ScanRequest._host_profile_xor_url（组合模式段，含 2026-09-11 多选规则）。"""
         if self.url:
             if self.host_profile_id == "":
                 raise ValueError("host_profile_id 不能为空；启用 HOST 后必须选择档案")
@@ -314,6 +372,12 @@ class BatchScanRequest(BaseModel):
                 raise ValueError("host_url 不能为空；启用 HOST 后必须填写 URL")
             if self.host_profile_id is not None and self.host_url is not None:
                 raise ValueError("host_profile_id 与 host_url 互斥，不能同时指定（HOST 档案二选一）")
+            if self.host_profile_ids is not None and not self.host_profile_ids:
+                raise ValueError("host_profile_ids 不能为空；启用 HOST 后必须至少选择一个档案")
+            if self.host_profile_ids is not None and self.host_profile_id is not None:
+                raise ValueError("host_profile_id 与 host_profile_ids 不能同时指定")
+            if self.host_profile_ids is not None and self.host_url is not None:
+                raise ValueError("host_profile_ids 与 host_url 互斥，不能同时指定（HOST 档案二选一）")
             if self.host_url is not None:
                 scheme = (urlparse(self.host_url).scheme or "").lower()
                 if scheme not in ("http", "https"):

@@ -60,7 +60,7 @@ function form(overrides: Partial<FormState> = {}): FormState {
     url: "",
     reuseScanId: "",
     auth: DISABLED_AUTH,
-    host: { enabled: false, mode: "profile", profileId: "", hostUrl: "" },
+    host: { enabled: false, mode: "profile", profileIds: [], hostUrl: "" },
     yaml: "",
     ...overrides,
   };

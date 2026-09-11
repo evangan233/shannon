@@ -4,7 +4,7 @@
 // 这里直接渲染 ScanFormFields（type="blackbox"）——构造 FormState 直传，免走 ScanNewPage 的 ws 选择链，
 // 更窄地覆盖 HOST 区交互（折叠/展开、segmented toggle 切换、档案下拉选项渲染）。
 import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { setupServer } from "msw/node";
 import { http, HttpResponse } from "msw";
@@ -31,7 +31,7 @@ function makeForm(overrides: Partial<FormState> = {}): FormState {
     url: "http://example.com",
     reuseScanId: "20260731-1200",
     auth: DEFAULT_AUTH,
-    host: { enabled: false, mode: "profile", profileId: "", hostUrl: "" },
+    host: { enabled: false, mode: "profile", profileIds: [], hostUrl: "" },
     yaml: "",
     ...overrides,
   };
@@ -95,25 +95,42 @@ describe("ScanFormFields HOST 解析区", () => {
     expect(screen.queryByRole("button", { name: /填写链接/ })).toBeNull();
   });
 
-  it("展开 + profile 模式（默认）：显档案下拉，选项含 fixture 档案名", async () => {
-    renderFields(makeForm({ host: { enabled: true, mode: "profile", profileId: "", hostUrl: "" } }));
+  it("展开 + profile 模式（默认）：多选列表显 fixture 档案名，勾选回写 profileIds", async () => {
+    const set = vi.fn();
+    renderFields(makeForm({ host: { enabled: true, mode: "profile", profileIds: [], hostUrl: "" } }), set);
     // segmented toggle 显两按钮
     expect(screen.getByRole("button", { name: /使用档案/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: /填写链接/ })).toHaveAttribute("aria-pressed", "false");
-    // 等 HostProfilePicker 跑完 loading（useEffect 拉取完 → Select 挂载 + placeholder 显）
-    const trigger = (await screen.findByText("选择 HOST 档案")).closest("button")!;
-    fireEvent.click(trigger);
-    expect(await screen.findByRole("option", { name: /华南生产/ })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: /灰度集群/ })).toBeInTheDocument();
+    // 多选列表（平铺 checkbox，非下拉）：等 HostProfilePicker 跑完 loading 后显档案名
+    const picker = await screen.findByTestId("host-profile-picker");
+    expect(within(picker).getByText("华南生产")).toBeInTheDocument();
+    expect(within(picker).getByText("灰度集群")).toBeInTheDocument();
+    // 勾选第一个档案 → set profileIds=["host_1"]（多选追加语义；checkbox accessible name=label 文本）
+    fireEvent.click(within(picker).getByRole("checkbox", { name: /华南生产/ }));
+    expect(set).toHaveBeenCalledWith(expect.objectContaining({
+      host: expect.objectContaining({ profileIds: ["host_1"] }),
+    }));
   });
 
-  it("切到 url 模式 → 出现 URL 输入框（profile 下拉消失）", () => {
-    renderFields(makeForm({ host: { enabled: true, mode: "url", profileId: "", hostUrl: "" } }));
+  it("多选：已选一个再勾第二个 → profileIds 追加（不覆盖）", async () => {
+    const set = vi.fn();
+    renderFields(makeForm({ host: { enabled: true, mode: "profile", profileIds: ["host_1"], hostUrl: "" } }), set);
+    const picker = await screen.findByTestId("host-profile-picker");
+    fireEvent.click(within(picker).getByRole("checkbox", { name: /灰度集群/ }));
+    expect(set).toHaveBeenCalledWith(expect.objectContaining({
+      host: expect.objectContaining({ profileIds: ["host_1", "host_2"] }),
+    }));
+    // 已选计数文案显 1（初始态）
+    expect(within(picker).getByText(/已选 1 个档案/)).toBeInTheDocument();
+  });
+
+  it("切到 url 模式 → 出现 URL 输入框（profile 多选列表消失）", () => {
+    renderFields(makeForm({ host: { enabled: true, mode: "url", profileIds: [], hostUrl: "" } }));
     expect(screen.getByRole("button", { name: /填写链接/ })).toHaveAttribute("aria-pressed", "true");
     // url 模式显 placeholder
     expect(screen.getByPlaceholderText(/https:\/\/example\.com\/hosts\.txt/)).toBeInTheDocument();
-    // profile 模式下拉不显
-    expect(screen.queryByText("选择 HOST 档案")).toBeNull();
+    // profile 模式列表不显
+    expect(screen.queryByTestId("host-profile-picker")).toBeNull();
   });
 
   it("点「配置 HOST」→ set({host:{enabled:true}}) 回写父级（驱动 enabled 翻转）", () => {
@@ -125,7 +142,7 @@ describe("ScanFormFields HOST 解析区", () => {
 
   it("切模式：点「填写链接」→ set host.mode=url；点「使用档案」→ set host.mode=profile", () => {
     const set = vi.fn();
-    renderFields(makeForm({ host: { enabled: true, mode: "profile", profileId: "", hostUrl: "" } }), set);
+    renderFields(makeForm({ host: { enabled: true, mode: "profile", profileIds: [], hostUrl: "" } }), set);
     fireEvent.click(screen.getByRole("button", { name: /填写链接/ }));
     expect(set).toHaveBeenCalledWith(expect.objectContaining({ host: expect.objectContaining({ mode: "url" }) }));
     fireEvent.click(screen.getByRole("button", { name: /使用档案/ }));
@@ -138,7 +155,7 @@ describe("ScanFormFields HOST 解析区", () => {
 describe("ScanFormFields 白盒组合展开区 HOST", () => {
   it("组合开关开 + host enabled -> 展开区渲染 HOST 区块（显 segmented 切换）", () => {
     renderFields(
-      makeForm({ combined: true, host: { enabled: true, mode: "profile", profileId: "", hostUrl: "" } }),
+      makeForm({ combined: true, host: { enabled: true, mode: "profile", profileIds: [], hostUrl: "" } }),
       () => {},
       "whitebox",
     );
@@ -149,7 +166,7 @@ describe("ScanFormFields 白盒组合展开区 HOST", () => {
 
   it("组合开关开 + host disabled -> 显「配置 HOST」按钮（折叠态不显 segmented）", () => {
     renderFields(
-      makeForm({ combined: true, host: { enabled: false, mode: "profile", profileId: "", hostUrl: "" } }),
+      makeForm({ combined: true, host: { enabled: false, mode: "profile", profileIds: [], hostUrl: "" } }),
       () => {},
       "whitebox",
     );

@@ -1142,7 +1142,7 @@ describe("黑盒登录 buildAuthPayload / validateAuth", () => {
   });
 });
 
-// === Task 13: HOST 解析（host_profile_id / host_url）buildBody + presetToHostState ===
+// === Task 13: HOST 解析（host_profile_ids 多选 / host_url）buildBody + presetToHostState ===
 // 镜像 auth 的 buildBody/presetToAuthState 单测范式——纯函数断言字段映射，不渲染。
 // HOST 与 auth 独立（非互斥）：enabled 才发对应字段，disabled 不发（向后兼容，不起代理）。
 // D3 起黑盒分支已删——经 correlation 分支（gateway url 非空 = 段③黑盒验证）覆盖同一套 assignHostToBody。
@@ -1155,7 +1155,7 @@ describe("correlation HOST buildBody / presetToHostState", () => {
     reuseScanId: "",
     auth: { enabled: false, source: "inline", profileId: "", credentialIds: [],
       loginType: "form", loginUrl: "", accounts: [{ role: "admin", username: "", password: "" }], loginFlow: "" },
-    host: { enabled: false, mode: "profile", profileId: "", hostUrl: "" },
+    host: { enabled: false, mode: "profile", profileIds: [], hostUrl: "" },
     yaml: "",
   };
   const CORR_YAML = "repos:\n  frontend:\n    path: frontend\n    role: entrypoint\n";
@@ -1171,29 +1171,37 @@ describe("correlation HOST buildBody / presetToHostState", () => {
     expect(body.source).toBeUndefined();
   });
 
-  it("buildBody: host disabled → 不发 host_profile_id / host_url（向后兼容）", () => {
+  it("buildBody: host disabled → 不发 host_profile_ids / host_url（向后兼容）", () => {
     const body = buildBody("correlation", baseF, "ws1", CORR_YAML);
-    expect(body.host_profile_id).toBeUndefined();
+    expect(body.host_profile_ids).toBeUndefined();
     expect(body.host_url).toBeUndefined();
   });
 
-  it("buildBody: host enabled + profile 模式 → 发 host_profile_id（无 host_url）", () => {
+  it("buildBody: host enabled + profile 模式 → 发 host_profile_ids（单选也走复数字段）", () => {
     const body = buildBody("correlation",
-      { ...baseF, host: { enabled: true, mode: "profile", profileId: "host_1", hostUrl: "" } }, "ws1", CORR_YAML);
-    expect(body.host_profile_id).toBe("host_1");
+      { ...baseF, host: { enabled: true, mode: "profile", profileIds: ["host_1"], hostUrl: "" } }, "ws1", CORR_YAML);
+    expect(body.host_profile_ids).toEqual(["host_1"]);
     expect(body.host_url).toBeUndefined();
   });
 
-  it("buildBody: host enabled + url 模式 → 发 host_url（无 host_profile_id）", () => {
+  it("buildBody: host enabled + profile 多选 → host_profile_ids 完整数组（后端合并 mappings）", () => {
     const body = buildBody("correlation",
-      { ...baseF, host: { enabled: true, mode: "url", profileId: "", hostUrl: "https://x/hosts.txt" } }, "ws1", CORR_YAML);
+      { ...baseF, host: { enabled: true, mode: "profile", profileIds: ["host_1", "host_2"], hostUrl: "" } },
+      "ws1", CORR_YAML);
+    expect(body.host_profile_ids).toEqual(["host_1", "host_2"]);
+    expect(body.host_url).toBeUndefined();
+  });
+
+  it("buildBody: host enabled + url 模式 → 发 host_url（无 host_profile_ids）", () => {
+    const body = buildBody("correlation",
+      { ...baseF, host: { enabled: true, mode: "url", profileIds: [], hostUrl: "https://x/hosts.txt" } }, "ws1", CORR_YAML);
     expect(body.host_url).toBe("https://x/hosts.txt");
-    expect(body.host_profile_id).toBeUndefined();
+    expect(body.host_profile_ids).toBeUndefined();
   });
 
   it("buildBody: host enabled + profile 模式 profileId 空 → 拒绝静默降级", () => {
     expect(() => buildBody("correlation",
-      { ...baseF, host: { enabled: true, mode: "profile", profileId: "", hostUrl: "" } }, "ws1", CORR_YAML))
+      { ...baseF, host: { enabled: true, mode: "profile", profileIds: [], hostUrl: "" } }, "ws1", CORR_YAML))
       .toThrow("scan.errors.hostProfileRequired");
   });
 
@@ -1203,19 +1211,26 @@ describe("correlation HOST buildBody / presetToHostState", () => {
       auth: { enabled: true, source: "inline", profileId: "", credentialIds: [],
         loginType: "form", loginUrl: "http://t/login",
         accounts: [{ role: "admin", username: "u", password: "p" }], loginFlow: "" },
-      host: { enabled: true, mode: "url", profileId: "", hostUrl: "https://x/hosts.txt" },
+      host: { enabled: true, mode: "url", profileIds: [], hostUrl: "https://x/hosts.txt" },
     }, "ws1", CORR_YAML);
     expect(body.url).toBe("http://example.com"); // gateway url 非空 → 附黑盒验证
     expect(body.authentication).toBeDefined(); // auth inline 仍发
     expect(body.host_url).toBe("https://x/hosts.txt"); // host 同时发
   });
 
-  it("presetToHostState: hostProfileId 非空 → enabled + profile 模式", () => {
+  it("presetToHostState: hostProfileIds 数组 → enabled + profile 多选模式", () => {
+    const state = presetToHostState({ hostProfileIds: ["host_1", "host_2"] } as RerunPreset);
+    expect(state.enabled).toBe(true);
+    expect(state.mode).toBe("profile");
+    expect(state.profileIds).toEqual(["host_1", "host_2"]);
+    expect(state.hostUrl).toBe("");
+  });
+
+  it("presetToHostState: 旧单数 hostProfileId 兜底 → 包成数组预填", () => {
     const state = presetToHostState({ hostProfileId: "host_1" } as RerunPreset);
     expect(state.enabled).toBe(true);
     expect(state.mode).toBe("profile");
-    expect(state.profileId).toBe("host_1");
-    expect(state.hostUrl).toBe("");
+    expect(state.profileIds).toEqual(["host_1"]);
   });
 
   it("presetToHostState: 仅 hostUrl → enabled + url 模式", () => {
@@ -1231,15 +1246,15 @@ describe("correlation HOST buildBody / presetToHostState", () => {
     expect(state.mode).toBe("profile");
   });
 
-  it("presetToHostState: hostProfileId 优先于 hostUrl（profile 优先）", () => {
-    const state = presetToHostState({ hostProfileId: "host_1", hostUrl: "https://x/hosts.txt" } as RerunPreset);
+  it("presetToHostState: hostProfileIds 优先于 hostUrl（profile 优先）", () => {
+    const state = presetToHostState({ hostProfileIds: ["host_1"], hostUrl: "https://x/hosts.txt" } as RerunPreset);
     expect(state.mode).toBe("profile");
-    expect(state.profileId).toBe("host_1");
+    expect(state.profileIds).toEqual(["host_1"]);
   });
 });
 
 // === 组合扫描 HOST 字段透传（2026-08-13：白盒组合开关展开 HOST 入口后 buildBody 须发 host） ===
-// 与黑盒分支同款 assignHostToBody：enabled 时按 mode 发 host_profile_id / host_url；
+// 与黑盒分支同款 assignHostToBody：enabled 时按 mode 发 host_profile_ids（多选）/ host_url；
 // disabled 不发；非组合白盒（combined=false）即便 host.enabled 也不发（纯白盒无黑盒阶段）。
 describe("buildBody whitebox 组合扫描 HOST 透传", () => {
   function wbForm(overrides: Partial<FormState> = {}): FormState {
@@ -1253,49 +1268,49 @@ describe("buildBody whitebox 组合扫描 HOST 透传", () => {
         loginType: "form", loginUrl: "",
         accounts: [{ role: "admin", username: "", password: "" }], loginFlow: "",
       },
-      host: { enabled: true, mode: "profile", profileId: "", hostUrl: "" },
+      host: { enabled: true, mode: "profile", profileIds: [], hostUrl: "" },
       yaml: "",
       combined: true,
       ...overrides,
     };
   }
 
-  it("组合 + host profile 模式 -> 发 host_profile_id（不发 host_url）", () => {
+  it("组合 + host profile 模式 -> 发 host_profile_ids（单选也走复数字段，不发 host_url）", () => {
     const body = buildBody("whitebox", wbForm({
-      host: { enabled: true, mode: "profile", profileId: "host_1", hostUrl: "" },
+      host: { enabled: true, mode: "profile", profileIds: ["host_1"], hostUrl: "" },
     }), "ws1");
-    expect(body.host_profile_id).toBe("host_1");
+    expect(body.host_profile_ids).toEqual(["host_1"]);
     expect(body.host_url).toBeUndefined();
   });
 
-  it("组合 + host url 模式 -> 发 host_url（不发 host_profile_id）", () => {
+  it("组合 + host url 模式 -> 发 host_url（不发 host_profile_ids）", () => {
     const body = buildBody("whitebox", wbForm({
-      host: { enabled: true, mode: "url", profileId: "", hostUrl: "https://x/hosts.txt" },
+      host: { enabled: true, mode: "url", profileIds: [], hostUrl: "https://x/hosts.txt" },
     }), "ws1");
     expect(body.host_url).toBe("https://x/hosts.txt");
-    expect(body.host_profile_id).toBeUndefined();
+    expect(body.host_profile_ids).toBeUndefined();
   });
 
   it("组合 + host disabled -> 不发任何 host 字段（直连目标，向后兼容）", () => {
     const body = buildBody("whitebox", wbForm({
-      host: { enabled: false, mode: "profile", profileId: "host_1", hostUrl: "" },
+      host: { enabled: false, mode: "profile", profileIds: ["host_1"], hostUrl: "" },
     }), "ws1");
-    expect(body.host_profile_id).toBeUndefined();
+    expect(body.host_profile_ids).toBeUndefined();
     expect(body.host_url).toBeUndefined();
   });
 
   it("组合 + host profile 但 profileId 空 -> 拒绝静默降级", () => {
     expect(() => buildBody("whitebox", wbForm({
-      host: { enabled: true, mode: "profile", profileId: "", hostUrl: "" },
+      host: { enabled: true, mode: "profile", profileIds: [], hostUrl: "" },
     }), "ws1")).toThrow("scan.errors.hostProfileRequired");
   });
 
   it("非组合白盒（combined=false）即便 host enabled 也不发 host（纯白盒无黑盒阶段）", () => {
     const body = buildBody("whitebox", wbForm({
       combined: false,
-      host: { enabled: true, mode: "profile", profileId: "host_1", hostUrl: "" },
+      host: { enabled: true, mode: "profile", profileIds: ["host_1"], hostUrl: "" },
     }), "ws1");
-    expect(body.host_profile_id).toBeUndefined();
+    expect(body.host_profile_ids).toBeUndefined();
     expect(body.host_url).toBeUndefined();
   });
 });
@@ -1309,7 +1324,7 @@ describe("HOST enabled source validation", () => {
     reuseScanId: "20260731-1200",
     auth: { enabled: false, source: "inline", profileId: "", credentialIds: [],
       loginType: "form", loginUrl: "", accounts: [{ role: "admin", username: "", password: "" }], loginFlow: "" },
-    host: { enabled: true, mode: "profile", profileId: "", hostUrl: "" },
+    host: { enabled: true, mode: "profile", profileIds: [], hostUrl: "" },
     yaml: "",
   };
 
@@ -1320,7 +1335,7 @@ describe("HOST enabled source validation", () => {
   it("rejects an enabled HOST URL with a non-http(s) scheme", () => {
     expect(() => buildBody("correlation", {
       ...baseF,
-      host: { enabled: true, mode: "url", profileId: "", hostUrl: "ftp://hosts.example/hosts" },
+      host: { enabled: true, mode: "url", profileIds: [], hostUrl: "ftp://hosts.example/hosts" },
     }, "ws1")).toThrow();
   });
 });
@@ -2034,7 +2049,7 @@ describe("buildBlackboxRunBody 黑盒验证提交 body", () => {
     expect(body.authentication).toBeUndefined();
     expect(body.auth_profile_id).toBeUndefined();
     expect(body.host_url).toBeUndefined();
-    expect(body.host_profile_id).toBeUndefined();
+    expect(body.host_profile_ids).toBeUndefined();
   });
 
   it("profile 认证 + HOST url 模式映射到对应字段", () => {

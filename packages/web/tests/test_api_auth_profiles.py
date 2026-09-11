@@ -97,7 +97,7 @@ async def test_test_endpoint_starts_workflow(tmp_path, monkeypatch):
     assert r.status_code == 200, r.text
     assert r.json()["workflow_id"] == "wf-xyz"
     sm.start_auth_validation.assert_awaited_once_with(
-        "ws1", pid, cred_id, host_profile_id=None, host_url=None)
+        "ws1", pid, cred_id, host_profile_id=None, host_profile_ids=None, host_url=None)
 
 
 @pytest.mark.asyncio
@@ -116,7 +116,7 @@ async def test_test_batch_endpoint_starts_workflow(tmp_path):
     assert r.status_code == 200, r.text
     assert r.json()["workflow_id"] == "authval-batch-ws1-x"
     sm.start_batch_auth_validation.assert_awaited_once_with(
-        "ws1", pid, ["c1", "c2"], host_profile_id=None, host_url=None)
+        "ws1", pid, ["c1", "c2"], host_profile_id=None, host_profile_ids=None, host_url=None)
 
 
 @pytest.mark.asyncio
@@ -132,7 +132,7 @@ async def test_test_batch_endpoint_full_selection_no_body(tmp_path):
     assert r.status_code == 200, r.text
     # 无 body → cred_ids 透传为 None(全选)
     sm.start_batch_auth_validation.assert_awaited_once_with(
-        "ws1", pid, None, host_profile_id=None, host_url=None)
+        "ws1", pid, None, host_profile_id=None, host_profile_ids=None, host_url=None)
 
 
 @pytest.mark.asyncio
@@ -193,7 +193,7 @@ async def test_test_endpoint_threads_host_profile_id(tmp_path):
                params={"host_profile_id": "host_p1"})
     assert r.status_code == 200, r.text
     sm.start_auth_validation.assert_awaited_once_with(
-        "ws1", pid, cred_id, host_profile_id="host_p1", host_url=None)
+        "ws1", pid, cred_id, host_profile_id="host_p1", host_profile_ids=None, host_url=None)
 
 
 @pytest.mark.asyncio
@@ -208,7 +208,7 @@ async def test_test_batch_threads_host_fields(tmp_path):
     assert r.status_code == 200, r.text
     sm.start_batch_auth_validation.assert_awaited_once_with(
         "ws1", "prof_1", ["c1"], host_profile_id="host_p1",
-        host_url="https://h.test/get?id=1")
+        host_profile_ids=None, host_url="https://h.test/get?id=1")
 
 
 @pytest.mark.asyncio

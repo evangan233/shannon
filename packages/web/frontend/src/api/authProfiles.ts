@@ -28,18 +28,22 @@ export const deleteAuthProfile = (ws: string, pid: string) =>
 export const forkProfile = (ws: string, pid: string) =>
   apiPost<AuthProfile>(`/workspaces/${enc(ws)}/auth-profiles/${enc(pid)}/fork`, {});
 export const testCredential = (ws: string, pid: string, cid: string,
-                               hostProfileId?: string, hostUrl?: string) => {
-  const qs = hostProfileId ? `?host_profile_id=${enc(hostProfileId)}`
+                               hostProfileIds?: string[], hostUrl?: string) => {
+  // HOST 多选（2026-09-11）：重复 query 参数 ?host_profile_ids=a&host_profile_ids=b；
+  // 单档案也走复数（后端归一等价）。
+  const qs = hostProfileIds?.length
+    ? `?${hostProfileIds.map((id) => `host_profile_ids=${enc(id)}`).join("&")}`
     : hostUrl ? `?host_url=${enc(hostUrl)}` : "";
   return apiPost<{ workflow_id: string; probe_dir: string }>(
     `/workspaces/${enc(ws)}/auth-profiles/${enc(pid)}/credentials/${enc(cid)}/test${qs}`, {});
 };
 // 档案级批量测试登录（多选角色 → 串行逐个独立验证）。credIds 省略/空 = 全选。返 batch workflow_id。
+// hostProfileIds 多选：多档案后端合并 mappings（同 host 不同 IP → 422 冲突报错）。
 export const testBatch = (ws: string, pid: string, credIds?: string[],
-                          hostProfileId?: string, hostUrl?: string) => {
+                          hostProfileIds?: string[], hostUrl?: string) => {
   const body: Record<string, unknown> = {};
   if (credIds) body.cred_ids = credIds;
-  if (hostProfileId) body.host_profile_id = hostProfileId;
+  if (hostProfileIds?.length) body.host_profile_ids = hostProfileIds;
   if (hostUrl) body.host_url = hostUrl;
   return apiPost<{ workflow_id: string }>(
     `/workspaces/${enc(ws)}/auth-profiles/${enc(pid)}/test-batch`, body);

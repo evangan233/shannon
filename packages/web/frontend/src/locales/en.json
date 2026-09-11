@@ -496,7 +496,8 @@
       "collapse": "Collapse",
       "sourceProfile": "Use profile",
       "sourceUrl": "Enter URL",
-      "selectProfile": "Select HOST profile",
+      "selectProfile": "Select HOST profiles (multi)",
+      "profilesSelected": "{{n}} selected (mappings merged; conflicting hosts rejected on submit)",
       "urlPlaceholder": "https://example.com/hosts.txt",
       "infoNote": "Redirect target domains to specified IPs (DNS override) for intranet/canary pentest."
     },

@@ -61,13 +61,17 @@ function renderPage() {
 }
 
 describe("hostToParams", () => {
-  const base: HostFormState = { enabled: false, mode: "profile", profileId: "", hostUrl: "" };
+  const base: HostFormState = { enabled: false, mode: "profile", profileIds: [], hostUrl: "" };
   it("未启用 → 空（直连）", () => {
     expect(hostToParams(base)).toEqual({});
   });
-  it("profile 模式 → hostProfileId", () => {
-    expect(hostToParams({ ...base, enabled: true, mode: "profile", profileId: "host_p1" }))
-      .toEqual({ hostProfileId: "host_p1" });
+  it("profile 模式多选 → hostProfileIds 数组", () => {
+    expect(hostToParams({ ...base, enabled: true, mode: "profile", profileIds: ["host_p1", "host_p2"] }))
+      .toEqual({ hostProfileIds: ["host_p1", "host_p2"] });
+  });
+  it("profile 模式空选 → 空（等价直连，不发空数组）", () => {
+    expect(hostToParams({ ...base, enabled: true, mode: "profile", profileIds: [] }))
+      .toEqual({});
   });
   it("url 模式 → hostUrl", () => {
     expect(hostToParams({ ...base, enabled: true, mode: "url", hostUrl: "https://h.test/get" }))

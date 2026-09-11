@@ -496,7 +496,8 @@
       "collapse": "收起",
       "sourceProfile": "使用档案",
       "sourceUrl": "填写链接",
-      "selectProfile": "选择 HOST 档案",
+      "selectProfile": "选择 HOST 档案（可多选）",
+      "profilesSelected": "已选 {{n}} 个档案（多选合并，域名冲突会在提交时报错）",
       "urlPlaceholder": "https://example.com/hosts.txt",
       "infoNote": "将目标域名重定向到指定 IP（DNS 覆盖），用于内网/灰度环境渗透测试。"
     },

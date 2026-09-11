@@ -1263,46 +1263,70 @@ class ScanManager:
         return {}
 
     async def _resolve_host_config_sources(
-        self, host_profile_id: str | None, host_url: str | None, ws: str,
+        self, host_profile_ids: list[str] | None, host_url: str | None, ws: str,
     ) -> dict | None:
-        """Resolve one HOST source (profile_id xor url) into an immutable snapshot.
+        """Resolve HOST sources (profile ids xor url) into an immutable snapshot.
 
         核心解析逻辑，扫描启动（经 ``_resolve_host_config`` 从 ScanRequest 取字段）
         与认证测试（选中 HOST → per-cred proxy；都不选 → 直连）共用——复用同一套
         refresh / warnings / fetch_and_parse_hosts，避免重复造轮子。
+
+        多选（2026-09-11）：host_profile_ids 多档案逐个 refresh + 归一化后合并——
+        同 host 同 IP 自然去重；同 host 不同 IP → ValueError 带两档案名 + host +
+        两个 IP（用户能看出选错了哪两个环境档案），API 层转 422。快照
+        profile_ids = 完整列表（detail 重跑预填吃），profile_id = 第一个（旧读方
+        兼容）。单档案路径行为字节不变（含 per-档案 refresh 失败回落快照）。
         """
-        if host_profile_id is None and host_url is None:
+        if not host_profile_ids and host_url is None:
             return None
 
         warnings: list[str] = []
-        if host_profile_id is not None:
+        if host_profile_ids:
             if self.host_profile_store is None:
                 raise RuntimeError("host_profile_store 未注入，无法解析 HOST 档案")
-            profile = self.host_profile_store.get(ws, host_profile_id)
-            if profile is None:
-                raise ValueError(f"HOST 档案不存在: {host_profile_id}")
-            if profile.source_url:
-                try:
-                    refreshed = await self.host_profile_store.refresh(ws, host_profile_id)
-                    if refreshed is not None:
-                        profile = refreshed
-                    get_warnings = getattr(self.host_profile_store, "refresh_warnings", None)
-                    if get_warnings is not None:
-                        warnings.extend(get_warnings(ws, host_profile_id))
-                except HostProfileRefreshEmpty as exc:
-                    raise ValueError(str(exc)) from exc
-                except Exception as exc:
-                    if profile.mappings:
-                        warnings.append(f"HOST profile refresh failed: {exc}")
-                    else:
-                        raise ValueError(f"HOST profile refresh failed: {exc}") from exc
-            mappings = self._normalize_host_mapping_dict(profile.mappings)
+            merged: dict[str, str] = {}
+            # host -> (档案名, ip)：冲突定位报错用（同档案内冲突已被 store 校验拒绝）。
+            owner: dict[str, tuple[str, str]] = {}
+            source_urls: list[str] = []
+            for pid in host_profile_ids:
+                profile = self.host_profile_store.get(ws, pid)
+                if profile is None:
+                    raise ValueError(f"HOST 档案不存在: {pid}")
+                if profile.source_url:
+                    source_urls.append(profile.source_url)
+                    try:
+                        refreshed = await self.host_profile_store.refresh(ws, pid)
+                        if refreshed is not None:
+                            profile = refreshed
+                        get_warnings = getattr(self.host_profile_store, "refresh_warnings", None)
+                        if get_warnings is not None:
+                            warnings.extend(get_warnings(ws, pid))
+                    except HostProfileRefreshEmpty as exc:
+                        raise ValueError(str(exc)) from exc
+                    except Exception as exc:
+                        if profile.mappings:
+                            warnings.append(f"HOST profile refresh failed: {exc}")
+                        else:
+                            raise ValueError(f"HOST profile refresh failed: {exc}") from exc
+                for host, ip in self._normalize_host_mapping_dict(profile.mappings).items():
+                    prev = owner.get(host)
+                    if prev is not None and prev[1] != ip:
+                        raise ValueError(
+                            f"HOST 档案映射冲突: {host} 在档案「{prev[0]}」指向 {prev[1]}"
+                            f"，在档案「{profile.name}」指向 {ip}")
+                    if prev is None:
+                        owner[host] = (profile.name, ip)
+                    merged[host] = ip
+            single = len(host_profile_ids) == 1
             return {
                 "enabled": True,
                 "source": "profile",
-                "profile_id": host_profile_id,
-                "source_url": profile.source_url,
-                "mappings": mappings,
+                "profile_ids": list(host_profile_ids),
+                "profile_id": host_profile_ids[0],
+                # 兼容键：单档案 = 该档案来源（字节不变）；多档案各档来源见 source_urls。
+                "source_url": source_urls[0] if single and source_urls else None,
+                "source_urls": source_urls,
+                "mappings": merged,
                 "warnings": warnings,
                 "resolved_at": time.time(),
             }
@@ -1313,6 +1337,7 @@ class ScanManager:
         return {
             "enabled": True,
             "source": "url",
+            "profile_ids": [],
             "profile_id": None,
             "source_url": host_url,
             "mappings": normalized,
@@ -1320,12 +1345,22 @@ class ScanManager:
             "resolved_at": time.time(),
         }
 
+    @staticmethod
+    def _coalesce_host_profile_ids(
+        host_profile_id: str | None, host_profile_ids: list[str] | None,
+    ) -> list[str] | None:
+        """单/复数字段归一成 ids 列表（复数优先；空列表 = 未选 → None 直连）。"""
+        if host_profile_ids is not None:
+            return host_profile_ids or None
+        return [host_profile_id] if host_profile_id else None
+
     async def _resolve_host_config(
         self, req: ScanRequest, ws: str,
     ) -> dict | None:
         """ScanRequest → source fields → 核心解析（薄封装，保签名兼容既有调用/测试）。"""
         return await self._resolve_host_config_sources(
-            req.host_profile_id, req.host_url, ws)
+            self._coalesce_host_profile_ids(req.host_profile_id, req.host_profile_ids),
+            req.host_url, ws)
 
     async def _resolve_host_mappings(
         self, req: ScanRequest, ws: str,
@@ -1432,6 +1467,7 @@ class ScanManager:
 
     async def start_auth_validation(self, ws: str, profile_id: str, cred_id: str,
                                     *, host_profile_id: str | None = None,
+                                    host_profile_ids: list[str] | None = None,
                                     host_url: str | None = None) -> dict:
         """认证管理页"测试登录":写 probe scan-config.yaml + 起 AuthValidationWorkflow。
 
@@ -1483,9 +1519,12 @@ class ScanManager:
             encoding="utf-8",
         )
         client = await Client.connect(self._temporal_address())
-        # HOST 档案：选中 → mappings（单 cred workflow 据此起 host proxy）；都不传 → {} 直连。
+        # HOST 档案：选中（单/多选，_coalesce 归一）→ mappings（单 cred workflow 据此起
+        # host proxy）；都不传 → {} 直连。
         host_mappings = self._host_config_mappings(
-            await self._resolve_host_config_sources(host_profile_id, host_url, ws))
+            await self._resolve_host_config_sources(
+                self._coalesce_host_profile_ids(host_profile_id, host_profile_ids),
+                host_url, ws))
         _env_ov = self._resolve_env_overrides(ws)
         inp = BlackboxAuthValidationInput(
             web_url=profile.login_url,
@@ -1518,6 +1557,7 @@ class ScanManager:
     async def start_batch_auth_validation(self, ws: str, profile_id: str,
                                           cred_ids: list[str] | None, *,
                                           host_profile_id: str | None = None,
+                                          host_profile_ids: list[str] | None = None,
                                           host_url: str | None = None) -> dict:
         """档案级批量认证验证(认证管理页"测试登录"多选角色):逐个独立验证每个选中角色能否登录。
 
@@ -1558,10 +1598,13 @@ class ScanManager:
         # 解析放在删旧 probe/写新 probe 之前：失败时不留明文 scan-config.yaml、不破坏回看产物。
         provider_config = self._resolve_provider_config(ws)
         # 各 cred 覆盖清旧 probe + 建 probe_dir + 写 scan-config.yaml(role 不入 YAML)
-        # HOST 档案：选中 → mappings（每个 cred item 同值，batch workflow 据此起 per-cred
-        # host proxy）；都不传 → {} 直连。解析一次复用到所有 item（同一不可变快照）。
+        # HOST 档案：选中（单/多选，_coalesce 归一）→ mappings（每个 cred item 同值，
+        # batch workflow 据此起 per-cred host proxy）；都不传 → {} 直连。解析一次复用
+        # 到所有 item（同一不可变快照）。
         host_mappings = self._host_config_mappings(
-            await self._resolve_host_config_sources(host_profile_id, host_url, ws))
+            await self._resolve_host_config_sources(
+                self._coalesce_host_profile_ids(host_profile_id, host_profile_ids),
+                host_url, ws))
         allowed_parent = (self._workspaces_dir / ws / "auth-probes").resolve()
         items: list = []
         cred_probe_map: dict[str, dict] = {}

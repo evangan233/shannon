@@ -459,8 +459,10 @@ function ScanRow({ ws, scan, scansById, onChanged }: {
         } else if (detail.authentication) {
           state.auth = detail.authentication;
         }
-        if (detail.host_profile_id) state.hostProfileId = detail.host_profile_id;
-        else if (detail.host_url) state.hostUrl = detail.host_url;
+        // HOST 多选（2026-09-11）：优先复数字段（旧任务只有单数 → detail 后端已包数组）。
+        if (detail.host_profile_ids?.length) state.hostProfileIds = detail.host_profile_ids;
+        else if (detail.host_profile_id) state.hostProfileId = detail.host_profile_id;
+        if (detail.host_url) state.hostUrl = detail.host_url;
       }
       nav(`/scan/new?workspace=${encodeURIComponent(ws)}`, { state });
     } catch {

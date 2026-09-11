@@ -141,7 +141,13 @@ async def _scan_detail(request: Request, ws: str, scan_id: str, scan_dir) -> dic
         "auth_profile_id": bb_auth_ref.get("profile_id"),
         "auth_credential_ids": bb_auth_ref.get("cred_ids") or [],
         # HOST 来源仅用于新建扫描重跑预填；mapping 内容不随详情暴露。
+        # host_profile_ids（2026-09-11 多选）：新快照完整列表；旧快照只有单数
+        # profile_id → 包成 [profile_id] 兜底（前端统一吃数组）；url 源 → []。
         "host_profile_id": host_config.get("profile_id") if host_source == "profile" else None,
+        "host_profile_ids": (
+            host_config.get("profile_ids")
+            or ([host_config["profile_id"]] if host_config.get("profile_id") else [])
+        ) if host_source == "profile" else [],
         "host_url": host_config.get("source_url") if host_source == "url" else None,
         "host_source": host_source,
         "host_mapping_count": len(host_mappings) if isinstance(host_mappings, dict) else 0,
