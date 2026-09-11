@@ -63,7 +63,17 @@ class SessionToolAuditLogger(ToolAuditLogger):
         await self._session.log_error(
             RuntimeError(error), context=f"turn={turn_count}, {duration_ms}ms")
 
-    async def close(self, success: bool, duration_ms: int) -> None:
-        """Write agent_end to the per-agent JSON log and close its stream."""
-        await self._agent_logger.log_event("agent_end", {"success": success, "duration_ms": duration_ms})
+    async def close(self, success: bool, duration_ms: int,
+                    end_reason: str | None = None) -> None:
+        """Write agent_end to the per-agent JSON log and close its stream.
+
+        end_reason：真实结束原因（truncated/max_turns/max_duration/refusal/
+        ErrorCode 值/unexpected_error），独立于 success——success 在截断/限流
+        等场景不可信（memory audit-agent-end-success-blindspot），正常完成为
+        None。键恒写（None 也写），消费方统一读键。
+        """
+        await self._agent_logger.log_event(
+            "agent_end",
+            {"success": success, "duration_ms": duration_ms,
+             "end_reason": end_reason})
         await self._agent_logger.close()

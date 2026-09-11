@@ -9,6 +9,7 @@ from temporalio.exceptions import ApplicationError as ApplicationFailure
 
 from supernova_core.models.agents import AgentName
 from supernova_core.models.errors import ErrorCode, PentestError, classify_error_for_temporal
+from supernova_core.models.metrics import end_reason_from_stop_reason
 from supernova_core.models.retry import agent_retry_category, retry_for
 from supernova_core.utils.security import validate_target_url, check_url_reachable
 from supernova_core.utils.credential_validator import validate_credentials
@@ -245,7 +246,10 @@ async def run_blackbox_auth_validation(input: BlackboxActivityInput) -> None:
         )
     except PentestError as e:
         dur_ms = int((time.monotonic() - agent_start) * 1000)
-        await tool_audit_logger.close(success=False, duration_ms=dur_ms)
+        await tool_audit_logger.close(
+            success=False, duration_ms=dur_ms,
+            # 失败类别留痕（对齐 whitebox run_agent）
+            end_reason=e.error_code.value if e.error_code else "error")
         # 失败 agent 也记 cost：从 PentestError.context 取 executor 携带的真实消耗
         # （修 error path cost 归 0），取不到回落 0（非 executor raise / probe 无 cost）。
         await session.end_agent(
@@ -256,7 +260,8 @@ async def run_blackbox_auth_validation(input: BlackboxActivityInput) -> None:
         raise ApplicationFailure(str(e), type=error_type, non_retryable=not retryable) from e
     except Exception as e:
         await tool_audit_logger.close(
-            success=False, duration_ms=int((time.monotonic() - agent_start) * 1000))
+            success=False, duration_ms=int((time.monotonic() - agent_start) * 1000),
+            end_reason="unexpected_error")
         await session.end_agent(agent_name.value, AgentEndResult(
             success=False, duration_ms=int((time.monotonic() - agent_start) * 1000), cost_usd=0.0,
             attempt_number=attempt, error=str(e)))
@@ -278,7 +283,10 @@ async def run_blackbox_auth_validation(input: BlackboxActivityInput) -> None:
     # 失败时 events 里 agent 显示成功——2026-08-14 修正）。fail-fast 直接 raise
     # ApplicationFailure（不再经 PentestError→except，避免双记）。
     dur_ms = int((time.monotonic() - agent_start) * 1000)
-    await tool_audit_logger.close(success=result.success, duration_ms=dur_ms)
+    await tool_audit_logger.close(
+        success=result.success, duration_ms=dur_ms,
+        # verdict=False 紧随 raise PentestError(AUTH_LOGIN_FAILED)，end_reason 同语义
+        end_reason=None if result.success else "auth_login_failed")
     await session.end_agent(agent_name.value, AgentEndResult(
         success=result.success, duration_ms=dur_ms, cost_usd=0.0, attempt_number=attempt))
     if not result.success:
@@ -369,7 +377,10 @@ async def run_exploit_agent(input: BlackboxActivityInput) -> dict:
             queue_root=queue_root,
             proxy_url=input.proxy_url,
         )
-        await tool_audit_logger.close(success=True, duration_ms=metrics.duration_ms)
+        await tool_audit_logger.close(
+            success=True, duration_ms=metrics.duration_ms,
+            # 截断/max_turns 假成功检测（对齐 whitebox run_agent）
+            end_reason=end_reason_from_stop_reason(metrics.stop_reason))
         await session.end_agent(agent_name.value, AgentEndResult(
             success=True,
             duration_ms=metrics.duration_ms,
@@ -385,7 +396,10 @@ async def run_exploit_agent(input: BlackboxActivityInput) -> dict:
         return metrics.model_dump()
     except PentestError as e:
         dur_ms = int((time.monotonic() - agent_start) * 1000)
-        await tool_audit_logger.close(success=False, duration_ms=dur_ms)
+        await tool_audit_logger.close(
+            success=False, duration_ms=dur_ms,
+            # 失败类别留痕（对齐 whitebox run_agent）
+            end_reason=e.error_code.value if e.error_code else "error")
         # 失败 agent 也记 cost：从 PentestError.context 取 executor 携带的真实消耗
         # （修 error path cost 归 0），取不到回落 0（非 executor raise / probe 无 cost）。
         await session.end_agent(
@@ -396,7 +410,8 @@ async def run_exploit_agent(input: BlackboxActivityInput) -> dict:
         raise ApplicationFailure(str(e), type=error_type, non_retryable=not retryable) from e
     except Exception as e:
         await tool_audit_logger.close(
-            success=False, duration_ms=int((time.monotonic() - agent_start) * 1000))
+            success=False, duration_ms=int((time.monotonic() - agent_start) * 1000),
+            end_reason="unexpected_error")
         await session.end_agent(agent_name.value, AgentEndResult(
             success=False, duration_ms=int((time.monotonic() - agent_start) * 1000), cost_usd=0.0,
             attempt_number=attempt, error=str(e)))
@@ -454,7 +469,8 @@ async def run_endpoint_verify(input: BlackboxActivityInput) -> dict:
             proxy_url=input.proxy_url,
         )
         dur_ms = int((time.monotonic() - agent_start) * 1000)
-        await tool_audit_logger.close(success=True, duration_ms=dur_ms)
+        await tool_audit_logger.close(success=True, duration_ms=dur_ms,
+                                      end_reason=None)
         await session.end_agent(agent_name.value, AgentEndResult(
             success=True,
             duration_ms=result.get("duration_ms", dur_ms) if isinstance(result, dict) else dur_ms,
@@ -465,7 +481,8 @@ async def run_endpoint_verify(input: BlackboxActivityInput) -> dict:
         return result
     except Exception as e:
         dur_ms = int((time.monotonic() - agent_start) * 1000)
-        await tool_audit_logger.close(success=False, duration_ms=dur_ms)
+        await tool_audit_logger.close(success=False, duration_ms=dur_ms,
+                                      end_reason="unexpected_error")
         await session.end_agent(agent_name.value, AgentEndResult(
             success=False, duration_ms=dur_ms, cost_usd=0.0,
             attempt_number=attempt, error=str(e)))
@@ -615,7 +632,10 @@ async def run_report_agent(input: BlackboxActivityInput) -> dict:
             tool_audit_logger=tool_audit_logger,
             proxy_url=input.proxy_url,
         )
-        await tool_audit_logger.close(success=True, duration_ms=metrics.duration_ms)
+        await tool_audit_logger.close(
+            success=True, duration_ms=metrics.duration_ms,
+            # 截断/max_turns 假成功检测（对齐 whitebox run_agent）
+            end_reason=end_reason_from_stop_reason(metrics.stop_reason))
         await session.end_agent(agent_name.value, AgentEndResult(
             success=True,
             duration_ms=metrics.duration_ms,
@@ -631,7 +651,10 @@ async def run_report_agent(input: BlackboxActivityInput) -> dict:
         return metrics.model_dump()
     except PentestError as e:
         dur_ms = int((time.monotonic() - agent_start) * 1000)
-        await tool_audit_logger.close(success=False, duration_ms=dur_ms)
+        await tool_audit_logger.close(
+            success=False, duration_ms=dur_ms,
+            # 失败类别留痕（对齐 whitebox run_agent）
+            end_reason=e.error_code.value if e.error_code else "error")
         # 失败 agent 也记 cost：从 PentestError.context 取 executor 携带的真实消耗
         # （修 error path cost 归 0），取不到回落 0（非 executor raise / probe 无 cost）。
         await session.end_agent(
@@ -642,7 +665,8 @@ async def run_report_agent(input: BlackboxActivityInput) -> dict:
         raise ApplicationFailure(str(e), type=error_type, non_retryable=not retryable) from e
     except Exception as e:
         await tool_audit_logger.close(
-            success=False, duration_ms=int((time.monotonic() - agent_start) * 1000))
+            success=False, duration_ms=int((time.monotonic() - agent_start) * 1000),
+            end_reason="unexpected_error")
         await session.end_agent(agent_name.value, AgentEndResult(
             success=False, duration_ms=int((time.monotonic() - agent_start) * 1000), cost_usd=0.0,
             attempt_number=attempt, error=str(e)))
@@ -1016,7 +1040,11 @@ async def run_auth_validation_probe(input: BlackboxActivityInput) -> AuthValidat
     except Exception as e:
         # 降级:不 raise(仿 run_endpoint_verify activities.py:349-356),但照常收尾可观测性
         dur_ms = int((time.monotonic() - agent_start) * 1000)
-        await tool_audit_logger.close(success=False, duration_ms=dur_ms)
+        await tool_audit_logger.close(
+            success=False, duration_ms=dur_ms,
+            end_reason=(e.error_code.value
+                        if isinstance(e, PentestError) and e.error_code
+                        else "unexpected_error"))
         if isinstance(e, PentestError):
             # 失败 agent 也记 cost:PentestError.context 携带 executor 真实消耗(对齐 :195-205)
             await session.end_agent(
@@ -1062,7 +1090,10 @@ async def run_auth_validation_probe(input: BlackboxActivityInput) -> AuthValidat
             pass  # shield 后再被 cancel / 记账失败：不拦原 cancel
         raise
     dur_ms = int((time.monotonic() - agent_start) * 1000)
-    await tool_audit_logger.close(success=result.success, duration_ms=dur_ms)
+    await tool_audit_logger.close(
+        success=result.success, duration_ms=dur_ms,
+        # verdict=False 紧随 raise PentestError(AUTH_LOGIN_FAILED)，end_reason 同语义
+        end_reason=None if result.success else "auth_login_failed")
     await session.end_agent(agent_name.value, AgentEndResult(
         success=result.success, duration_ms=dur_ms, cost_usd=0.0, attempt_number=attempt))
     return result

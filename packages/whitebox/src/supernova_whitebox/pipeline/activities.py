@@ -21,7 +21,7 @@ from supernova_core.models.errors import (
     classify_error_for_temporal,
     classify_for_temporal_with_retry_cap,
 )
-from supernova_core.models.metrics import AgentMetrics
+from supernova_core.models.metrics import AgentMetrics, end_reason_from_stop_reason
 from supernova_core.models.retry import agent_retry_category, retry_for
 from supernova_core.runtime.heartbeat import stop_heartbeat
 from supernova_core.utils.atomic_write import atomic_write_json
@@ -229,7 +229,11 @@ async def run_agent(input: ActivityInput) -> dict:
             provider_config=input.provider_config,   # P3c 阶段 1
             prompt_suffix=build_mr_incremental_guidance(input.mr_meta),  # MR 增量引导段（§5.2）
         )
-        await tool_audit_logger.close(success=True, duration_ms=metrics.duration_ms)
+        await tool_audit_logger.close(
+            success=True, duration_ms=metrics.duration_ms,
+            # 截断/max_turns 假成功检测（memory audit-agent-end-success-blindspot）：
+            # success=True 下 stop_reason=max_tokens 等非良性值仍需留痕。
+            end_reason=end_reason_from_stop_reason(metrics.stop_reason))
         await session.end_agent(agent_name.value, AgentEndResult(
             success=True,
             duration_ms=metrics.duration_ms,
@@ -246,7 +250,10 @@ async def run_agent(input: ActivityInput) -> dict:
         return metrics.model_dump()
     except PentestError as e:
         dur_ms = int((time.monotonic() - agent_start) * 1000)
-        await tool_audit_logger.close(success=False, duration_ms=dur_ms)
+        await tool_audit_logger.close(
+            success=False, duration_ms=dur_ms,
+            # 失败类别留痕（API_RATE_LIMITED / SPENDING_CAP_REACHED / …）
+            end_reason=e.error_code.value if e.error_code else "error")
         # 失败 agent 也记 cost：从 PentestError.context 取 executor 携带的真实消耗
         # （修 error path cost 归 0），取不到回落 0（非 executor raise）。
         await session.end_agent(
@@ -263,7 +270,8 @@ async def run_agent(input: ActivityInput) -> dict:
         raise ApplicationFailure(str(e), type=error_type, non_retryable=not retryable) from e
     except Exception as e:
         await tool_audit_logger.close(
-            success=False, duration_ms=int((time.monotonic() - agent_start) * 1000))
+            success=False, duration_ms=int((time.monotonic() - agent_start) * 1000),
+            end_reason="unexpected_error")
         await session.end_agent(agent_name.value, AgentEndResult(
             success=False, duration_ms=int((time.monotonic() - agent_start) * 1000), cost_usd=0.0,
             attempt_number=attempt, error=str(e)))
@@ -3484,6 +3492,7 @@ async def run_gitnexus_verdict_agent(
     if audit_session is not None:
         await audit_session.start_agent(
             agent_name, f"gitnexus-verdict:{agent_name}", attempt=1)
+    result: "ClaudeRunResult | None" = None   # finally 读 stop_reason 用（异常路径未赋值）
     try:
         if tool_audit_logger is not None:
             await tool_audit_logger.initialize()
@@ -3503,9 +3512,14 @@ async def run_gitnexus_verdict_agent(
     finally:
         if tool_audit_logger is not None:
             # 异常向上抛由 caller 处理；finally 内保守传 success（best-effort，对齐 run_agent）。
+            # end_reason 带 result.stop_reason 归一值（2026-09-09 client-release-frontend
+            # 实证：撞 max_turns 时 agent_end 只有 success=true、结束原因不可见）；
+            # run_claude_prompt 抛异常时 result 未赋值 → None。
             await tool_audit_logger.close(
                 success=True,
                 duration_ms=int((time.monotonic() - agent_start) * 1000),
+                end_reason=(end_reason_from_stop_reason(result.stop_reason)
+                            if result is not None else None),
             )
     # 记账（见 docstring）：成功/失败都记；run_claude_prompt 抛异常（理论上不抛）
     # 时无 result 可记，异常继续上抛由 caller 降级处理。

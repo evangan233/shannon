@@ -85,3 +85,39 @@ async def test_close_writes_agent_end(tmp_path: Path):
     end_events = [e for e in events if e["type"] == "agent_end"]
     assert len(end_events) == 1
     assert end_events[0]["data"]["success"] is True
+
+
+async def _agent_end_event(tmp_path: Path) -> dict:
+    import json
+    from supernova_whitebox.audit.utils import generate_audit_path
+    agent_log = list((generate_audit_path(_make_meta(tmp_path)) / "agents").glob("*.log"))[0]
+    events = [json.loads(l) for l in agent_log.read_text().split("\n") if l.startswith("{")]
+    return [e for e in events if e["type"] == "agent_end"][0]
+
+
+async def test_close_writes_end_reason(tmp_path: Path):
+    """close(end_reason=...) 落进 agent_end 事件——success 在截断下撒谎的缺口，
+    end_reason 是真实结束原因（memory audit-agent-end-success-blindspot）。"""
+    session = AuditSession(_make_meta(tmp_path))
+    await session.initialize()
+    await session.start_agent("recon", "p", attempt=1)
+    lg = SessionToolAuditLogger(session, "recon", attempt=1)
+    await lg.initialize()
+    await lg.close(success=True, duration_ms=5000, end_reason="truncated")
+    await session.close()
+    end_event = await _agent_end_event(tmp_path)
+    assert end_event["data"]["end_reason"] == "truncated"
+
+
+async def test_close_end_reason_defaults_none(tmp_path: Path):
+    """不传 end_reason 时键恒在、值为 None——消费方统一读键，无需探测。"""
+    session = AuditSession(_make_meta(tmp_path))
+    await session.initialize()
+    await session.start_agent("recon", "p", attempt=1)
+    lg = SessionToolAuditLogger(session, "recon", attempt=1)
+    await lg.initialize()
+    await lg.close(success=True, duration_ms=5000)
+    await session.close()
+    end_event = await _agent_end_event(tmp_path)
+    assert "end_reason" in end_event["data"]
+    assert end_event["data"]["end_reason"] is None
