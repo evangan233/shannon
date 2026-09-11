@@ -17,7 +17,7 @@ interface NavItem {
   // to 之外的 active 判定前缀：用于 to 是中转路由、真实页面在别处前缀下的 nav 项。
   activePrefixes?: string[];
   // to 的运行时覆写标记：当前路径命中 /p/:ws 时直达本 ws 首页（跳回所在工作区，
-  // 不经 /workspaces-entry 被 pinned 拉走）。
+  // 不经 /workspaces-entry 被 last_visited 拉走）。
   followCurrentWs?: boolean;
 }
 
@@ -40,7 +40,7 @@ export function TopBar({ onOpenChangePwd }: { onOpenChangePwd?: () => void } = {
   // nav 统一 4 项（概览/工作区/扫描/设置），所有角色一致——WorkspaceListPage 已下线（spec 2026-07-27）。
   // 「工作区」入口跳回当前工作区（2026-09-10 用户反馈）：点击后 URL 已变 /workspaces-entry、
   // 来源丢失，故渲染时覆写——当前路径命中 /p/:ws 直达本 ws 首页；不在任何 ws 下
-  // （Dashboard/设置等）才走三段跳转中转的 pinned->最近->空态兜底。
+  // （Dashboard/设置等）才走三段跳转中转的 last_visited->最近活跃->空态兜底。
   const wsMatch = pathname.match(/^\/p\/([^/]+)/);
   const items: NavItem[] = wsMatch
     ? NAV.map((n) => (n.followCurrentWs ? { ...n, to: `/p/${wsMatch[1]}` } : n))

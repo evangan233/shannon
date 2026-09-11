@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowLeftRight,
-  Pin,
   Trash2,
   Bug,
   CircleDollarSign,
@@ -52,7 +51,6 @@ export function WorkspaceSwitcher({ currentWorkspace }: { currentWorkspace?: str
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const isAdmin = user?.role === "admin";
-  const pinned = user?.pinned_workspace ?? null;
 
   const list = useMemo(() => {
     if (!q.trim()) return data;
@@ -133,7 +131,6 @@ export function WorkspaceSwitcher({ currentWorkspace }: { currentWorkspace?: str
                 key={w.name}
                 ws={w}
                 current={w.name === currentWorkspace}
-                pinned={pinned === w.name}
                 isAdmin={isAdmin}
                 t={t}
                 onPick={() => pick(w.name)}
@@ -173,7 +170,6 @@ export function WorkspaceSwitcher({ currentWorkspace }: { currentWorkspace?: str
 function WorkspaceCard({
   ws,
   current,
-  pinned,
   isAdmin,
   t,
   onPick,
@@ -181,7 +177,6 @@ function WorkspaceCard({
 }: {
   ws: Workspace;
   current: boolean;
-  pinned: boolean;
   isAdmin: boolean;
   t: (k: string, o?: Record<string, unknown>) => string;
   onPick: () => void;
@@ -215,7 +210,6 @@ function WorkspaceCard({
       <div className="flex items-center gap-2.5">
         <span className={`inline-block size-2 shrink-0 rounded-full ${statusColor(ws.status)}`} />
         <span className="flex-1 truncate font-mono text-sm">{ws.name}</span>
-        {pinned && <Pin className="size-3.5 shrink-0 text-primary" />}
         {isAdmin && (
           <Button
             size="icon"

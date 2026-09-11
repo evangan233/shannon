@@ -18,8 +18,8 @@ vi.mock("@/components/MemberManagerDialog", () => ({
 vi.mock("@/components/WorkspaceSwitcher", () => ({
   WorkspaceSwitcher: () => null,
 }));
-// WorkspaceDetail header 置顶按钮（Task 9）依赖 useAuth（user.pinned_workspace + refreshUser）；
-// header 测试不断言置顶态，隔离 useAuth 避免 AuthProvider + /auth/me 噪音。
+// 隔离 useAuth（置顶按钮已随 2026-09-11 置顶→最近访问替换删除）：避免
+// AuthProvider + /auth/me 请求噪音。
 vi.mock("@/auth/AuthContext", () => ({
   useAuth: () => ({
     user: { id: 1, username: "admin", role: "admin", must_change_password: false },

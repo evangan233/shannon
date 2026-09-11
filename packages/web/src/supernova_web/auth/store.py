@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
   role TEXT NOT NULL DEFAULT 'user',
   created_at TEXT NOT NULL,
   must_change_password INTEGER NOT NULL DEFAULT 0,
-  pinned_workspace TEXT
+  last_visited_workspace TEXT
 );
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
@@ -42,9 +42,17 @@ CREATE INDEX IF NOT EXISTS idx_wm_ws ON workspace_members(workspace_name);
 # 必抛 -> 同样吞掉。保证旧 auth.db 升级、新 auth.db 重复 init 均不崩。
 _ADD_MUST_CHANGE_COL = "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"
 
-# pinned_workspace 列后加（2026-07-27 IA 重设计 §2.3 per-user 置顶工作区）。同上，
-# ALTER TABLE ADD COLUMN 无 IF NOT EXISTS，对已建库幂等补列：列已存 -> OperationalError 吞掉。
-_ADD_PINNED_WS_COL = "ALTER TABLE users ADD COLUMN pinned_workspace TEXT"
+# 置顶→最近访问替换（2026-09-11）：pinned_workspace RENAME 成 last_visited_workspace。
+# 迁移矩阵（顺序不可换——RENAME 必须在 ADD 前，先 ADD 建出空列会让 RENAME 撞 duplicate
+# column 被吞、存量置顶值滞留旧列丢失）：
+#   pre-pinned 库（有 pinned_workspace 列+值）：RENAME 成功，值保留为 last_visited 初值
+#     （置顶过的 ws = 想回去的 ws，无缝）；ADD 撞 duplicate column 吞掉。
+#   pre-2026-07-27 老库（两列皆无）：RENAME 撞 no such column 吞掉；ADD 成功补列。
+#   新库（_SCHEMA 已建 last_visited_workspace）/已迁移库：两条全吞。
+_RENAME_PINNED_TO_LAST_VISITED = (
+    "ALTER TABLE users RENAME COLUMN pinned_workspace TO last_visited_workspace"
+)
+_ADD_LAST_VISITED_COL = "ALTER TABLE users ADD COLUMN last_visited_workspace TEXT"
 
 # SSO（spec 2026-08-25 §6）：users/sessions 补列 + 两新表。补列注意与上面两列相反：
 # 基础 _SCHEMA 不含这三个新列——新库（或 pre-SSO 老库）首次 init 时 ALTER 是成功
@@ -105,7 +113,11 @@ class AuthStore:
             except sqlite3.OperationalError:
                 pass
             try:
-                c.execute(_ADD_PINNED_WS_COL)  # 旧库补列；新库已含 -> OperationalError 吞掉
+                c.execute(_RENAME_PINNED_TO_LAST_VISITED)  # 旧库置顶列改名保值；其余状态吞掉
+            except sqlite3.OperationalError:
+                pass
+            try:
+                c.execute(_ADD_LAST_VISITED_COL)  # pre-置顶老库补列；列已存 -> OperationalError 吞掉
             except sqlite3.OperationalError:
                 pass
             try:
@@ -131,7 +143,7 @@ class AuthStore:
         now = datetime.now(timezone.utc).isoformat()
         with self._conn() as c:
             cur = c.execute(
-                "INSERT INTO users(username, password_hash, role, created_at, must_change_password, pinned_workspace, avatar_url, auth_provider) "
+                "INSERT INTO users(username, password_hash, role, created_at, must_change_password, last_visited_workspace, avatar_url, auth_provider) "
                 "VALUES(?,?,?,?,?,?,NULL,?)",
                 (username, password_hash, role, now, 1 if must_change else 0, None, auth_provider),
             )
@@ -141,11 +153,11 @@ class AuthStore:
     def get_user_by_username(self, username: str) -> User | None:
         with self._conn() as c:
             row = c.execute(
-                "SELECT id, username, role, must_change_password, pinned_workspace, avatar_url, auth_provider, theme FROM users WHERE username=?", (username,)
+                "SELECT id, username, role, must_change_password, last_visited_workspace, avatar_url, auth_provider, theme FROM users WHERE username=?", (username,)
             ).fetchone()
         return User(id=row[0], username=row[1], role=row[2],
                     must_change_password=bool(row[3]),
-                    pinned_workspace=row[4],
+                    last_visited_workspace=row[4],
                     avatar_url=row[5], auth_provider=row[6],
                     theme=row[7]) if row else None
 
@@ -159,11 +171,11 @@ class AuthStore:
     def get_user(self, user_id: int) -> User | None:
         with self._conn() as c:
             row = c.execute(
-                "SELECT id, username, role, must_change_password, pinned_workspace, avatar_url, auth_provider, theme FROM users WHERE id=?", (user_id,)
+                "SELECT id, username, role, must_change_password, last_visited_workspace, avatar_url, auth_provider, theme FROM users WHERE id=?", (user_id,)
             ).fetchone()
         return User(id=row[0], username=row[1], role=row[2],
                     must_change_password=bool(row[3]),
-                    pinned_workspace=row[4],
+                    last_visited_workspace=row[4],
                     avatar_url=row[5], auth_provider=row[6],
                     theme=row[7]) if row else None
 
@@ -265,11 +277,11 @@ class AuthStore:
     def list_all_users(self) -> list["User"]:
         with self._conn() as c:
             rows = c.execute(
-                "SELECT id, username, role, must_change_password, created_at, pinned_workspace, avatar_url, auth_provider, theme FROM users ORDER BY id"
+                "SELECT id, username, role, must_change_password, created_at, last_visited_workspace, avatar_url, auth_provider, theme FROM users ORDER BY id"
             ).fetchall()
         return [User(id=r[0], username=r[1], role=r[2],
                      must_change_password=bool(r[3]), created_at=r[4],
-                     pinned_workspace=r[5], avatar_url=r[6],
+                     last_visited_workspace=r[5], avatar_url=r[6],
                      auth_provider=r[7], theme=r[8]) for r in rows]
 
     def delete_user(self, user_id: int) -> None:
@@ -316,10 +328,10 @@ class AuthStore:
                 (role, ws_name, user_id),
             )
 
-    def update_pinned_workspace(self, user_id: int, ws_name: str | None) -> None:
-        """per-user 置顶工作区。ws_name=None 清除置顶。多对多关系不动--pin 不改成员关系。"""
+    def update_last_visited_workspace(self, user_id: int, ws_name: str | None) -> None:
+        """per-user 最近访问工作区（进 /p/:ws 时前端静默上报）。ws_name=None 清除。"""
         with self._conn() as c:
-            c.execute("UPDATE users SET pinned_workspace=? WHERE id=?", (ws_name, user_id))
+            c.execute("UPDATE users SET last_visited_workspace=? WHERE id=?", (ws_name, user_id))
 
     def update_avatar(self, user_id: int, avatar_url: str | None) -> None:
         """SSO 回调 upsert 头像（OA 头像可能变更）。

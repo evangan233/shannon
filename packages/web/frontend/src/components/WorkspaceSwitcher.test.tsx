@@ -36,8 +36,8 @@ vi.mock("@/components/CreateWorkspaceDialog", () => ({
   CreateWorkspaceDialog: () => <div data-testid="create-ws-dialog" />,
 }));
 
-const userAdmin = { id: 1, username: "admin", role: "admin", must_change_password: false, pinned_workspace: "ws-a" };
-const userUser = { id: 2, username: "alice", role: "user", must_change_password: false, pinned_workspace: null };
+const userAdmin = { id: 1, username: "admin", role: "admin", must_change_password: false };
+const userUser = { id: 2, username: "alice", role: "user", must_change_password: false };
 
 // jsdom navigator.language 默认 en，LanguageDetector 会把 i18n 切到 en；
 // 断言依赖中文渲染（getByRole button name=/切换/i），逐测试钉回 zh。

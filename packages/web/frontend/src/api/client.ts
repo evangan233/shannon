@@ -223,9 +223,10 @@ export const listScans = (ws: string) =>
 /** 跨 ws 聚合所有 scans（IA 重设计 §3，GET /api/scans）。返回项注入 workspace 字段。 */
 export const listAllScans = () => apiGet<ScanSummary[]>("/scans");
 
-/** 置顶当前用户的工作区（IA 重设计 §2.3，PUT /api/users/me/pinned-workspace）。 */
-export const setPinnedWorkspace = (ws: string) =>
-  apiPut<{ pinned: string }>("/users/me/pinned-workspace", { workspace: ws });
+/** 记录当前用户最近访问的工作区（2026-09-11 替换置顶；PUT /api/users/me/last-visited-workspace，
+ *  进 /p/:ws 时 LastVisitedTracker 静默上报）。 */
+export const setLastVisitedWorkspace = (ws: string) =>
+  apiPut<{ last_visited: string }>("/users/me/last-visited-workspace", { workspace: ws });
 
 /** scan 详情（同旧 GET /workspaces/{ws} payload shape，读 scan_dir）。 */
 export const getScan = (ws: string, scanId: string) =>

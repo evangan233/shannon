@@ -34,25 +34,49 @@ function renderAt(path: string) {
         <Route path="/p/:workspace" element={<WsDetail />} />
         <Route path="*" element={<WorkspacesEntry />} />
       </Routes>
-    </MemoryRouter>
+    </MemoryRouter>,
   );
 }
 
 describe("WorkspacesEntry", () => {
   beforeEach(() => i18n.changeLanguage("zh"));
 
-  it("redirects to pinned workspace when set", async () => {
-    mockUseAuth.mockReturnValue({ user: { pinned_workspace: "ws-pinned" } });
-    mockUseWorkspaces.mockReturnValue({ data: [], loading: false });
+  it("redirects to last visited workspace when set and still a member", async () => {
+    mockUseAuth.mockReturnValue({ user: { last_visited_workspace: "ws-recent" } });
+    mockUseWorkspaces.mockReturnValue({
+      data: [
+        { name: "ws-recent", status: "completed", created_at: 1, latest_created_at: 1, scan_type: "whitebox" },
+        { name: "ws-other", status: "completed", created_at: 5, latest_created_at: 5, scan_type: "whitebox" },
+      ],
+      loading: false,
+    });
     const { container } = renderAt("/entry");
     await waitFor(() =>
       expect(container.querySelector("[data-testid='ws-detail']")).toBeInTheDocument(),
     );
-    expect(screen.getByTestId("ws-detail")).toHaveAttribute("data-ws", "ws-pinned");
+    // last_visited 优先于最近活跃（ws-other 的 latest_created_at 更新也不抢）
+    expect(screen.getByTestId("ws-detail")).toHaveAttribute("data-ws", "ws-recent");
   });
 
-  it("redirects to most recent workspace when no pinned but has membership", async () => {
-    mockUseAuth.mockReturnValue({ user: { pinned_workspace: null } });
+  it("falls back to most recent workspace when last visited is not in membership (deleted/removed)", async () => {
+    mockUseAuth.mockReturnValue({ user: { last_visited_workspace: "ws-gone" } });
+    mockUseWorkspaces.mockReturnValue({
+      data: [
+        { name: "ws-old", status: "completed", created_at: 1, latest_created_at: 1, scan_type: "whitebox" },
+        { name: "ws-new", status: "completed", created_at: 2, latest_created_at: 2, scan_type: "whitebox" },
+      ],
+      loading: false,
+    });
+    const { container } = renderAt("/entry");
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid='ws-detail']")).toBeInTheDocument(),
+    );
+    // last_visited 指向已删/被移出的 ws -> 不跳 404，回落最近活跃（latest_created_at 倒序首项）
+    expect(screen.getByTestId("ws-detail")).toHaveAttribute("data-ws", "ws-new");
+  });
+
+  it("redirects to most recent workspace when never visited but has membership", async () => {
+    mockUseAuth.mockReturnValue({ user: { last_visited_workspace: null } });
     mockUseWorkspaces.mockReturnValue({
       data: [
         { name: "ws-old", status: "completed", created_at: 1, latest_created_at: 1, scan_type: "whitebox" },
@@ -69,7 +93,7 @@ describe("WorkspacesEntry", () => {
   });
 
   it("redirects to / (Dashboard) when no membership", async () => {
-    mockUseAuth.mockReturnValue({ user: { pinned_workspace: null } });
+    mockUseAuth.mockReturnValue({ user: { last_visited_workspace: null } });
     mockUseWorkspaces.mockReturnValue({ data: [], loading: false });
     const { container } = renderAt("/entry");
     await waitFor(() =>

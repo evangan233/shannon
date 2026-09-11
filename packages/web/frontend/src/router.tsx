@@ -94,7 +94,7 @@ export const router = createBrowserRouter([
     element: <RequireAuth><AppShell /></RequireAuth>,
     children: [
       { path: "/", element: <DashboardPage /> },
-      // 顶栏「工作区」入口：三段跳转（pinned->最近->空态）。IA 重设计 §2.3
+      // 顶栏「工作区」入口：三段跳转（last_visited->最近活跃->空态；2026-09-11 置顶→最近访问替换）
       { path: "/workspaces-entry", element: <WorkspacesEntry /> },
       // WorkspaceListPage 已下线（取消并入 Dashboard、删除并入切换器，spec 2026-07-27）。
       // 旧 /workspaces 链接/书签 redirect 到 Dashboard，不 404。

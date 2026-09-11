@@ -876,10 +876,6 @@
   "workspaceDetail": {
     "backToList": "Back to list",
     "backToWs": "Back to workspace {{ws}}",
-    "pin": "Pin",
-    "unpin": "Unpin",
-    "pinPinned": "Pinned",
-    "pinFailed": "Pin failed: {{error}}",
     "hero": {
       "eyebrow": "Workspace · WORKSPACE",
       "totalFindings": "Total findings",

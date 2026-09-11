@@ -9,8 +9,8 @@ export type AuthUser = {
   // 后端默认账号（users.yaml must_change_password: true）seed 时置 true；
   // 登录后前端据此弹改密提醒 + 顶栏 badge。change-password 成功后置 false。
   must_change_password: boolean;
-  // per-user 置顶工作区（IA 重设计 §2.3）。null=未置顶。经 /auth/me 返回。
-  pinned_workspace?: string | null;
+  // per-user 最近访问工作区（2026-09-11 替换原置顶）。null=从未访问。经 /auth/me 返回。
+  last_visited_workspace?: string | null;
   // SSO 用户头像（OA userInfo.avatarUrl；浏览器 <img> 直连加载，服务端不代理）
   avatar_url?: string | null;
   // per-user UI 主题（2026-08-28）：跟账号走、跨设备一致。null=从未自配

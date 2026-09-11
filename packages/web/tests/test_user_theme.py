@@ -2,7 +2,7 @@
 
 主题是用户偏好（跟账号走、跨设备一致、与工作区无关），存 auth.db users.theme 列。
 白名单 = 前端 ThemeId 全集（theme.ts THEMES + "system"），非法值 422。
-模式照抄 pinned_workspace（test_pinned_workspace.py）。"""
+模式照抄 per-user 偏好先例（现 test_last_visited_workspace.py）。"""
 import pytest
 from starlette.testclient import TestClient
 

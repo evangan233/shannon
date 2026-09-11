@@ -2,6 +2,7 @@ import { Suspense, useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { TopBar } from "./TopBar";
 import { ChangePasswordDialog } from "@/components/ChangePasswordDialog";
+import { LastVisitedTracker } from "@/components/LastVisitedTracker";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/auth/AuthContext";
 
@@ -18,6 +19,8 @@ export function AppShell() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
+      {/* 最近访问 ws 上报（置顶→最近访问替换 2026-09-11）：全 /p/:ws 子路径（含 scan 深页） */}
+      <LastVisitedTracker />
       <TopBar onOpenChangePwd={() => setCpOpen(true)} />
       {/* 满宽控制台布局：max-w-[2400px] 在 ≤2K 屏基本铺满（旧 1400 在宽屏居中留半屏白），
           超宽屏（4K/带鱼）优雅居中。TopBar 内层用同一 max-w + px-7 保持左右边界对齐

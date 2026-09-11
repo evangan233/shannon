@@ -18,7 +18,7 @@ vi.mock("@/components/MemberManagerDialog", () => ({
 // 网络与 provider 依赖（其行为在 WorkspaceSwitcher.test.tsx 独立覆盖）。
 vi.mock("@/auth/AuthContext", () => ({
   useAuth: () => ({
-    user: { id: 1, username: "admin", role: "admin", must_change_password: false, pinned_workspace: null },
+    user: { id: 1, username: "admin", role: "admin", must_change_password: false },
     loading: false,
     login: vi.fn(),
     logout: vi.fn(),

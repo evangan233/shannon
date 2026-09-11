@@ -1,20 +1,17 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Outlet, useParams, Link, NavLink } from "react-router-dom";
-import { ArrowLeft, Settings, FolderGit2, Pin, KeyRound, Globe, ScanLine } from "lucide-react";
+import { ArrowLeft, Settings, FolderGit2, KeyRound, Globe, ScanLine } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { MemberManagerDialog } from "@/components/MemberManagerDialog";
 import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
-import { setPinnedWorkspace } from "@/api/client";
 import type { ScanSummary } from "@/api/types";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { useAuth } from "@/auth/AuthContext";
 import { fmtCost, currencySymbol } from "@/utils/currency";
-import { toast } from "sonner";
 import { useScans } from "./useScans";
 
 /** Outlet context：ScanList 操作（取消/删除/scan_end）后联动刷新工作台头聚合。 */
@@ -78,20 +75,6 @@ export default function WorkspaceDetail() {
   // SWR 数据层（spec §6.3）：与 ScanList 共享 key（["scans", workspace]）→ 单请求单轮询。
   const { scans, loading, notFound, refresh } = useScans(workspace);
   const hasRunning = scans.some(isRunningScan);
-
-  const { user, refreshUser } = useAuth();
-  const isPinned = user?.pinned_workspace === workspace;
-
-  async function onPin() {
-    if (!workspace) return;
-    try {
-      await setPinnedWorkspace(workspace);
-      await refreshUser();
-      toast.success(t("workspaceDetail.pinPinned"));
-    } catch (e) {
-      toast.error(t("workspaceDetail.pinFailed", { error: e instanceof Error ? e.message : String(e) }));
-    }
-  }
 
   // 聚合（工作台头 r2）：latest（created_at 倒序首）、运行中、需关注（失败+中断）、
   // 分币种花费（旧口径把 CNY/USD 数值直接相加是错值，分组渲染）、发现构成（mini 谱带）。
@@ -204,11 +187,8 @@ export default function WorkspaceDetail() {
             )}
           </div>
 
-          {/* 命令栏（toolbar 变体语言）：ws 级操作 ‖ 区段导航（active = secondary 实底，同 pinned 态） */}
+          {/* 命令栏（toolbar 变体语言）：ws 级操作 ‖ 区段导航（active = secondary 实底） */}
           <div className="ml-auto flex flex-wrap items-center gap-2">
-            <Button variant={isPinned ? "secondary" : "toolbar"} size="icon" onClick={onPin} title={t(isPinned ? "workspaceDetail.unpin" : "workspaceDetail.pin")}>
-              <Pin className="size-4" />
-            </Button>
             <WorkspaceSwitcher currentWorkspace={workspace} />
             {workspace && <MemberManagerDialog ws={workspace} />}
             <span className="mx-0.5 h-5 w-px bg-border" aria-hidden />

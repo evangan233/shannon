@@ -28,32 +28,32 @@ def _csrf(c):
     return c.cookies.get("sn-csrf") or c.get("/api/auth/csrf").json()["csrf_token"]
 
 
-def test_me_returns_pinned_field_default_none(admin_client):
+def test_me_returns_last_visited_field_default_none(admin_client):
     c, _ = admin_client
     r = c.get("/api/auth/me")
     assert r.status_code == 200
-    assert r.json()["user"]["pinned_workspace"] is None
+    assert r.json()["user"]["last_visited_workspace"] is None
 
 
-def test_pin_workspace_success(admin_client):
+def test_record_last_visited_success(admin_client):
     c, app = admin_client
-    r = c.put("/api/users/me/pinned-workspace", json={"workspace": "ws-a"},
+    r = c.put("/api/users/me/last-visited-workspace", json={"workspace": "ws-a"},
               headers={"X-CSRF-Token": _csrf(c)})
     assert r.status_code == 200
-    assert r.json()["pinned"] == "ws-a"
-    # /auth/me 现在返 pinned
-    assert c.get("/api/auth/me").json()["user"]["pinned_workspace"] == "ws-a"
+    assert r.json()["last_visited"] == "ws-a"
+    # /auth/me 现在返 last_visited
+    assert c.get("/api/auth/me").json()["user"]["last_visited_workspace"] == "ws-a"
 
 
-def test_pin_nonexistent_workspace_404(admin_client):
+def test_record_nonexistent_workspace_404(admin_client):
     c, _ = admin_client
-    r = c.put("/api/users/me/pinned-workspace", json={"workspace": "no-such-ws"},
+    r = c.put("/api/users/me/last-visited-workspace", json={"workspace": "no-such-ws"},
               headers={"X-CSRF-Token": _csrf(c)})
     assert r.status_code == 404
 
 
-def test_pin_non_member_forbidden(tmp_workspaces, monkeypatch):
-    """普通用户 pin 非归属 ws -> 403。"""
+def test_record_non_member_forbidden(tmp_workspaces, monkeypatch):
+    """普通用户记录非归属 ws -> 403。"""
     monkeypatch.setenv("SUPERNOVA_WEB_COOKIE_SECURE", "0")
     from supernova_core.utils.paths import resolve_workspaces_dir
     monkeypatch.setenv("SUPERNOVA_WORKER_ROOT", str(tmp_workspaces.parent))
@@ -69,20 +69,20 @@ def test_pin_non_member_forbidden(tmp_workspaces, monkeypatch):
     c.post("/api/auth/login", json={"username": "alice", "password": "alice-pw"},
            headers={"X-CSRF-Token": tok})
     # alice 非 ws-a 成员 -> 403
-    r = c.put("/api/users/me/pinned-workspace", json={"workspace": "ws-a"},
+    r = c.put("/api/users/me/last-visited-workspace", json={"workspace": "ws-a"},
               headers={"X-CSRF-Token": _csrf(c)})
     assert r.status_code == 403
 
 
-def test_pin_without_csrf_rejected(admin_client):
+def test_record_without_csrf_rejected(admin_client):
     """缺少 CSRF token 的 PUT 必须被拒（403），防止 route 漏检 CSRF 回归。"""
     c, _ = admin_client
     # 故意不带 X-CSRF-Token header（cookie 仍在，但 header 缺失 -> verify_csrf 返 False）
-    r = c.put("/api/users/me/pinned-workspace", json={"workspace": "ws-a"})
+    r = c.put("/api/users/me/last-visited-workspace", json={"workspace": "ws-a"})
     assert r.status_code == 403
 
 
-def test_admin_can_pin_nonmember_workspace(tmp_workspaces, monkeypatch):
+def test_admin_can_record_nonmember_workspace(tmp_workspaces, monkeypatch):
     monkeypatch.setenv("SUPERNOVA_WEB_COOKIE_SECURE", "0")
     from supernova_core.utils.paths import resolve_workspaces_dir
     monkeypatch.setenv("SUPERNOVA_WORKER_ROOT", str(tmp_workspaces.parent))
@@ -99,7 +99,7 @@ def test_admin_can_pin_nonmember_workspace(tmp_workspaces, monkeypatch):
     c.post("/api/auth/login", json={"username": "ops", "password": "ops-pw"},
            headers={"X-CSRF-Token": tok})
 
-    r = c.put("/api/users/me/pinned-workspace", json={"workspace": "ws-a"},
+    r = c.put("/api/users/me/last-visited-workspace", json={"workspace": "ws-a"},
               headers={"X-CSRF-Token": _csrf(c)})
     assert r.status_code == 200
-    assert app.state.auth_store.get_user_by_username("ops").pinned_workspace == "ws-a"
+    assert app.state.auth_store.get_user_by_username("ops").last_visited_workspace == "ws-a"

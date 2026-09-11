@@ -26,7 +26,7 @@ from supernova_web.components.workspace_provisioner import (
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 
-class PinnedWorkspaceIn(BaseModel):
+class LastVisitedWorkspaceIn(BaseModel):
     workspace: str
 
 
@@ -57,11 +57,11 @@ async def set_theme(body: ThemeIn, request: Request,
     return {"theme": body.theme}
 
 
-@router.put("/me/pinned-workspace")
-async def set_pinned_workspace(body: PinnedWorkspaceIn, request: Request,
-                               user: User = Depends(current_user)):
-    """per-user 置顶工作区（IA 重设计 §2.3）。只能 pin 有权限的 ws
-    （admin 全部、其他用户需为成员）。"""
+@router.put("/me/last-visited-workspace")
+async def set_last_visited_workspace(body: LastVisitedWorkspaceIn, request: Request,
+                                     user: User = Depends(current_user)):
+    """per-user 最近访问工作区（2026-09-11 替换原置顶端点）：前端进 /p/:ws 时
+    静默上报，顶栏「工作区」跳它。只能记录有权限的 ws（admin 全部、其他用户需为成员）。"""
     _check_csrf(request)
     if not is_safe_workspace_name(body.workspace):
         raise HTTPException(422, "invalid workspace name")
@@ -76,8 +76,8 @@ async def set_pinned_workspace(body: PinnedWorkspaceIn, request: Request,
     ws_dir = request.app.state.config.workspaces_dir / body.workspace
     if not ws_dir.exists():
         raise HTTPException(404, "workspace not found")
-    request.app.state.auth_store.update_pinned_workspace(user.id, body.workspace)
-    return {"pinned": body.workspace}
+    request.app.state.auth_store.update_last_visited_workspace(user.id, body.workspace)
+    return {"last_visited": body.workspace}
 
 
 class CreateUserIn(BaseModel):

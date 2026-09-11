@@ -23,7 +23,7 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.f
 // ScanDetail header 的 WorkspaceSwitcher 依赖隔离（对齐 ScanDetail.test.tsx）。
 vi.mock("@/auth/AuthContext", () => ({
   useAuth: () => ({
-    user: { id: 1, username: "admin", role: "admin", must_change_password: false, pinned_workspace: null },
+    user: { id: 1, username: "admin", role: "admin", must_change_password: false },
     loading: false, login: vi.fn(), logout: vi.fn(), refreshUser: vi.fn(),
   }),
 }));

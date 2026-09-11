@@ -11,9 +11,9 @@ class User(BaseModel):
     # 登录后前端据此提醒改密，改密成功（update_password）后置 False。
     must_change_password: bool = False
     created_at: str = ""  # ISO8601；list_all_users 填充，其余构造点默认空
-    # per-user 置顶工作区（IA 重设计 §2.3）：用户从归属 ws 里 pin 一个，
-    # 顶栏「工作区」默认跳它。None = 未置顶（跳最近归属 ws）。多对多关系不动。
-    pinned_workspace: str | None = None
+    # per-user 最近访问工作区（2026-09-11 替换原置顶 pinned_workspace，列 RENAME 保值）：
+    # 前端进 /p/:ws 时静默上报。None = 从未访问（顶栏「工作区」跳最近活跃 ws 兜底）。
+    last_visited_workspace: str | None = None
     # SSO（OA passport，spec 2026-08-25 §6）：头像 URL（浏览器直连加载；账密用户 None）
     avatar_url: str | None = None
     # per-user UI 主题（2026-08-28）：跟账号走、跨设备一致、与工作区无关。

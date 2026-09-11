@@ -146,14 +146,14 @@ def test_update_workspace_member_role(tmp_path):
     assert s.get_workspace_member_role("ws-a", u.id) == "manager"
 
 
-def test_pinned_workspace_column_migration_and_update(tmp_path):
-    """旧库（无 pinned_workspace 列）启动补列不崩；update/get 读写 pinned。"""
+def test_last_visited_workspace_column_migration_and_update(tmp_path):
+    """旧库（无 pinned/last_visited 列）启动补列不崩；update/get 读写 last_visited。"""
     import sqlite3
     from supernova_web.auth.store import AuthStore
     from supernova_web.auth.passwords import hash_password
 
     db = tmp_path / "auth.db"
-    # 模拟旧库：手动建无 pinned_workspace 列的 users 表 + 一条用户
+    # 模拟旧库：手动建无 pinned_workspace/last_visited_workspace 列的 users 表 + 一条用户
     with sqlite3.connect(db) as c:
         c.execute(
             "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, "
@@ -171,11 +171,45 @@ def test_pinned_workspace_column_migration_and_update(tmp_path):
 
     u = store.get_user_by_username("alice")
     assert u is not None
-    assert u.pinned_workspace is None  # 旧库补列后默认 None
+    assert u.last_visited_workspace is None  # 旧库补列后默认 None
 
-    store.update_pinned_workspace(u.id, "ws-alpha")
-    assert store.get_user(u.id).pinned_workspace == "ws-alpha"
+    store.update_last_visited_workspace(u.id, "ws-alpha")
+    assert store.get_user(u.id).last_visited_workspace == "ws-alpha"
 
-    # 新建用户 pinned_workspace 默认 None
+    # 新建用户 last_visited_workspace 默认 None
     new = store.create_user("bob", hash_password("pw"), role="user")
-    assert store.get_user(new.id).pinned_workspace is None
+    assert store.get_user(new.id).last_visited_workspace is None
+
+
+def test_pinned_workspace_renamed_with_value_preserved(tmp_path):
+    """置顶→最近访问替换迁移（2026-09-11）：旧库 pinned_workspace 列（含存量值）经
+    RENAME 成 last_visited_workspace，值保留为初值（置顶过的 ws = 想回去的 ws，无缝）。"""
+    import sqlite3
+    from supernova_web.auth.store import AuthStore
+    from supernova_web.auth.passwords import hash_password
+
+    db = tmp_path / "auth.db"
+    with sqlite3.connect(db) as c:
+        c.execute(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, "
+            "password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user', "
+            "created_at TEXT NOT NULL, must_change_password INTEGER NOT NULL DEFAULT 0, "
+            "pinned_workspace TEXT)"
+        )
+        c.execute(
+            "INSERT INTO users(username, password_hash, role, created_at, must_change_password, pinned_workspace) "
+            "VALUES(?,?,?,?,?,?)",
+            ("alice", hash_password("pw"), "user", "2026-01-01T00:00:00Z", 0, "ws-legacy"),
+        )
+
+    store = AuthStore(str(db))
+    store.init_schema()  # RENAME pinned_workspace -> last_visited_workspace
+
+    u = store.get_user_by_username("alice")
+    assert u is not None
+    # 存量置顶值无缝成为最近访问初值
+    assert u.last_visited_workspace == "ws-legacy"
+
+    # 二次 init（已改名库，RENAME 报 no such column）幂等不崩
+    store.init_schema()
+    assert store.get_user(u.id).last_visited_workspace == "ws-legacy"

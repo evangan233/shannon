@@ -876,10 +876,6 @@
   "workspaceDetail": {
     "backToList": "返回列表",
     "backToWs": "返回工作区 {{ws}}",
-    "pin": "置顶",
-    "unpin": "取消置顶",
-    "pinPinned": "已置顶",
-    "pinFailed": "置顶失败：{{error}}",
     "hero": {
       "eyebrow": "工作区 · WORKSPACE",
       "totalFindings": "累计发现",
