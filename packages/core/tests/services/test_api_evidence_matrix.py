@@ -247,6 +247,58 @@ class TestBuildMatrix:
         assert m["sources"]["entry_points"] is False
         assert "note" in m
 
+    def test_identical_duplicate_entries_deduped_finding_mounts(self, tmp_path):
+        """旧扫描自愈（2026-09-11 NodeGoat 事故）：注释代码曾产出逐字段完全
+        相同的重复 entry（/benefits ×2）→ match_entry 把纯重复当真歧义拒挂，
+        finding 全落 unmatched。矩阵层对完全相同条目去重；真歧义（不同
+        block/evidence）仍拒挂（由 test_ambiguous_endpoint_goes_unmatched 锁定）。"""
+        scan = _wb_scan(tmp_path)
+        _write_entry_points(scan, [_ep("GET", "/benefits"), _ep("GET", "/benefits")])
+        _write_report_data(scan, [
+            _vuln("AUTHZ-1", "authz", [{"method": "GET", "path": "/benefits"}]),
+        ])
+        m = build_api_evidence_matrix(scan)
+        row = _find_matrix(m, "GET", "/benefits")
+        assert row is not None
+        assert row["whitebox"]["findings"][0]["id"] == "AUTHZ-1"
+        assert not m["unmatched"]["findings"]
+        # 底册行本身也只展示一条（重复行不再进矩阵）
+        assert len([e for e in m["endpoints"]
+                    if e["method"] == "GET" and e["path"] == "/benefits"]) == 1
+
+    def test_verdict_exploitation_steps_dict_items_coerced_to_string(self, tmp_path):
+        """组合扫描后证据页报错根因（2026-09-11）：黑盒 verdict 步骤是
+        {action,command,result} dict 列表，原样透传 → 前端 <li>{s}</li> 渲染
+        object 崩（Objects are not valid as a React child）→ ErrorBoundary。
+        矩阵 SSOT 侧收敛为可读字符串（前端零改动）。"""
+        scan = _wb_scan(tmp_path)
+        _write_entry_points(scan, [_ep("GET", "/export")])
+        _write_report_data(scan, [])
+        bb = scan / "blackbox-runs" / "run-1" / \
+            "deliverables" / "blackbox" / "intermediate"
+        bb.mkdir(parents=True)
+        (bb / "auth_exploit_verdicts.json").write_text(json.dumps({
+            "vuln_class": "auth",
+            "verdicts": [{"vulnerability_id": "AUTH-1", "status": "exploited",
+                          "impact": "GET /export 伪造会话导出 PII",
+                          "exploitation_steps": [
+                              {"action": "构造伪造 cookie",
+                               "command": "node -e 'sign...'",
+                               "result": "Set-Cookie 下发"},
+                              "携带 cookie 访问 /export",   # string 步骤原样保留
+                              {"unexpected": "形状外键"},    # 形状外 dict 不丢信息
+                          ]}],
+        }))
+        m = build_api_evidence_matrix(scan)
+        steps = _find_matrix(m, "GET", "/export")["blackbox"]["verdicts"][0][
+            "exploitation_steps"]
+        assert all(isinstance(s, str) for s in steps)
+        assert "构造伪造 cookie" in steps[0]
+        assert "node -e 'sign...'" in steps[0]
+        assert "Set-Cookie 下发" in steps[0]
+        assert steps[1] == "携带 cookie 访问 /export"
+        assert isinstance(steps[2], str) and "unexpected" in steps[2]
+
     def test_blackbox_only_verdict_fallback_yields_findings_coverage(self, tmp_path):
         # 修复 round 1：§5.5 verdict 自身文本挂载的黑盒-only 接口不得误标 clean
         # （spec §4：clean = 白盒/黑盒证据均未命中）

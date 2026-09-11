@@ -425,6 +425,64 @@ class TestExpressEntryPoints:
         assert express_eps[0].http_method == "*"
         assert express_eps[0].confidence == 0.85
 
+    def test_block_commented_route_not_detected(self):
+        """NodeGoat 事故（2026-09-11 evidence 矩阵歧义拒挂根因）：/* */ 块注释里的
+        修复版注册与真注册同 method+route，产出逐字段重复 entry → match_entry
+        歧义拒挂。注释代码不是路由。"""
+        block = _block(
+            id="app/routes/index.js:index:11",
+            file_path="app/routes/index.js",
+            function_name="index",
+            start_line=11,
+            source_code=(
+                'app.get("/benefits", isLoggedIn, benefitsHandler.displayBenefits);\n'
+                'app.post("/benefits", isLoggedIn, benefitsHandler.updateBenefits);\n'
+                '/* Fix for A7 - checks user role\n'
+                ' app.get("/benefits", isLoggedIn, isAdmin, benefitsHandler.displayBenefits);\n'
+                ' app.post("/benefits", isLoggedIn, isAdmin, benefitsHandler.updateBenefits);\n'
+                ' */\n'
+            ),
+            language="typescript",
+        )
+        eps = detect_entry_points([block], "typescript")
+        express_eps = [ep for ep in eps if ep.evidence.startswith("Express")]
+        assert [(ep.http_method, ep.route) for ep in express_eps] == [
+            ("GET", "/benefits"), ("POST", "/benefits")]
+
+    def test_line_commented_route_not_detected(self):
+        block = _block(
+            id="src/routes.ts:setup:1",
+            file_path="src/routes.ts",
+            function_name="setup",
+            start_line=1,
+            source_code=(
+                "app.get('/real', handler);\n"
+                "// app.get('/commented-out', handler);\n"
+            ),
+            language="typescript",
+        )
+        eps = detect_entry_points([block], "typescript")
+        express_eps = [ep for ep in eps if ep.evidence.startswith("Express")]
+        assert [ep.route for ep in express_eps] == ["/real"]
+
+    def test_route_after_url_string_still_detected(self):
+        """字符串字面量里的 //（如 URL）不是行注释——剔除逻辑须感知字符串，
+        不得误伤后续真路由。"""
+        block = _block(
+            id="src/routes.ts:setup:1",
+            file_path="src/routes.ts",
+            function_name="setup",
+            start_line=1,
+            source_code=(
+                "const u = 'http://example.com/x';\n"
+                "app.get('/after-url', handler);\n"
+            ),
+            language="typescript",
+        )
+        eps = detect_entry_points([block], "typescript")
+        express_eps = [ep for ep in eps if ep.evidence.startswith("Express")]
+        assert [ep.route for ep in express_eps] == ["/after-url"]
+
     def test_express_app_use_with_path(self):
         block = _block(
             id="src/app.ts:setup:1",
@@ -564,6 +622,24 @@ class TestExpressPass2TopLevel:
         assert all(ep.route == "/users" for ep in top_level)
         # Synthetic func_block_id for top-level routes
         assert all(ep.func_block_id == "routes/users.ts::0" for ep in top_level)
+
+    def test_commented_top_level_route_not_detected(self, tmp_path):
+        """Pass 2 扫整文件源码——注释掉的路由注册同样不算（对齐 Pass 1 剔注释）。"""
+        repo = tmp_path / "repo"
+        routes_dir = repo / "routes"
+        routes_dir.mkdir(parents=True)
+        (routes_dir / "admin.ts").write_text(
+            "const router = require('express').Router();\n"
+            "\n"
+            "router.get('/admin', (req, res) => { res.json({}); });\n"
+            "/* router.get('/admin', requireAdmin, handler); */\n"
+            "// router.post('/admin', requireAdmin, handler);\n"
+        )
+        eps = detect_entry_points([], "typescript", repo_path=str(repo))
+        top_level = [ep for ep in eps
+                     if ep.evidence.startswith("Express top-level")]
+        assert [(ep.http_method, ep.route) for ep in top_level] == [
+            ("GET", "/admin")]
 
     def test_top_level_route_in_server_js(self, tmp_path):
         """Routes in server.js are detected."""

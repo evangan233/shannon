@@ -186,6 +186,49 @@ _EXPRESS_ROUTE_PATTERN = re.compile(
     r"""(app|router)\.(get|post|put|delete|patch|all|use)\(\s*['"](/[^'"]*)['"]\s*"""
 )
 
+
+def _strip_js_comments(source: str) -> str:
+    """注释替换为等长空白（保留 \\n）——供路由正则扫描前剔除 /* */ 与 // 注释。
+
+    字符串感知（'/"`/` 反引号 + 反斜杠转义），避免把字符串字面量里的 //（URL）
+    误判为行注释。等长替换是为了保住偏移→行号换算（Pass 2 用 match 起点算
+    行号再对照 FuncBlock 覆盖行）。NodeGoat 事故（2026-09-11）：块注释里的
+    修复版路由注册与真注册同 method+route，产重复 entry → 矩阵歧义拒挂。
+    """
+    out = list(source)
+    i, n = 0, len(source)
+    quote: str | None = None  # 当前所处字符串引号（None = 代码态）
+    while i < n:
+        c = source[i]
+        if quote is not None:
+            if c == "\\" and i + 1 < n:
+                i += 2  # 转义：引号字符本身不参与出串判定
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in ("'", '"', "`"):
+            quote = c
+            i += 1
+            continue
+        if c == "/" and i + 1 < n and source[i + 1] == "/":
+            j = source.find("\n", i)
+            j = n if j == -1 else j
+            out[i:j] = [" "] * (j - i)
+            i = j
+            continue
+        if c == "/" and i + 1 < n and source[i + 1] == "*":
+            j = source.find("*/", i + 2)
+            j = n if j == -1 else j + 2
+            for k in range(i, j):
+                if out[k] != "\n":
+                    out[k] = " "
+            i = j
+            continue
+        i += 1
+    return "".join(out)
+
 _EXPRESS_METHOD_MAP: dict[str, str | None] = {
     "get": "GET",
     "post": "POST",
@@ -220,9 +263,10 @@ def _detect_express_routes(
     """
     entry_points: list[EntryPoint] = []
 
-    # Pass 1: FuncBlock source_code scan
+    # Pass 1: FuncBlock source_code scan（剔注释——见 _strip_js_comments）
     for block in blocks:
-        for match in _EXPRESS_ROUTE_PATTERN.finditer(block.source_code):
+        for match in _EXPRESS_ROUTE_PATTERN.finditer(
+                _strip_js_comments(block.source_code)):
             method_str = match.group(2)
             route_path = match.group(3)
 
@@ -314,8 +358,9 @@ def _scan_top_level_express_routes(
             for line in range(block.start_line, block.end_line + 1):
                 covered_lines.add(line)
 
-        # Scan for route patterns not inside any FuncBlock
-        for match in _EXPRESS_ROUTE_PATTERN.finditer(full_source):
+        # Scan for route patterns not inside any FuncBlock（剔注释；等长替换保证
+        # match 偏移在原文上算行号依然正确）
+        for match in _EXPRESS_ROUTE_PATTERN.finditer(_strip_js_comments(full_source)):
             line_num = full_source[:match.start()].count("\n") + 1
             if line_num in covered_lines:
                 continue

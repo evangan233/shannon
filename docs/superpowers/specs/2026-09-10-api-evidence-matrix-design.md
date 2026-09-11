@@ -106,7 +106,7 @@ coverage 语义（互斥，按优先级）：
 
 1. **结构化优先**：`report_data.vulnerabilities[].endpoints[]` 的 `method+path` ↔ 底册 `http_method+route`。
 2. **path 归一化**：`:param` / `{param}` / `<param>` / `*param` 统一为单段占位 `:param`；query string 剥离；尾部 `/` 归一（空 path 保持 `/`）。
-3. **参数名无关匹配**：归一化后按「method 相同 + 段数相同 + 非参数段全等 + 参数段位置一致」匹配（`:userId` ≡ `:id`）。**歧义（同 method 下多个底册行同时命中）→ 该 finding 进 `unmatched`，不挂**。
+3. **参数名无关匹配**：归一化后按「method 相同 + 段数相同 + 非参数段全等 + 参数段位置一致」匹配（`:userId` ≡ `:id`）。**歧义（同 method 下多个底册行同时命中）→ 该 finding 进 `unmatched`，不挂**。**纯重复先去重（2026-09-11 修正）**：逐字段完全相同的底册行（method/path/func_block_id/verdict/evidence 全等，注释代码时代提取器的重复产物）先合并为一条再匹配——「完全相同」不是歧义；真歧义（不同 block/evidence 注册同 method+route）仍拒挂。上游提取器已同步修（Express 路由扫描前剔 `/* */`、`//` 注释），去重是为已落盘的旧扫描自愈。
 4. **自由文本兜底**（safe_vectors.subject、dismissed.title）：正则提 `(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)?\s*/path`，方法缺失时视为任意方法（仅当 path 唯一命中一个 method 时才挂）；提不出接口的进 `unmatched.safe_dismissed`（原文保留，`kind` 区分来源，不丢）。
 5. **黑盒**：verdict `.vulnerability_id` → 白盒 finding → 接口；白盒 finding 缺失（黑盒独立发现/ID 漂移）→ 尝试 verdict 自身文本提接口；再失败进 `unmatched.verdicts`。
 6. **多 endpoint finding**（`endpoints[]` 多行）：每个命中接口都挂（role 字段保留 `trigger` / `reachable` 区分）。

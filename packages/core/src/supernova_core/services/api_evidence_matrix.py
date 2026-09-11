@@ -176,12 +176,37 @@ def _dismissed_view(d: dict) -> dict:
     }
 
 
+def _coerce_step(step: object) -> str:
+    """exploitation_steps 列表项收敛为 string。
+
+    黑盒 verdict 的步骤是 {action, command, result} 结构化 dict（NodeGoat
+    2026-09-11 组合扫描事故：原样透传 → 前端 <li>{s}</li> 渲染 object 崩 →
+    ErrorBoundary 整页报错）。string 原样；dict 拼 action / $ command / →
+    result 三行；形状外键 JSON 保底不丢信息。"""
+    if isinstance(step, str):
+        return step
+    if isinstance(step, dict):
+        parts: list[str] = []
+        if step.get("action"):
+            parts.append(str(step["action"]))
+        if step.get("command"):
+            parts.append(f"$ {step['command']}")
+        if step.get("result"):
+            parts.append(f"→ {step['result']}")
+        if parts:
+            return "\n".join(parts)
+        return json.dumps(step, ensure_ascii=False)
+    return str(step)
+
+
 def _verdict_view(v: dict, run_id: str, vuln_class: str) -> dict:
+    steps = v.get("exploitation_steps")
     return {
         "vulnerability_id": v.get("vulnerability_id"),
         "vuln_class": vuln_class, "status": v.get("status"),
         "severity": v.get("severity"), "impact": v.get("impact"),
-        "exploitation_steps": v.get("exploitation_steps") or [],
+        "exploitation_steps": [_coerce_step(s) for s in steps] if isinstance(
+            steps, list) else [],
         "proof_of_impact": v.get("proof_of_impact"), "run_id": run_id,
     }
 
@@ -209,6 +234,21 @@ def build_api_evidence_matrix(scan_dir: Path) -> dict:
                     "whitebox": {"findings": [], "safe": [], "dismissed": []},
                     "blackbox": {"verdicts": [], "rejected": []},
                 })
+    # 纯重复去重（2026-09-11 NodeGoat 事故自愈）：注释代码时代的提取器曾产出
+    # 逐字段完全相同的重复 entry（同 func_block_id/evidence），被 match_entry
+    # 当真歧义拒挂 → finding 全落 unmatched。完全相同才合并；真歧义（不同
+    # block/evidence 注册同 method+route）保留双条，§5.3 歧义→None 不硬凑不变。
+    _seen: set[tuple] = set()
+    deduped: list[dict] = []
+    for e in entries:
+        key = (e["method"], e["path"], e["func_block_id"],
+               e["entry_verdict"], e["entry_evidence"])
+        if key in _seen:
+            continue
+        _seen.add(key)
+        deduped.append(e)
+    entries = deduped
+
     index = index_entries(entries)
 
     unmatched_findings: list[dict] = []
