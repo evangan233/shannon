@@ -14,6 +14,8 @@ import json
 import time
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from supernova_web.components.scan_manager import ScanManager
 from supernova_web.models import RepoSource, ScanRequest
 
@@ -96,7 +98,7 @@ async def test_combined_public_precheck_fail_still_writes_source_repo(tmp_path, 
 
 # ── 读路径：历史存量兜底（repo_path basename）─────────────────────────────
 
-def _detail(tmp_path, session: dict):
+async def _detail(tmp_path, session: dict):
     from supernova_web.api.scans import _scan_detail
     scan_dir = tmp_path / "WS" / "scans" / "s1"
     scan_dir.mkdir(parents=True)
@@ -117,27 +119,30 @@ def _detail(tmp_path, session: dict):
     class _FakeRequest:
         app = _FakeApp()
 
-    return _scan_detail(_FakeRequest(), "WS", "s1", scan_dir)
+    return await _scan_detail(_FakeRequest(), "WS", "s1", scan_dir)
 
 
-def test_scan_detail_falls_back_to_repo_path_basename(tmp_path):
+@pytest.mark.asyncio
+async def test_scan_detail_falls_back_to_repo_path_basename(tmp_path):
     """历史组合扫描（source_repo 缺失 + precheck 失败终态）→ repo_path basename 兜底。"""
-    d = _detail(tmp_path, {
+    d = await _detail(tmp_path, {
         "status": "failed", "combined": True, "bb_phase": "failed",
         "repo_path": "/app/repos/NodeGoat", "web_url": "http://e", "owner": "web"})
     assert d["source_repo"] == "NodeGoat"
 
 
-def test_scan_detail_prefers_persisted_source_repo(tmp_path):
+@pytest.mark.asyncio
+async def test_scan_detail_prefers_persisted_source_repo(tmp_path):
     """已有 source_repo（含 group/repo 形态）优先——兜底不覆盖正路写入。"""
-    d = _detail(tmp_path, {
+    d = await _detail(tmp_path, {
         "status": "completed", "repo_path": "/app/repos/group/repo-a",
         "source_repo": "group/repo-a", "web_url": "http://e", "owner": "web"})
     assert d["source_repo"] == "group/repo-a"
 
 
-def test_scan_detail_no_repo_path_keeps_none(tmp_path):
+@pytest.mark.asyncio
+async def test_scan_detail_no_repo_path_keeps_none(tmp_path):
     """无 repo_path（如黑盒复用行 repo_path=""）→ source_repo 维持 None（不造假值）。"""
-    d = _detail(tmp_path, {
+    d = await _detail(tmp_path, {
         "status": "failed", "repo_path": "", "web_url": "http://e", "owner": "web"})
     assert d["source_repo"] is None

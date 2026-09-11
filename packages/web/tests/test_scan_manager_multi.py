@@ -1,8 +1,8 @@
 """T3: 1 ws : N scans 多 scan 独立性 + resume 语义测试。
 
 同 ws 多 scan 不互斥；cancel 按 scan_id 精确；_watch 各 scan 独立 tail 各自 events.ndjson；
-active_repo_sources 多 ws 多 scan；resume 仅 interrupted/crashed 放行（completed/failed/
-cancelled/running -> ValueError，用重扫起 scan）。
+active_repo_sources 多 ws 多 scan；resume 放行已停未完成态（interrupted/crashed/failed/
+cancelled/killed，spec 2026-08-27 §4.1 扩集），completed/running -> ValueError（用重扫起 scan）。
 """
 import asyncio
 import json
@@ -140,12 +140,18 @@ async def test_resume_completed_raises(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_resume_failed_raises(tmp_path):
-    """failed scan 不可 resume -> ValueError（扫描失败应重扫，旧记录保留）。"""
+async def test_resume_failed_allowed(tmp_path, monkeypatch):
+    """failed scan 可 resume（spec 2026-08-27 §4.1 扩集：最常见中断出口，Temporal
+    已 FAILED 终态无并发风险；80dd1968 起提交前还 terminate 在途 execution 兜底）。
+
+    旧断言「不可恢复」与 _RESUMABLE_STATUSES 含 failed 矛盾（预存失败，2026-09-11
+    80dd1968 commit message 标注），对齐现语义。"""
     mgr = ScanManager(tmp_path, tmp_path / "r", None)
+    _patch_temporal_ok(monkeypatch, mgr)
+    _patch_client(monkeypatch)
     _make_scan_dir(tmp_path, "WS", scan_id="s1", status="failed")
-    with pytest.raises(ValueError, match="不可恢复"):
-        await mgr.resume("WS", "s1")
+    ws, scan_id = await mgr.resume("WS", "s1")
+    assert scan_id == "s1"
 
 
 @pytest.mark.asyncio

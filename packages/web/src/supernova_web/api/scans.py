@@ -63,7 +63,7 @@ def _scan_dir_or_404(request: Request, ws: str, scan_id: str):
     return scan_dir
 
 
-def _scan_detail(request: Request, ws: str, scan_id: str, scan_dir) -> dict:
+async def _scan_detail(request: Request, ws: str, scan_id: str, scan_dir) -> dict:
     """scan 详情 payload（同旧 GET /{ws} SessionData shape，读 scan_dir session.json）。"""
     from supernova_core.session import SessionManager
     from supernova_web.components.metrics_normalizer import normalize_metrics
@@ -75,6 +75,15 @@ def _scan_detail(request: Request, ws: str, scan_id: str, scan_dir) -> dict:
     data = mgr.get_session_data(scan_dir)
     idx = request.app.state.indexer
     raw_status = idx._status_of(scan_dir, mgr.get_status(scan_dir))
+    # 判活盲区二次确认（2026-09-11 NodeGoat-20260910-193720 事故）：activity 在
+    # Temporal 重试等待期（backoff ~5min ×3）不执行 → 心跳停更 → interrupted 误判，
+    # 但 workflow 仍 RUNNING。detail 是用户决策入口（「已中断」+ 续跑按钮据此出现，
+    # 引导用户 terminate 掉实际在推进的扫描）——describe 确认 RUNNING 则维持
+    # running。仅 interrupted 才查（正常/终态短路），误判窗口短暂罕见，不设缓存。
+    if raw_status == "interrupted":
+        from supernova_web.components.orphan_reconciler import _workflow_still_running
+        if await _workflow_still_running(scan_dir):
+            raw_status = "running"
     combined = data.get("combined")
     # 版本化 run（spec §5.2/§5.3）：bb_phase/bb_reason 合并 latest run（与 list 同视图）——
     # 任务级 phase 停在 precheck/pending，前端时间线/进度概览的 eventsUrl 切换都按 run
@@ -294,7 +303,7 @@ async def list_scans(ws: str, request: Request, _: User = Depends(workspace_memb
 
 @router.get("/{ws}/scans/{scan_id}")
 async def get_scan(ws: str, scan_id: str, request: Request, _: User = Depends(workspace_member)):
-    return _scan_detail(request, ws, scan_id, _scan_dir_or_404(request, ws, scan_id))
+    return await _scan_detail(request, ws, scan_id, _scan_dir_or_404(request, ws, scan_id))
 
 
 @router.get("/{ws}/scans/{scan_id}/blackbox-runs")

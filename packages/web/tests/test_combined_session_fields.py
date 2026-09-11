@@ -259,7 +259,8 @@ def test_combined_whitebox_completed_but_blackbox_pending_is_not_terminal(tmp_pa
     assert row["progress_pct"] == 55.0
 
 
-def test_scan_detail_payload_includes_combined_fields(tmp_path):
+@pytest.mark.asyncio
+async def test_scan_detail_payload_includes_combined_fields(tmp_path):
     """_scan_detail payload 含 combined/bb_phase/bb_reason/progress_pct/expected_agents/completed_agents。"""
     from supernova_web.components.scan_store import ScanStore
     from supernova_web.api.scans import _scan_detail
@@ -284,7 +285,7 @@ def test_scan_detail_payload_includes_combined_fields(tmp_path):
     class _FakeRequest:
         app = _FakeApp()
 
-    payload = _scan_detail(_FakeRequest(), ws, scan_id, scans_dir)
+    payload = await _scan_detail(_FakeRequest(), ws, scan_id, scans_dir)
     for key in ("combined", "bb_phase", "bb_reason", "progress_pct",
                 "expected_agents", "completed_agents"):
         assert key in payload, f"_scan_detail 缺组合字段: {key}"
