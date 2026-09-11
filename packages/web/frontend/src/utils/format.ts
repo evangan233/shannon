@@ -9,6 +9,16 @@ export function fmtTime(unix?: number | null): string {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+/** ISO 8601 串 → 同口径紧凑 MM-DD HH:mm（HOST 档案「更新时间」列：后端 isoformat() 串 32 字符，
+ *  直渲染会溢出固定列宽挤到相邻操作按钮；空/无效串兜底 "-"，完整串由调用方放 title）。 */
+export function fmtIsoTime(iso?: string | null): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "-";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 /** 时长紧凑格式：45s / 12m / 3h 20m（total_duration_ms → 文本）。 */
 export function fmtDur(ms?: number | null): string {
   if (!ms || ms < 0) return "";

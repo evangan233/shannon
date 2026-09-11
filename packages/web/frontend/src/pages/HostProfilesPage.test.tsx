@@ -61,4 +61,23 @@ describe("HostProfilesPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(screen.getByText("华南生产")).toBeInTheDocument());
   });
+
+  it("更新时间列渲染紧凑格式，完整 ISO 串进 title（曾 32 字符 ISO 溢出 w-36 挤到操作按钮）", async () => {
+    const iso = "2026-09-11T08:30:45.123456+00:00";
+    store = [{ id: "h1", name: "prod", mappings: [], created_at: iso, updated_at: iso }];
+    renderPage();
+    await waitFor(() => expect(screen.getByText("prod")).toBeInTheDocument());
+    // 形状断言（时区无关）：MM-DD HH:mm 紧凑口径，对齐 fmtTime
+    expect(screen.getByTitle(iso)).toHaveTextContent(/^\d{2}-\d{2} \d{2}:\d{2}$/);
+    // 原始机器串不得直接作为单元格文本
+    expect(screen.queryByText(iso)).not.toBeInTheDocument();
+  });
+
+  it("空时间戳兜底为 -（system fork 副本 updated_at/created_at 均清空）", async () => {
+    store = [{ id: "h2", name: "forked", mappings: [], created_at: "", updated_at: "" }];
+    renderPage();
+    await waitFor(() => expect(screen.getByText("forked")).toBeInTheDocument());
+    // 时间列不显示 "—" 长破折号，统一 fmtTime 口径 "-"
+    expect(screen.queryByText("—")).not.toBeInTheDocument();
+  });
 });

@@ -19,6 +19,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import { CopyButton } from "@/components/CopyButton";
 import { HostProfileDialog } from "@/components/HostProfileDialog";
+import { fmtIsoTime } from "@/utils/format";
 
 export function HostProfilesPage() {
   const { t } = useTranslation();
@@ -92,7 +93,7 @@ export function HostProfilesPage() {
             <TableHead className="w-64">{t("hostProfiles.name")}</TableHead>
             <TableHead>{t("hostProfiles.source")}</TableHead>
             <TableHead className="w-24">{t("hostProfiles.mappingsCount")}</TableHead>
-            <TableHead className="w-36">{t("hostProfiles.updated")}</TableHead>
+            <TableHead className="w-28">{t("hostProfiles.updated")}</TableHead>
             <TableHead className="w-32"></TableHead></TableRow></TableHeader>
             <TableBody>{profiles.map((p) => (
               <TableRow key={p.id} className="group transition-colors hover:bg-muted/40">
@@ -135,8 +136,12 @@ export function HostProfilesPage() {
                 <TableCell className="font-mono text-xs text-muted-foreground">
                   {p.mappings?.length ?? 0}
                 </TableCell>
+                {/* 更新时间: 紧凑 MM-DD HH:mm（对齐 fmtTime 全站口径）；后端为 32 字符 ISO 机器串，
+                    直渲染溢出固定列挤到操作按钮——完整串放 title hover。 */}
                 <TableCell className="font-mono text-xs text-muted-foreground">
-                  {p.updated_at || p.created_at || "—"}
+                  <span className="whitespace-nowrap" title={(p.updated_at || p.created_at) ?? undefined}>
+                    {fmtIsoTime(p.updated_at || p.created_at)}
+                  </span>
                 </TableCell>
                 {/* 操作列: flex + justify-end + gap-1 横排；system 仅 fork，ws 有 编辑/刷新/删除。 */}
                 <TableCell>
