@@ -1051,6 +1051,29 @@
       "fakeCompleted": {
         "title": "Scan marked completed, but no agent produced results",
         "hint": "Whitebox never actually started ({{done}}/{{total}} agents completed) — the scan may have been closed out as \"completed\" mid-flight, leaving the report empty. Consider resubmitting the scan or checking the logs/events tab."
+      },
+      "bulk": {
+        "selected": "{{count}} selected",
+        "selectAll": "Select all in current view",
+        "selectScan": "Select scan {{scanId}}",
+        "cancelSelected": "Cancel selected ({{count}})",
+        "resumeSelected": "Resume selected ({{count}})",
+        "clear": "Clear selection",
+        "cancelConfirmTitle": "Cancel {{count}} scans",
+        "cancelConfirmDesc": "The following {{count}} scans will be cancelled ({{total}} selected; the rest are already finished):",
+        "cancelConfirmGo": "Cancel",
+        "resumeConfirmTitle": "Resume {{count}} scans",
+        "resumeConfirmDesc": "Breakpoint summary per scan ({{total}} selected; red entries are not resumable and will be skipped):",
+        "resumeConfirmGo": "Resume {{count}} scans",
+        "resumeSkipSummary": "{{count}} completed agents will be skipped",
+        "resumeNoSkip": "No completed agents, resume from start",
+        "resultTitle": "Bulk action done: {{ok}} ok · {{skip}} skipped · {{fail}} failed",
+        "bannerClose": "Close bulk action result",
+        "actionFailed": "Bulk action failed: {{error}}",
+        "deleteSelected": "Delete selected ({{count}})",
+        "deleteConfirmTitle": "Delete {{count}} scans",
+        "deleteConfirmDesc": "The following {{count}} scans and all their artifacts will be permanently deleted ({{total}} selected; running/queued scans cannot be deleted):",
+        "deleteConfirmGo": "Delete"
       }
     },
     "errorBoundary": {

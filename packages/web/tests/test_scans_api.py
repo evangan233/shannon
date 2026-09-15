@@ -35,6 +35,11 @@ class FakeSM:
         self.add_run = []  # [(ws, scan_id, req), ...]
         self.deleted_runs = []  # [(ws, scan_id, run_id), ...]
         self.resume_exc = None
+        self.resume_for_exc: dict[str, Exception] = {}
+        # 批量端点（2026-09-15）：scan_status 状态门（scan_id -> 对外状态；缺省查不到
+        # 视为不存在）+ cancel_exc（scan_id -> 异常，单项失败隔离测试）。
+        self.status_map: dict[str, str] = {}
+        self.cancel_exc: dict[str, Exception] = {}
         self.preview_result = {
             "status": "failed", "resumable": True, "reason": None,
             "scan_type": "whitebox",
@@ -44,9 +49,12 @@ class FakeSM:
             "warnings": [], "abort_reason": None, "resume_attempts": 1}
         self.preview_exc = None
         self.delete_exc = None
+        self.delete_for_exc: dict[str, Exception] = {}
         self.delete_run_exc = None
 
     async def resume(self, ws, scan_id):
+        if scan_id in self.resume_for_exc:
+            raise self.resume_for_exc[scan_id]
         if self.resume_exc:
             raise self.resume_exc
         self.resumed.append((ws, scan_id))
@@ -57,11 +65,18 @@ class FakeSM:
             raise self.preview_exc
         return self.preview_result
 
+    def scan_status(self, ws, scan_id):
+        return self.status_map.get(scan_id)
+
     async def cancel(self, ws, scan_id=None):
+        if scan_id in self.cancel_exc:
+            raise self.cancel_exc[scan_id]
         self.cancelled.append((ws, scan_id))
         return {"cancelled": scan_id if scan_id else ws}
 
     async def delete(self, ws, scan_id):
+        if scan_id in self.delete_for_exc:
+            raise self.delete_for_exc[scan_id]
         if self.delete_exc:
             raise self.delete_exc
         self.deleted.append((ws, scan_id))
@@ -514,6 +529,183 @@ def test_cancel_scan_passes_through_via_signal(authed_client, app_with_ws, tmp_w
     assert r.status_code == 200
     assert r.json() == {"cancelled": "s1", "via": "signal"}
     assert fake.cancelled == [("WS", "s1")]
+
+
+# ── batch-cancel / batch-resume（2026-09-15 批量取消/续跑）───────────────────
+
+def test_batch_cancel_mixed(authed_client, app_with_ws, tmp_workspaces):
+    """running/queued 逐项调 sm.cancel；终态 skipped；不存在 error；有成功 → 202。"""
+    _make_scan(tmp_workspaces, "WS", scan_id="s1", status="running")
+    fake = FakeSM()
+    fake.status_map = {"s1": "running", "s2": "queued", "s3": "completed", "s4": "interrupted"}
+    app_with_ws.state.scan_manager = fake
+    tok = _csrf(authed_client)
+    r = authed_client.post("/api/workspaces/WS/scans/batch-cancel",
+                           json={"scan_ids": ["s1", "s2", "s3", "s4", "nope"]},
+                           headers={"X-CSRF-Token": tok})
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["submitted"] == 2
+    assert body["skipped"] == 2
+    assert body["failed"] == 3 - 2  # 不存在一项
+    by_id = {x["scan_id"]: x for x in body["results"]}
+    assert fake.cancelled == [("WS", "s1"), ("WS", "s2")]  # 只有 running/queued 进 cancel
+    assert by_id["s3"]["skipped"] is True
+    assert by_id["nope"]["ok"] is False and by_id["nope"]["skipped"] is False
+
+
+def test_batch_cancel_state_gate_protects_terminal(authed_client, app_with_ws, tmp_workspaces):
+    """状态门核心：completed 不裸调 sm.cancel——裸调会 _mark_cancelled 把终态覆写成
+    cancelled（单行按钮靠 UI 条件挡，批量必须服务端挡「勾选到确认间跑完」的漂移）。"""
+    _make_scan(tmp_workspaces, "WS", scan_id="s1", status="completed")
+    fake = FakeSM()
+    fake.status_map = {"s1": "completed"}
+    app_with_ws.state.scan_manager = fake
+    tok = _csrf(authed_client)
+    r = authed_client.post("/api/workspaces/WS/scans/batch-cancel",
+                           json={"scan_ids": ["s1"]}, headers={"X-CSRF-Token": tok})
+    assert r.status_code == 422  # 全跳过（零成功）→ 422
+    assert fake.cancelled == []  # 从未触 cancel
+
+
+def test_batch_cancel_empty_ids_422(authed_client, app_with_ws):
+    """空 scan_ids → 422（validator：请至少选择一个扫描任务）。"""
+    fake = FakeSM()
+    app_with_ws.state.scan_manager = fake
+    tok = _csrf(authed_client)
+    r = authed_client.post("/api/workspaces/WS/scans/batch-cancel",
+                           json={"scan_ids": []}, headers={"X-CSRF-Token": tok})
+    assert r.status_code == 422
+    assert fake.cancelled == []
+
+
+def test_batch_cancel_dedup(authed_client, app_with_ws, tmp_workspaces):
+    """重复 scan_id 保序去重——同一任务只取消一次。"""
+    _make_scan(tmp_workspaces, "WS", scan_id="s1", status="running")
+    fake = FakeSM()
+    fake.status_map = {"s1": "running"}
+    app_with_ws.state.scan_manager = fake
+    tok = _csrf(authed_client)
+    r = authed_client.post("/api/workspaces/WS/scans/batch-cancel",
+                           json={"scan_ids": ["s1", "s1", "s1"]}, headers={"X-CSRF-Token": tok})
+    assert r.status_code == 202
+    assert fake.cancelled == [("WS", "s1")]
+    assert len(r.json()["results"]) == 1
+
+
+def test_batch_cancel_single_failure_isolated(authed_client, app_with_ws, tmp_workspaces):
+    """单项 cancel 异常只计入该行 results，不阻断整批。"""
+    _make_scan(tmp_workspaces, "WS", scan_id="s1", status="running")
+    fake = FakeSM()
+    fake.status_map = {"s1": "running", "s2": "running"}
+    fake.cancel_exc["s2"] = RuntimeError("boom")
+    app_with_ws.state.scan_manager = fake
+    tok = _csrf(authed_client)
+    r = authed_client.post("/api/workspaces/WS/scans/batch-cancel",
+                           json={"scan_ids": ["s1", "s2"]}, headers={"X-CSRF-Token": tok})
+    assert r.status_code == 202
+    body = r.json()
+    assert body["submitted"] == 1
+    by_id = {x["scan_id"]: x for x in body["results"]}
+    assert by_id["s2"]["ok"] is False and "boom" in by_id["s2"]["error"]
+
+
+def test_batch_resume_mixed(authed_client, app_with_ws, tmp_workspaces):
+    """批量续跑：resume 自带状态门（ValueError 逐项转 error），有成功 → 202。"""
+    _make_scan(tmp_workspaces, "WS", scan_id="s1", status="interrupted")
+    fake = FakeSM()
+    fake.resume_for_exc = {"s2": ValueError("该扫描状态为 running，不可恢复，请重新扫描")}
+    app_with_ws.state.scan_manager = fake
+    tok = _csrf(authed_client)
+    r = authed_client.post("/api/workspaces/WS/scans/batch-resume",
+                           json={"scan_ids": ["s1", "s2"]}, headers={"X-CSRF-Token": tok})
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["submitted"] == 1
+    assert fake.resumed == [("WS", "s1")]
+    by_id = {x["scan_id"]: x for x in body["results"]}
+    assert by_id["s2"]["ok"] is False and "不可恢复" in by_id["s2"]["error"]
+
+
+def test_batch_resume_all_failed_422(authed_client, app_with_ws, tmp_workspaces):
+    """全失败 → 422（body 顶层同形，对齐 batch-scan 先例）。"""
+    _make_scan(tmp_workspaces, "WS", scan_id="s1", status="completed")
+    fake = FakeSM()
+    fake.resume_exc = ValueError("该扫描状态为 completed，不可恢复，请重新扫描")
+    app_with_ws.state.scan_manager = fake
+    tok = _csrf(authed_client)
+    r = authed_client.post("/api/workspaces/WS/scans/batch-resume",
+                           json={"scan_ids": ["s1"]}, headers={"X-CSRF-Token": tok})
+    assert r.status_code == 422
+    assert r.json()["results"][0]["ok"] is False
+
+
+def test_scan_status_real_disk(tmp_path):
+    """scan_status 真盘口径（非 mock）：终态直读 session.json；不存在 -> None。
+    批量取消状态门依赖它读真实状态（防勾选到确认间的状态漂移毁终态）。"""
+    from supernova_web.components.scan_manager import ScanManager
+    scan_dir = tmp_path / "workspaces" / "WS" / "scans" / "s1"
+    scan_dir.mkdir(parents=True)
+    (scan_dir / "session.json").write_text(json.dumps({
+        "status": "completed", "scan_type": "whitebox", "created_at": 1780000000.0}))
+    sm = ScanManager(workspaces_dir=tmp_path / "workspaces", repos_dir=tmp_path / "repos",
+                     config_store=object())
+    assert sm.scan_status("WS", "s1") == "completed"
+    assert sm.scan_status("WS", "nope") is None
+
+
+# ── batch-delete（2026-09-15 批量删除：终态门 + 逐项真删）─────────────────────
+
+def test_batch_delete_terminal_only(authed_client, app_with_ws, tmp_workspaces):
+    """终态逐项调 sm.delete；running/queued 被 effective 状态门拦为 skipped（不裸调
+    ——queued 的单点 delete 只拦 raw=running，排队中真删会留孤儿 workflow）。"""
+    _make_scan(tmp_workspaces, "WS", scan_id="s1", status="completed")
+    fake = FakeSM()
+    fake.status_map = {"s1": "completed", "s2": "interrupted", "s3": "running", "s4": "queued"}
+    app_with_ws.state.scan_manager = fake
+    tok = _csrf(authed_client)
+    r = authed_client.post("/api/workspaces/WS/scans/batch-delete",
+                           json={"scan_ids": ["s1", "s2", "s3", "s4"]},
+                           headers={"X-CSRF-Token": tok})
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["submitted"] == 2
+    assert body["skipped"] == 2
+    assert fake.deleted == [("WS", "s1"), ("WS", "s2")]  # 只有终态进 delete
+    by_id = {x["scan_id"]: x for x in body["results"]}
+    assert by_id["s3"]["skipped"] is True
+    assert by_id["s4"]["skipped"] is True
+
+
+def test_batch_delete_running_race_isolated(authed_client, app_with_ws, tmp_workspaces):
+    """状态门过后才翻 running 的竞态：sm.delete 抛 ScanRunning 逐项转 error 不阻断。"""
+    from supernova_web.components.scan_manager import ScanRunning
+    _make_scan(tmp_workspaces, "WS", scan_id="s1", status="completed")
+    fake = FakeSM()
+    fake.status_map = {"s1": "completed", "s2": "completed"}
+    fake.delete_for_exc["s2"] = ScanRunning("s2")
+    app_with_ws.state.scan_manager = fake
+    tok = _csrf(authed_client)
+    r = authed_client.post("/api/workspaces/WS/scans/batch-delete",
+                           json={"scan_ids": ["s1", "s2"]}, headers={"X-CSRF-Token": tok})
+    assert r.status_code == 202
+    body = r.json()
+    assert body["submitted"] == 1
+    by_id = {x["scan_id"]: x for x in body["results"]}
+    assert by_id["s2"]["ok"] is False and "取消" in by_id["s2"]["error"]
+
+
+def test_batch_delete_all_skipped_422(authed_client, app_with_ws, tmp_workspaces):
+    """全被门拦（零成功）→ 422。"""
+    _make_scan(tmp_workspaces, "WS", scan_id="s1", status="running")
+    fake = FakeSM()
+    fake.status_map = {"s1": "running"}
+    app_with_ws.state.scan_manager = fake
+    tok = _csrf(authed_client)
+    r = authed_client.post("/api/workspaces/WS/scans/batch-delete",
+                           json={"scan_ids": ["s1"]}, headers={"X-CSRF-Token": tok})
+    assert r.status_code == 422
+    assert fake.deleted == []
 
 
 # ── delete（真删，spec §5.1 DELETE）─────────────────────────────────────────

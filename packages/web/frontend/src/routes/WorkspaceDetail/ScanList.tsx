@@ -7,6 +7,7 @@ import { Ban, ChevronRight, Crosshair, Eye, Play, RefreshCw, Search, Trash2 } fr
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -19,7 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   cancelScan, deleteScan, deleteBlackboxRun, resumeScan, getScan, getResumePreview,
-  scanEventsUrl, ApiError, type ResumePreview,
+  scanEventsUrl, batchCancelScans, batchResumeScans, batchDeleteScans, ApiError, type ResumePreview,
 } from "@/api/client";
 import useSWR from "swr";
 import { useScans } from "./useScans";
@@ -27,7 +28,7 @@ import { getScanGate, type ScanGateSnapshot } from "@/api/client";
 import { ScanGatePanel } from "@/components/ScanGatePanel";
 import { useEventSource } from "@/api/useEventSource";
 import { liveScanPct } from "@/state/liveScanPct";
-import type { BlackboxRunSummary, BatchScanResponse, ScanSummary } from "@/api/types";
+import type { BlackboxRunSummary, BatchScanResponse, ScanBatchResponse, ScanSummary } from "@/api/types";
 import { fmtCost } from "@/utils/currency";
 import { fmtTime, fmtDur, compactUrl } from "@/utils/format";
 import { isRunTerminal } from "./runStatus";
@@ -41,6 +42,22 @@ const TERMINAL = new Set(["completed", "done", "failed", "killed", "crashed", "c
 
 // 运行中判定（分段过滤用）；轮询节奏由 useScans 的 SWR refreshInterval 管理。
 const isRun = (s: ScanSummary) => s.is_running || s.status === "running";
+
+// 可取消判定（2026-09-15 批量取消 + 单行补缺共用）：running + queued（排队任务
+// 此前单行无取消入口——后端本就支持，handle.cancel 排队中 workflow + gate janitor
+// 回收 waiting 槽）。终态/interrupted 不可取消（标 cancelled 无意义，两者皆可续跑）。
+const cancelableRow = (s: ScanSummary) => isRun(s) || s.status === "queued";
+
+// 可续跑判定（单行按钮与批量预筛同口径）：非 running ∧ 非 queued（排队不是断点）
+// ∧ 非 completed/done ∧ 白盒行（含组合；correlation/mr 无入口）。
+const canResumeRow = (s: ScanSummary) => !isRun(s)
+  && s.status !== "queued"
+  && !["completed", "done"].includes(s.status)
+  && s.scan_type === "whitebox";
+
+// 可删除判定（2026-09-15 批量删除）：七个终态（TERMINAL 不含 interrupted，补上）；
+// running/queued 拦（queued 真删会留孤儿 workflow——服务端终态门同口径兜底）。
+const deletableRow = (s: ScanSummary) => TERMINAL.has(s.status) || s.status === "interrupted";
 
 /** 状态分段（filter 分段控件口径）：running/completed/failed + other（interrupted 等，仅「全部」可见）。 */
 type Seg = "running" | "completed" | "failed";
@@ -131,6 +148,21 @@ export function ScanList() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 批量取消/续跑（2026-09-15）：勾选态照 ReposTab（Set 独立于分段过滤，切换
+  // 分段不清空；表头全选只作用于当前过滤视图）。预筛口径与单行按钮同源
+  // （cancelableRow / canResumeRow），不可操作项不拦截勾选——由弹窗/横幅 skipped 明细呈现。
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pendingBulk, setPendingBulk] = useState<"cancel" | "resume" | "delete" | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  // 批量续跑确认弹窗数据（用户选「汇总断点弹窗」）：逐项并发拉 resume-preview；
+  // 拉取失败的项带 error 也进列表（可见性优于静默丢弃）。
+  const [bulkPreviews, setBulkPreviews] = useState<
+    { scan: ScanSummary; preview?: ResumePreview; error?: string }[] | null
+  >(null);
+  // 批量操作结果横幅：本地 setState 喂渲染（与批量提交的 location.state 横幅并存互斥场景）。
+  const [bulkActionResult, setBulkActionResult] = useState<ScanBatchResponse | null>(null);
+  const [bulkBannerClosed, setBulkBannerClosed] = useState(false);
+
   // 关键词 + 类型先行过滤（分段计数以此为准，计数不随当前分段变化）；
   // 分段口径见 segOf：other（interrupted 等）只在「全部」出现。
   // 列表量小（单 ws 扫描数）直算即可，避免在 err 早退后引入条件 hook。
@@ -159,6 +191,96 @@ export function ScanList() {
   if (err) return <ErrorState message={t("workspaceDetail.scans.loadError", { error: err })} />;
 
   const filtered = filters.seg === "all" ? kwTyped : kwTyped.filter((s) => segOf(s) === filters.seg);
+
+  // ── 批量取消/续跑（2026-09-15）────────────────────────────────────────────
+  // 勾选集跨过滤视图：用全量 scans 解析选中行（关键词/分段过滤不连带丢选中）。
+  const selectedRows = scans.filter((s) => selected.has(s.scan_id));
+  const cancelableSel = selectedRows.filter(cancelableRow);
+  const resumableSel = selectedRows.filter(canResumeRow);
+  const deletableSel = selectedRows.filter(deletableRow);
+
+  function toggleSelect(scanId: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(scanId)) next.delete(scanId);
+      else next.add(scanId);
+      return next;
+    });
+  }
+
+  // 表头三态全选（作用于当前过滤视图，照 ReposTab）：全选 / 部分(indeterminate) / 无。
+  const allFilteredSelected = filtered.length > 0 && filtered.every((s) => selected.has(s.scan_id));
+  const someFilteredSelected = filtered.some((s) => selected.has(s.scan_id));
+  const selectAllChecked = allFilteredSelected ? true : someFilteredSelected ? "indeterminate" : false;
+  function toggleSelectAll() {
+    setSelected((prev) => {
+      const allSel = filtered.length > 0 && filtered.every((s) => prev.has(s.scan_id));
+      const next = new Set(prev);
+      filtered.forEach((s) => (allSel ? next.delete(s.scan_id) : next.add(s.scan_id)));
+      return next;
+    });
+  }
+
+  // 批量续跑：先并发拉全部可续跑项的断点 preview（只读）→ 汇总弹窗逐项呈现
+  // （resumable 显已完成 agents 摘要；false 带 reason——含 cancelled 收尾 transient
+  // 窗口的「等待 worker 退出」文案；拉取失败带 error）。确认后只对 resumable 项发请求。
+  async function onBulkResume() {
+    setBulkBusy(true);
+    try {
+      const entries = await Promise.all(resumableSel.map(async (scan) => {
+        try {
+          return { scan, preview: await getResumePreview(workspace!, scan.scan_id) };
+        } catch (e) {
+          return { scan, error: msg(e) };
+        }
+      }));
+      setBulkPreviews(entries);
+      setPendingBulk("resume");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  // 批量确认执行：取消只发 cancelableSel、删除只发 deletableSel（服务端状态门再
+  // 兜底一次）；续跑只发 preview resumable 项。零成功 422 的 body 与 202 同为顶层
+  // ScanBatchResponse（无 detail 包裹）——catch 里按形状识别，同样落结果横幅。
+  async function doBulkAction() {
+    if (!pendingBulk || !workspace) return;
+    const ids = pendingBulk === "cancel"
+      ? cancelableSel.map((s) => s.scan_id)
+      : pendingBulk === "delete"
+        ? deletableSel.map((s) => s.scan_id)
+        : (bulkPreviews ?? []).filter((p) => p.preview?.resumable).map((p) => p.scan.scan_id);
+    try {
+      setBulkBusy(true);
+      const res = pendingBulk === "cancel"
+        ? await batchCancelScans(workspace, ids)
+        : pendingBulk === "delete"
+          ? await batchDeleteScans(workspace, ids)
+          : await batchResumeScans(workspace, ids);
+      finishBulkAction(res);
+    } catch (e) {
+      if (e instanceof ApiError && e.body && typeof e.body === "object" && "results" in e.body) {
+        finishBulkAction(e.body as ScanBatchResponse);
+      } else {
+        toast.error(t("workspaceDetail.scans.bulk.actionFailed", { error: msg(e) }));
+      }
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  function finishBulkAction(res: ScanBatchResponse) {
+    setBulkActionResult(res);
+    setBulkBannerClosed(false);
+    setPendingBulk(null);
+    setBulkPreviews(null);
+    setSelected(new Set());
+    reload();
+  }
+
+  // 续跑弹窗确认按钮门：无可恢复项（全部 resumable=false——含全 transient）禁用。
+  const resumablePreviewCount = (bulkPreviews ?? []).filter((p) => p.preview?.resumable).length;
 
   // 行操作后：刷新自身列表 + 联动 Hero 聚合（同 key mutate 经 SWR 去重为一次请求）。 */
   const reload = () => { refreshScans(); wsCtx?.refresh?.(); };
@@ -252,6 +374,64 @@ export function ScanList() {
         </div>
       )}
 
+      {/* 批量操作条（2026-09-15 批量取消/续跑，照 ReposTab）：选中 >0 常驻；按钮
+          可用性按预筛计数（选中集含可取消/可续跑项才亮），点击进各自确认弹窗。 */}
+      {selected.size > 0 && (
+        <div data-testid="scan-bulk-bar"
+          className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+          <span className="text-sm text-muted-foreground">
+            {t("workspaceDetail.scans.bulk.selected", { count: selected.size })}
+          </span>
+          <Button size="sm" variant="destructive" disabled={cancelableSel.length === 0}
+            onClick={() => setPendingBulk("cancel")}>
+            <Ban className="size-3.5" />
+            {t("workspaceDetail.scans.bulk.cancelSelected", { count: cancelableSel.length })}
+          </Button>
+          <Button size="sm" variant="ghost" disabled={resumableSel.length === 0 || bulkBusy}
+            onClick={() => void onBulkResume()}>
+            <Play className="size-3.5" />
+            {t("workspaceDetail.scans.bulk.resumeSelected", { count: resumableSel.length })}
+          </Button>
+          <Button size="sm" variant="ghost" className="text-destructive hover:bg-destructive/10"
+            disabled={deletableSel.length === 0}
+            onClick={() => setPendingBulk("delete")}>
+            <Trash2 className="size-3.5" />
+            {t("workspaceDetail.scans.bulk.deleteSelected", { count: deletableSel.length })}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+            {t("workspaceDetail.scans.bulk.clear")}
+          </Button>
+        </div>
+      )}
+
+      {/* 批量操作结果横幅（2026-09-15）：成功/跳过/失败计数 + 非 ok 明细（任务：原因），
+          可关闭。skipped=服务端状态门前置筛掉（未触副作用，非错误）。 */}
+      {bulkActionResult && !bulkBannerClosed && (
+        <div data-testid="scan-bulk-result-banner"
+          className="flex items-start justify-between gap-3 rounded-lg border border-border bg-card px-4 py-3">
+          <div className="min-w-0 text-xs">
+            <span className="font-medium">{t("workspaceDetail.scans.bulk.resultTitle",
+              { ok: bulkActionResult.submitted,
+                skip: bulkActionResult.skipped ?? 0,
+                fail: bulkActionResult.failed })}</span>
+            {bulkActionResult.results.some((r) => !r.ok) && (
+              <ul className="mt-1.5 space-y-0.5">
+                {bulkActionResult.results.filter((r) => !r.ok).map((r) => (
+                  <li key={r.scan_id}
+                    className={`font-mono text-[11px] ${r.skipped ? "text-muted-foreground" : "text-destructive"}`}>
+                    {r.scan_id}：{r.error}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <button type="button" data-testid="scan-bulk-banner-close"
+            aria-label={t("workspaceDetail.scans.bulk.bannerClose")}
+            className="shrink-0 text-muted-foreground hover:text-foreground"
+            onClick={() => setBulkBannerClosed(true)}>✕</button>
+        </div>
+      )}
+
       {/* 批量提交结果横幅（2026-09-11 批量白盒）：成功/失败计数 + 失败明细（repo：原因），
           可关闭。空工作区/加载中也显示——批量提交后跳转落地即见汇总，不依赖列表数据。 */}
       {batchResult && !bannerClosed && (
@@ -307,14 +487,21 @@ export function ScanList() {
         <Card className="overflow-hidden p-0">
           <Table>
             <colgroup>
-              <col style={{ width: 34 }} /><col style={{ width: 112 }} /><col />
+              <col style={{ width: 52 }} /><col style={{ width: 112 }} /><col />
               <col style={{ width: 190 }} /><col style={{ width: 104 }} /><col style={{ width: 172 }} />
               <col style={{ width: 72 }} /><col style={{ width: 92 }} /><col style={{ width: 132 }} />
               <col style={{ width: 196 }} />
             </colgroup>
+
             <TableHeader>
               <TableRow>
-                <TableHead className="w-9 pl-4" />
+                <TableHead className="w-[52px] pl-4">
+                  <Checkbox
+                    aria-label={t("workspaceDetail.scans.bulk.selectAll")}
+                    checked={selectAllChecked}
+                    onCheckedChange={() => toggleSelectAll()}
+                  />
+                </TableHead>
                 <TableHead className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-wider">{t("workspaceDetail.scans.table.status")}</TableHead>
                 <TableHead className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-wider">{t("workspaceDetail.scans.table.scan")}</TableHead>
                 <TableHead className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-wider">{t("workspaceDetail.scans.table.repo")}</TableHead>
@@ -328,12 +515,92 @@ export function ScanList() {
             </TableHeader>
             <TableBody>
               {filtered.map((s) => (
-                <ScanRow key={s.scan_id} ws={workspace!} scan={s} scansById={scansById} onChanged={reload} />
+                <ScanRow key={s.scan_id} ws={workspace!} scan={s} scansById={scansById} onChanged={reload}
+                  checked={selected.has(s.scan_id)} onToggleSelect={() => toggleSelect(s.scan_id)} />
               ))}
             </TableBody>
           </Table>
         </Card>
       )}
+
+      {/* 批量取消/续跑/删除确认 Dialog（2026-09-15）：取消/删除=列将操作明细
+          （label · 状态）；续跑=汇总断点弹窗——逐项 preview（resumable 显已完成
+          agents 摘要；false 标原因——含 cancelled 收尾窗口「等待 worker 退出」；
+          拉取失败标 error）。确认后只对可操作项发请求，不可操作项进结果横幅。 */}
+      <Dialog open={!!pendingBulk}
+        onOpenChange={(o) => { if (!o) { setPendingBulk(null); setBulkPreviews(null); } }}>
+        <DialogContent className="max-h-[70vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {pendingBulk === "cancel"
+                ? t("workspaceDetail.scans.bulk.cancelConfirmTitle", { count: cancelableSel.length })
+                : pendingBulk === "delete"
+                  ? t("workspaceDetail.scans.bulk.deleteConfirmTitle", { count: deletableSel.length })
+                  : t("workspaceDetail.scans.bulk.resumeConfirmTitle", { count: resumableSel.length })}
+            </DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-1.5">
+                {pendingBulk === "cancel" || pendingBulk === "delete" ? (
+                  <>
+                    <p>{pendingBulk === "cancel"
+                      ? t("workspaceDetail.scans.bulk.cancelConfirmDesc",
+                        { count: cancelableSel.length, total: selected.size })
+                      : t("workspaceDetail.scans.bulk.deleteConfirmDesc",
+                        { count: deletableSel.length, total: selected.size })}</p>
+                    <ul className="space-y-0.5">
+                      {(pendingBulk === "cancel" ? cancelableSel : deletableSel).map((s) => (
+                        <li key={s.scan_id} className="font-mono text-[11px]">
+                          {s.workflow_id ?? s.scan_id}<span className="text-muted-foreground"> · {s.status}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : (
+                  <>
+                    <p>{t("workspaceDetail.scans.bulk.resumeConfirmDesc",
+                      { count: resumableSel.length, total: selected.size })}</p>
+                    <ul className="space-y-1">
+                      {(bulkPreviews ?? []).map(({ scan, preview, error }) => (
+                        <li key={scan.scan_id} className="text-xs">
+                          <span className="font-mono text-[11px]">{scan.workflow_id ?? scan.scan_id}</span>
+                          {preview?.resumable ? (
+                            <span className="text-muted-foreground">
+                              {preview.completed_agents.length > 0
+                                ? ` ${t("workspaceDetail.scans.bulk.resumeSkipSummary",
+                                  { count: preview.completed_agents.length })}`
+                                : ` ${t("workspaceDetail.scans.bulk.resumeNoSkip")}`}
+                            </span>
+                          ) : (
+                            <span className="text-destructive"> {error ?? preview?.reason ?? ""}</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => { setPendingBulk(null); setBulkPreviews(null); }}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              variant={pendingBulk === "cancel" || pendingBulk === "delete" ? "destructive" : "default"}
+              disabled={bulkBusy
+                || (pendingBulk === "cancel" || pendingBulk === "delete"
+                  ? (pendingBulk === "cancel" ? cancelableSel.length : deletableSel.length) === 0
+                  : resumablePreviewCount === 0)}
+              onClick={() => void doBulkAction()}>
+              {pendingBulk === "cancel"
+                ? t("workspaceDetail.scans.bulk.cancelConfirmGo")
+                : pendingBulk === "delete"
+                  ? t("workspaceDetail.scans.bulk.deleteConfirmGo")
+                  : t("workspaceDetail.scans.bulk.resumeConfirmGo", { count: resumablePreviewCount })}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -341,8 +608,9 @@ export function ScanList() {
 /** 表格主行 + 嵌套子行（可展开，默认收起——列表扫读优先，明细按需展开）：
  *  组合任务 = 黑盒 run 子行（NestedBlackboxRuns）；correlation 主行 = 子仓白盒 +
  *  黑盒验证 run + 复用引用子行（NestedCorrChildren + NestedBlackboxRuns，D4）。 */
-function ScanRow({ ws, scan, scansById, onChanged }: {
+function ScanRow({ ws, scan, scansById, onChanged, checked, onToggleSelect }: {
   ws: string; scan: ScanSummary; scansById: Map<string, ScanSummary>; onChanged: () => void;
+  checked: boolean; onToggleSelect: () => void;
 }) {
   const { t } = useTranslation();
   const nav = useNavigate();
@@ -368,13 +636,11 @@ function ScanRow({ ws, scan, scansById, onChanged }: {
 
   const isRunning = isRun(scan);
   const isTerminal = TERMINAL.has(scan.status);
-  // 续跑入口（§4.6）：非 running ∧ 非 completed/done ∧ 白盒行（含组合；correlation
-  // 走重新提交、无黑盒独立行）——failed/cancelled/killed/crashed/interrupted 全放行。
-  // queued 排除（2026-09-15）：排队等槽不是断点，给「恢复」入口是误导（无断可续）。
-  const canResume = !isRunning
-    && scan.status !== "queued"
-    && !["completed", "done"].includes(scan.status)
-    && scan.scan_type === "whitebox";
+  // 续跑入口（§4.6）：模块级 canResumeRow（与批量预筛同口径）——failed/cancelled/
+  // killed/crashed/interrupted 全放行；queued 排除（排队等槽不是断点，2026-09-15）。
+  const canResume = canResumeRow(scan);
+  // 可取消（2026-09-15）：running + queued（补缺——排队任务此前无取消入口）。
+  const canCancel = cancelableRow(scan);
   const scanPath = `/p/${ws}/scans/${scan.scan_id}`;
   // 任务名展示用 workflow_id（{ws}-{scan_id}[-resume-N]），路由/API 仍用 scan_id 定位目录。
   const label = scan.workflow_id ?? scan.scan_id;
@@ -525,22 +791,32 @@ function ScanRow({ ws, scan, scansById, onChanged }: {
         onClick={() => nav(`${scanPath}/${defaultTab}`)}
         className={`cursor-pointer ${open && expandable ? "border-b-0" : ""}`}
       >
-        {/* 展开柄：有子行可展开时显（组合任务带 bb_runs / correlation 主行带
+        {/* 勾选框 + 展开柄（2026-09-15 批量取消/续跑）：checkbox 常驻可勾（不按状态
+            禁用——预筛在批量操作条按口径计数，用户可自由勾选后看横幅 skipped 明细）。
+            展开柄：有子行可展开时显（组合任务带 bb_runs / correlation 主行带
             corr_children；纯白盒/黑盒无子行不占交互）。aria 按行类型选标签。 */}
-        <TableCell className="w-9 pl-4">
-          {expandable && (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
-              aria-expanded={open}
-              aria-label={t(isCorr
-                ? (open ? "workspaceDetail.scans.corr.toggleCollapse" : "workspaceDetail.scans.corr.toggleExpand")
-                : (open ? "workspaceDetail.scans.runs.toggleCollapse" : "workspaceDetail.scans.runs.toggleExpand"))}
-              className="flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <ChevronRight className={`size-3.5 transition-transform ${open ? "rotate-90" : ""}`} />
-            </button>
-          )}
+        <TableCell className="w-[52px] pl-4">
+          <div className="flex items-center gap-0.5">
+            <Checkbox
+              aria-label={t("workspaceDetail.scans.bulk.selectScan", { scanId: label })}
+              checked={checked}
+              onCheckedChange={() => onToggleSelect()}
+              onClick={(e) => e.stopPropagation()}
+            />
+            {expandable && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+                aria-expanded={open}
+                aria-label={t(isCorr
+                  ? (open ? "workspaceDetail.scans.corr.toggleCollapse" : "workspaceDetail.scans.corr.toggleExpand")
+                  : (open ? "workspaceDetail.scans.runs.toggleCollapse" : "workspaceDetail.scans.runs.toggleExpand"))}
+                className="flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <ChevronRight className={`size-3.5 transition-transform ${open ? "rotate-90" : ""}`} />
+              </button>
+            )}
+          </div>
         </TableCell>
         {/* 状态徽标：所有行同构（类型归属在类型列徽标，2026-09-10 起状态列不再
             追加 🔗——emoji 基线漂移且撑爆 112px 列宽致换行）。排队行不再标 #N 位次
@@ -664,7 +940,7 @@ function ScanRow({ ws, scan, scansById, onChanged }: {
                 <Play className="size-3.5" /> {t("workspaceDetail.scans.resume")}
               </Button>
             )}
-            {isRunning && (
+            {canCancel && (
               <Button size="sm" variant="ghost" onClick={() => setPending("cancel")} disabled={busy}>
                 <Ban className="size-3.5" /> {t("common.cancel")}
               </Button>

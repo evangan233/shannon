@@ -1051,6 +1051,29 @@
       "fakeCompleted": {
         "title": "扫描标记为已完成，但没有任何 agent 产出",
         "hint": "白盒从未真正启动（{{done}}/{{total}} 个 agent 完成）——扫描可能在中途被异常收口成「已完成」，报告为空。建议重新提交扫描，或切到日志/事件页排查。"
+      },
+      "bulk": {
+        "selected": "已选 {{count}} 项",
+        "selectAll": "全选当前列表",
+        "selectScan": "选择任务 {{scanId}}",
+        "cancelSelected": "批量取消（{{count}}）",
+        "resumeSelected": "批量续跑（{{count}}）",
+        "clear": "清空选择",
+        "cancelConfirmTitle": "批量取消 {{count}} 个任务",
+        "cancelConfirmDesc": "将取消以下 {{count}} 个任务（共勾选 {{total}} 项，其余已结束无需取消）：",
+        "cancelConfirmGo": "确认取消",
+        "resumeConfirmTitle": "批量续跑 {{count}} 个任务",
+        "resumeConfirmDesc": "以下为各任务断点摘要（共勾选 {{total}} 项，标红项不可恢复将被跳过）：",
+        "resumeConfirmGo": "恢复 {{count}} 个任务",
+        "resumeSkipSummary": "可跳过 {{count}} 个已完成 agent",
+        "resumeNoSkip": "无已完成的 agent，从头续跑",
+        "resultTitle": "批量操作完成：成功 {{ok}} · 跳过 {{skip}} · 失败 {{fail}}",
+        "bannerClose": "关闭批量操作结果",
+        "actionFailed": "批量操作失败：{{error}}",
+        "deleteSelected": "批量删除（{{count}}）",
+        "deleteConfirmTitle": "批量删除 {{count}} 个任务",
+        "deleteConfirmDesc": "将永久删除以下 {{count}} 个任务的全部产物（共勾选 {{total}} 项，运行中/排队中不可删）：",
+        "deleteConfirmGo": "确认删除"
       }
     },
     "errorBoundary": {

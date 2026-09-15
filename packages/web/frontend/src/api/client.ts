@@ -107,6 +107,25 @@ export async function cancelActiveScan(ws: string): Promise<CancelResult> {
   return cancelScan(ws, active.scan_id);
 }
 
+/** 批量取消（2026-09-15）：服务端状态门只放行 running/queued（终态记 skipped 不触
+ *  副作用——防「勾选到确认间任务跑完」被裸 cancel 覆写终态）。零成功（全跳过/全失败）
+ *  422 的 body 同为顶层 ScanBatchResponse（无 detail 包裹），调用方 catch 里按形状识别。 */
+export const batchCancelScans = (ws: string, scanIds: string[]) =>
+  apiPost<import("./types").ScanBatchResponse>(
+    `/workspaces/${encWs(ws)}/scans/batch-cancel`, { scan_ids: scanIds });
+
+/** 批量续跑（2026-09-15）：逐项过 resume 自带状态门，失败/cancelled 收尾 transient
+ *  窗口逐项回显。全失败 422 body 同形。 */
+export const batchResumeScans = (ws: string, scanIds: string[]) =>
+  apiPost<import("./types").ScanBatchResponse>(
+    `/workspaces/${encWs(ws)}/scans/batch-resume`, { scan_ids: scanIds });
+
+/** 批量删除（2026-09-15）：服务端终态门（running/queued 记 skipped——含单点 delete
+ *  拦不住的 queued 孤儿 workflow 风险）。零成功 422 body 同形。 */
+export const batchDeleteScans = (ws: string, scanIds: string[]) =>
+  apiPost<import("./types").ScanBatchResponse>(
+    `/workspaces/${encWs(ws)}/scans/batch-delete`, { scan_ids: scanIds });
+
 /** 仓库名（可为 group/repo）按段 encode：保留 `/` 作路径分隔，每段安全转义。
  *  /workspaces/<ws>/repos/frontend/foo 直接命中后端 {name:path}，含空格等特殊字符的段也安全。 */
 const encRepo = (name: string) => name.split("/").map(encodeURIComponent).join("/");

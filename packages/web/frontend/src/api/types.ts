@@ -1125,6 +1125,25 @@ export interface BatchScanResponse {
   results: BatchScanResultItem[];
 }
 
+/** 批量取消/续跑单项结果（2026-09-15）：skipped=true 为服务端状态门前置筛掉
+ *  （未触副作用），与「尝试了但失败」区分——横幅分别计数。 */
+export interface ScanBatchResultItem {
+  scan_id: string;
+  ok: boolean;
+  skipped?: boolean;
+  error?: string;
+}
+
+/** 批量取消/续跑汇总：202（部分/全部成功）与零成功 422（全跳过/全失败）的 body
+ *  同为此顶层形状（无 detail 包裹，对齐 BatchScanResponse 契约）。 */
+export interface ScanBatchResponse {
+  workspace: string;
+  submitted: number;
+  skipped?: number;
+  failed: number;
+  results: ScanBatchResultItem[];
+}
+
 export interface FsEntry {
   name: string;
   type: "dir" | "file";

@@ -898,3 +898,182 @@ describe("ScanList 批量提交结果横幅（批量白盒）", () => {
       expect(screen.queryByTestId("batch-result-banner")).not.toBeInTheDocument());
   });
 });
+
+// === 批量取消/续跑（2026-09-15）：勾选（照 ReposTab 三态全选）→ 批量操作条（预筛 ===
+// === 计数）→ 确认弹窗（取消=明细 / 续跑=汇总断点）→ POST batch 端点 → 结果横幅 ===
+describe("ScanList 批量取消/续跑", () => {
+  // queued fixture：排队任务（gate waiting）——2026-09-15 起可取消（单行+批量）。
+  const queued = {
+    scan_id: "sq-1", scan_type: "whitebox", status: "queued", created_at: 1500,
+    completed_at: null, vuln_count: 0, total_cost_usd: 0, cost_currency: "USD",
+    is_running: false, workflow_id: "ws-sq-1",
+  } as const;
+
+  it("勾选显批量操作条；预筛计数：勾 running+queued+completed -> 取消(2) 亮、续跑(0) 禁用；清空消失", async () => {
+    server.use(http.get("/api/workspaces/:ws/scans",
+      () => HttpResponse.json([running, queued, wbDone])));
+    renderList();
+    await waitFor(() => expect(screen.getByText("ws-s5")).toBeInTheDocument());
+    // 未勾选：无批量条
+    expect(screen.queryByTestId("scan-bulk-bar")).not.toBeInTheDocument();
+    // 勾三行（aria-label 用展示名：workflow_id 优先，无则 scan_id）
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择任务 s1" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择任务 ws-sq-1" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择任务 ws-s5" }));
+    expect(await screen.findByTestId("scan-bulk-bar")).toBeInTheDocument();
+    expect(screen.getByText("已选 3 项")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /批量取消（2）/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /批量续跑（0）/ })).toBeDisabled();
+    // 清空 -> 条消失 + 勾选复位
+    fireEvent.click(screen.getByRole("button", { name: "清空选择" }));
+    await waitFor(() =>
+      expect(screen.queryByTestId("scan-bulk-bar")).not.toBeInTheDocument());
+    expect(screen.getByRole("checkbox", { name: "选择任务 s1" })).not.toBeChecked();
+  });
+
+  it("表头全选当前视图三态：全选 -> 已选全部；再点 -> 清空", async () => {
+    server.use(http.get("/api/workspaces/:ws/scans",
+      () => HttpResponse.json([running, wbDone])));
+    renderList();
+    await waitFor(() => expect(screen.getByText("ws-s5")).toBeInTheDocument());
+    const all = screen.getByRole("checkbox", { name: "全选当前列表" });
+    expect(all).not.toBeChecked();
+    fireEvent.click(all);
+    expect(screen.getByText("已选 2 项")).toBeInTheDocument();
+    fireEvent.click(all);
+    await waitFor(() =>
+      expect(screen.queryByTestId("scan-bulk-bar")).not.toBeInTheDocument());
+  });
+
+  it("queued 行显取消按钮（2026-09-15 补缺：排队任务此前无取消入口）", async () => {
+    server.use(http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([queued])));
+    renderList();
+    await waitFor(() => expect(screen.getByText("ws-sq-1")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "取消" })).toBeInTheDocument();
+    // queued 不是断点：不显续跑
+    expect(screen.queryByRole("button", { name: "续跑" })).not.toBeInTheDocument();
+  });
+
+  it("批量取消流：确认弹窗列可取消明细 -> POST batch-cancel 只含 running/queued -> 结果横幅", async () => {
+    const batchBodies: unknown[] = [];
+    server.use(
+      http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([running, queued, wbDone])),
+      http.post("/api/workspaces/:ws/scans/batch-cancel", async ({ request }) => {
+        batchBodies.push(await request.json());
+        return HttpResponse.json({ workspace: "ws", submitted: 2, skipped: 0, failed: 0,
+          results: [{ scan_id: "s1", ok: true }, { scan_id: "sq-1", ok: true }] });
+      }),
+    );
+    renderList();
+    await waitFor(() => expect(screen.getByText("ws-s5")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择任务 s1" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择任务 ws-sq-1" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择任务 ws-s5" }));
+    fireEvent.click(screen.getByRole("button", { name: /批量取消（2）/ }));
+    // 确认弹窗：标题计数 + 明细只列可取消两项（completed 不进）
+    expect(await screen.findByText("批量取消 2 个任务")).toBeInTheDocument();
+    expect(screen.getByText(/将取消以下 2 个任务/)).toBeInTheDocument();
+    expect(screen.getAllByText(/· (running|queued)/)).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "确认取消" }));
+    // 请求体只含 running/queued（completed 被前端预筛剔除；服务端状态门再兜底）
+    await waitFor(() => expect(batchBodies).toEqual([{ scan_ids: ["s1", "sq-1"] }]));
+    // 结果横幅 + 勾选清空
+    expect(await screen.findByTestId("scan-bulk-result-banner")).toBeInTheDocument();
+    expect(screen.getByText(/成功 2/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByTestId("scan-bulk-bar")).not.toBeInTheDocument());
+  });
+
+  it("批量续跑流：勾 interrupted+completed -> 续跑(1) -> GET preview 汇总断点弹窗 -> 确认 -> POST batch-resume 只含可续项", async () => {
+    const resumeBodies: unknown[] = [];
+    const previewIds: string[] = [];
+    server.use(
+      http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([interrupted, wbDone])),
+      http.get("/api/workspaces/:ws/scans/:scanId/resume-preview", ({ params }) => {
+        previewIds.push(params.scanId as string);
+        return HttpResponse.json(previewOk);
+      }),
+      http.post("/api/workspaces/:ws/scans/batch-resume", async ({ request }) => {
+        resumeBodies.push(await request.json());
+        return HttpResponse.json({ workspace: "ws", submitted: 1, skipped: 0, failed: 0,
+          results: [{ scan_id: "s3", ok: true }] });
+      }),
+    );
+    renderList();
+    await waitFor(() => expect(screen.getByText("ws-s5")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择任务 s3" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择任务 ws-s5" }));
+    // 续跑按钮计数只含可续跑项（completed 不算）
+    fireEvent.click(screen.getByRole("button", { name: /批量续跑（1）/ }));
+    // 汇总断点弹窗：只拉了可续跑项的 preview（completed 不拉）+ 断点摘要可见
+    await waitFor(() => expect(previewIds).toEqual(["s3"]));
+    expect(await screen.findByText("批量续跑 1 个任务")).toBeInTheDocument();
+    expect(screen.getByText(/可跳过 2 个已完成 agent/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "恢复 1 个任务" }));
+    await waitFor(() => expect(resumeBodies).toEqual([{ scan_ids: ["s3"] }]));
+    expect(await screen.findByTestId("scan-bulk-result-banner")).toBeInTheDocument();
+  });
+
+  it("续跑全不可恢复（resumable=false）：确认按钮禁用、不 POST", async () => {
+    const resumeBodies: unknown[] = [];
+    server.use(
+      http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([failedWb])),
+      http.get("/api/workspaces/:ws/scans/:scanId/resume-preview", () =>
+        HttpResponse.json({ ...previewOk, resumable: false,
+          reason: "resume 中止：recon 产出物文件缺失" })),
+      http.post("/api/workspaces/:ws/scans/batch-resume", async ({ request }) => {
+        resumeBodies.push(await request.json());
+        return HttpResponse.json({});
+      }),
+    );
+    renderList();
+    await waitFor(() => expect(screen.getByText("ws-s9")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择任务 ws-s9" }));
+    fireEvent.click(screen.getByRole("button", { name: /批量续跑（1）/ }));
+    // 弹窗标红原因 + 确认按钮禁用（无可恢复项）
+    expect(await screen.findByText(/产出物文件缺失/)).toBeInTheDocument();
+    const confirm = screen.getByRole("button", { name: /恢复 0 个任务/ });
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(resumeBodies).toEqual([]);
+  });
+
+  it("批量删除流：预筛只计终态 -> 确认弹窗列明细 -> POST batch-delete 只含终态 -> 结果横幅", async () => {
+    const deleteBodies: unknown[] = [];
+    server.use(
+      http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([running, wbDone, cancelled])),
+      http.post("/api/workspaces/:ws/scans/batch-delete", async ({ request }) => {
+        deleteBodies.push(await request.json());
+        return HttpResponse.json({ workspace: "ws", submitted: 2, skipped: 0, failed: 0,
+          results: [{ scan_id: "s5", ok: true }, { scan_id: "s4", ok: true }] });
+      }),
+    );
+    renderList();
+    await waitFor(() => expect(screen.getByText("ws-s5")).toBeInTheDocument());
+    // 勾 running + 两个终态：删除计数只含终态（2）
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择任务 s1" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择任务 ws-s5" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择任务 s4" }));
+    fireEvent.click(screen.getByRole("button", { name: /批量删除（2）/ }));
+    // 确认弹窗：destructive 明细只列终态两项（running 不进）
+    expect(await screen.findByText("批量删除 2 个任务")).toBeInTheDocument();
+    expect(screen.getByText(/将永久删除以下 2 个任务/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(deleteBodies).toEqual([{ scan_ids: ["s5", "s4"] }]));
+    expect(await screen.findByTestId("scan-bulk-result-banner")).toBeInTheDocument();
+    // 勾选清空
+    await waitFor(() =>
+      expect(screen.queryByTestId("scan-bulk-bar")).not.toBeInTheDocument());
+  });
+
+  it("全勾 running/queued：删除按钮禁用（无可删项）", async () => {
+    server.use(http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([running, queued])));
+    renderList();
+    await waitFor(() => expect(screen.getByText("ws-sq-1")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("checkbox", { name: "全选当前列表" }));
+    expect(screen.getByText("已选 2 项")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /批量删除（0）/ })).toBeDisabled();
+    // 取消按钮反而可用（两行皆可取消）
+    expect(screen.getByRole("button", { name: /批量取消（2）/ })).toBeEnabled();
+  });
+});

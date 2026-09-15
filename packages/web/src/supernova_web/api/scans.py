@@ -12,13 +12,14 @@ from __future__ import annotations
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pathlib import Path, PurePosixPath
 
 from supernova_web.auth.dependencies import current_user, workspace_member
 from supernova_web.components.workspace_provisioner import is_global_admin
 from supernova_web.auth.models import User
 from supernova_web.components.deliverables_reader import DeliverablesReader
+from supernova_web.models import ScanBatchAccepted, ScanBatchResultItem, ScanIdsBatchRequest
 
 router = APIRouter(prefix="/api/workspaces", tags=["scans"])
 
@@ -754,6 +755,124 @@ async def cancel_scan(ws: str, scan_id: str, request: Request, _: User = Depends
     if result is None:
         raise HTTPException(404, "scan not found")
     return result
+
+
+@router.post("/{ws}/scans/batch-cancel", response_model=ScanBatchAccepted, status_code=202)
+async def batch_cancel_scans(ws: str, req: ScanIdsBatchRequest, request: Request,
+                             _: User = Depends(workspace_member)):
+    """批量取消扫描任务（2026-09-15 批量取消/续跑）。
+
+    端点层状态门（running/queued 才调 sm.cancel）+ 逐项循环调既有单点——scan_manager
+    其余零改动。状态门是硬要求：cancel 自身无状态门，对 completed 等终态裸调也会
+    _mark_cancelled 覆写成 cancelled（单行按钮靠 UI 条件挡，批量必须服务端挡
+    「勾选到确认之间任务自己跑完」的漂移）；被拦项记 skipped 未触副作用。
+    单项异常只计入该行 results 不阻断整批。有任何成功 → 202；零成功（含全跳过）→ 422
+    （body 顶层即 ScanBatchAccepted，对齐 batch-scan 先例）。
+    """
+    sm = request.app.state.scan_manager
+    results: list[ScanBatchResultItem] = []
+    for scan_id in req.scan_ids:
+        status = sm.scan_status(ws, scan_id)
+        if status is None:
+            results.append(ScanBatchResultItem(scan_id=scan_id, ok=False, error="scan 不存在"))
+            continue
+        if status not in ("running", "queued"):
+            results.append(ScanBatchResultItem(
+                scan_id=scan_id, ok=False, skipped=True,
+                error=f"状态为 {status}，已结束，无需取消"))
+            continue
+        try:
+            await sm.cancel(ws, scan_id)
+            results.append(ScanBatchResultItem(scan_id=scan_id, ok=True))
+        except Exception as e:  # noqa: BLE001 - 单项失败不阻断整批（对齐 batch-scan）
+            results.append(ScanBatchResultItem(scan_id=scan_id, ok=False, error=str(e)))
+    submitted = sum(1 for r in results if r.ok)
+    skipped = sum(1 for r in results if r.skipped)
+    if submitted == 0:
+        return JSONResponse(status_code=422, content=ScanBatchAccepted(
+            workspace=ws, submitted=0, skipped=skipped,
+            failed=len(results) - skipped, results=results).model_dump())
+    return ScanBatchAccepted(workspace=ws, submitted=submitted, skipped=skipped,
+                             failed=len(results) - submitted - skipped, results=results)
+
+
+@router.post("/{ws}/scans/batch-resume", response_model=ScanBatchAccepted, status_code=202)
+async def batch_resume_scans(ws: str, req: ScanIdsBatchRequest, request: Request,
+                             _: User = Depends(workspace_member)):
+    """批量续跑扫描任务（2026-09-15 批量取消/续跑）。
+
+    逐项循环调既有单点 sm.resume——resume 自带状态门（_RESUMABLE_STATUSES + 心跳
+    判活），ValueError/TemporalUnavailable 逐项转 error 不阻断整批（cancelled 收尾
+    transient 窗口的 422 同路回显）。有任何成功 → 202；全失败 → 422。
+    """
+    from supernova_web.components.scan_manager import TemporalUnavailable
+    sm = request.app.state.scan_manager
+    results: list[ScanBatchResultItem] = []
+    for scan_id in req.scan_ids:
+        try:
+            await sm.resume(ws, scan_id)
+            results.append(ScanBatchResultItem(scan_id=scan_id, ok=True))
+        except ValueError as e:
+            results.append(ScanBatchResultItem(scan_id=scan_id, ok=False, error=str(e)))
+        except TemporalUnavailable:
+            results.append(ScanBatchResultItem(
+                scan_id=scan_id, ok=False, error="Temporal 服务未运行，请先 docker-compose up -d"))
+        except Exception as e:  # noqa: BLE001 - 单项失败不阻断整批
+            results.append(ScanBatchResultItem(scan_id=scan_id, ok=False, error=str(e)))
+    submitted = sum(1 for r in results if r.ok)
+    if submitted == 0:
+        return JSONResponse(status_code=422, content=ScanBatchAccepted(
+            workspace=ws, submitted=0, skipped=0,
+            failed=len(results), results=results).model_dump())
+    return ScanBatchAccepted(workspace=ws, submitted=submitted, skipped=0,
+                             failed=len(results) - submitted, results=results)
+
+
+# 批量删除终态门：可删状态集（对齐 workspaces_indexer._TERMINAL_STATUSES + done）。
+# running/queued 拦（queued 单点 delete 只拦 raw=running——排队 workflow 获槽后写
+# 文件会变孤儿；批量门用 effective 口径一并拦）。
+_BATCH_DELETABLE = frozenset({
+    "completed", "done", "failed", "killed", "crashed", "cancelled", "interrupted"})
+
+
+@router.post("/{ws}/scans/batch-delete", response_model=ScanBatchAccepted, status_code=202)
+async def batch_delete_scans(ws: str, req: ScanIdsBatchRequest, request: Request,
+                             _: User = Depends(workspace_member)):
+    """批量删除扫描任务（2026-09-15 批量删除）：effective 状态门只放行终态，
+    其余记 skipped；门过后才翻 running 的竞态由 sm.delete 的 ScanRunning 逐项兜底。
+    单项异常不阻断整批；零成功（含全跳过）→ 422（body 顶层同形）。
+    """
+    from supernova_web.components.scan_manager import ScanRunning
+    sm = request.app.state.scan_manager
+    results: list[ScanBatchResultItem] = []
+    for scan_id in req.scan_ids:
+        status = sm.scan_status(ws, scan_id)
+        if status is None:
+            results.append(ScanBatchResultItem(scan_id=scan_id, ok=False, error="scan 不存在"))
+            continue
+        if status not in _BATCH_DELETABLE:
+            results.append(ScanBatchResultItem(
+                scan_id=scan_id, ok=False, skipped=True,
+                error=f"状态为 {status}，请先取消再删除"))
+            continue
+        try:
+            deleted = await sm.delete(ws, scan_id)
+            if deleted is None:
+                results.append(ScanBatchResultItem(scan_id=scan_id, ok=False, error="scan 不存在"))
+            else:
+                results.append(ScanBatchResultItem(scan_id=scan_id, ok=True))
+        except ScanRunning as e:
+            results.append(ScanBatchResultItem(scan_id=scan_id, ok=False, error=str(e)))
+        except Exception as e:  # noqa: BLE001 - 单项失败不阻断整批
+            results.append(ScanBatchResultItem(scan_id=scan_id, ok=False, error=str(e)))
+    submitted = sum(1 for r in results if r.ok)
+    skipped = sum(1 for r in results if r.skipped)
+    if submitted == 0:
+        return JSONResponse(status_code=422, content=ScanBatchAccepted(
+            workspace=ws, submitted=0, skipped=skipped,
+            failed=len(results) - skipped, results=results).model_dump())
+    return ScanBatchAccepted(workspace=ws, submitted=submitted, skipped=skipped,
+                             failed=len(results) - submitted - skipped, results=results)
 
 
 @router.get("/{ws}/scans/{scan_id}/resume-preview")

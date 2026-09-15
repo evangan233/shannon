@@ -386,5 +386,46 @@ class BatchScanRequest(BaseModel):
         return self
 
 
+class ScanIdsBatchRequest(BaseModel):
+    """POST /api/workspaces/{ws}/scans/batch-cancel|batch-resume 请求体（2026-09-15
+    批量取消/续跑）。与 BatchScanRequest._dedup_repos 同规则：保序去重（重复提交
+    容错），去重后上限 50（对齐 BATCH_SCAN_MAX_REPOS——批量操作同样逐项起副作用）。"""
+
+    scan_ids: list[str]
+
+    @field_validator("scan_ids")
+    @classmethod
+    def _dedup_scan_ids(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("scan_ids 不能为空——请至少选择一个扫描任务")
+        seen: set[str] = set()
+        out: list[str] = []
+        for sid in value:
+            if sid not in seen:
+                seen.add(sid)
+                out.append(sid)
+        if len(out) > 50:
+            raise ValueError("单次批量操作最多 50 个扫描任务")
+        return out
+
+
+class ScanBatchResultItem(BaseModel):
+    """批量操作单项结果。skipped=True 为前置筛掉（状态门拦截，未触副作用），
+    与「尝试了但失败」（ok=False, skipped=False）区分——前端横幅分别计数。"""
+
+    scan_id: str
+    ok: bool
+    skipped: bool = False
+    error: str | None = None
+
+
+class ScanBatchAccepted(BaseModel):
+    workspace: str
+    submitted: int
+    skipped: int = 0
+    failed: int
+    results: list[ScanBatchResultItem]
+
+
 class ErrorOut(BaseModel):
     detail: str

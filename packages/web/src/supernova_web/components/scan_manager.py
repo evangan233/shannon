@@ -2261,6 +2261,22 @@ class ScanManager:
         k = int(run_id.split("-")[1])
         return self._resolve_workflow_id(ws, scan_id) + f"-bb-{k}"
 
+    def scan_status(self, ws: str, scan_id: str) -> str | None:
+        """读 scan 当前对外状态（列表行同口径：_compute_status + 组合黑盒段合并）。
+
+        批量取消端点的状态门用：cancel 自身无状态门（对任意状态裸调都会
+        _mark_cancelled 覆写成 cancelled——单行按钮靠 UI 条件挡，批量必须服务端
+        挡「勾选到确认之间任务自己跑完」的漂移）。不存在 -> None。
+        """
+        scan_dir = self._store.get_scan_dir(ws, scan_id)
+        if scan_dir is None:
+            return None
+        mgr = SessionManager(scan_dir.parent)
+        raw = _compute_status(scan_dir, mgr.get_status(scan_dir))
+        data = mgr.get_session_data(scan_dir)
+        bb_phase, _reason, _merged = merge_latest_run_view(scan_dir, data)
+        return effective_scan_status(raw, data.get("combined"), bb_phase)
+
     async def cancel(self, ws: str, scan_id: str) -> dict | None:
         """取消 scan 三轨(C1 后):
         ① _handles 有(web 自起) -> handle.cancel()(temporal 原生, 传播到 workflow + heartbeat activity).
