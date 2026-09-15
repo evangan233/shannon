@@ -130,6 +130,10 @@ export interface Workspace {
   vuln_count?: number;
   total_cost_usd?: number;
   cost_currency?: string;
+  // 分币种累计花费（跨全部 scans 聚合）：{CNY: x, USD: y}。单币种时与
+  // total_cost_usd+cost_currency 等价；混合币种直加是错值，正确展示走此字段
+  // （对齐 WorkspaceDetail 头部 / Dashboard tileCost 口径）。无花费 → null。
+  cost_by_currency?: Record<string, number> | null;
   total_duration_ms?: number;
   links?: { parent_workspace?: string | null; child_workspaces?: string[] };
   is_correlation?: boolean;

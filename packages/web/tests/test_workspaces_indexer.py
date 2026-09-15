@@ -170,6 +170,7 @@ def test_list_missing_metrics_returns_none(tmp_workspaces):
     assert row["total_cost_usd"] is None
     assert row["total_duration_ms"] is None
     assert row["cost_currency"] is None
+    assert row["cost_by_currency"] is None
     assert row["links"] == {}
 
 
@@ -279,45 +280,90 @@ def test_list_ws_multiple_scans_aggregated(tmp_workspaces):
     assert row["latest_created_at"] == 1780003600.0
 
 
-def test_list_ws_stats_take_latest_completed_scan(tmp_workspaces):
-    """统计字段（vuln/cost/duration）取最近 completed scan，状态/时间仍取最新。
+def test_list_ws_stats_aggregate_all_scans(tmp_workspaces):
+    """统计字段（vuln/cost/duration）跨全部 scans 聚合，状态/时间仍取最新。
 
-    回归：Brightli 43 漏洞被新起的 running scan 清零——latest scan 无产出
-    （vuln_counts={}）不该掩盖上一个 completed scan 的已知结果。"""
+    对齐工作区页头部「累计发现/累计花费」口径（WorkspaceDetail agg = scans.reduce）。
+    回归 1（25731b62）：Brightli 43 漏洞被新起 running scan 清零——sum 语义下无产出
+    scan 贡献 0，不清零。回归 2（本修复）：「取最近 completed 单条」致切换器只显
+    第一条任务的数字，与工作区页总数不一致。"""
     from supernova_web.components.scan_store import ScanStore, write_workspace_meta
     ws = tmp_workspaces / "stats-ws"
     ws.mkdir()
     write_workspace_meta(ws, name="stats-ws", owner="admin")
     store = ScanStore(tmp_workspaces)
-    # 旧 scan：completed + injection queue 3 条
+    # 旧 scan：completed + injection queue 3 条 + cost/duration
     _, d1 = store.create_scan("stats-ws", "http://e", "/x")
     s1 = json.loads((d1 / "session.json").read_text())
     s1["status"] = "completed"; s1["created_at"] = 1780000000.0
+    s1["metrics"] = {"total_cost_usd": 1.5, "cost_currency": "CNY",
+                     "total_duration_ms": 45000}
     (d1 / "session.json").write_text(json.dumps(s1))
     dl = d1 / "deliverables" / "whitebox"
     dl.mkdir(parents=True)
     (dl / "injection_exploitation_queue.json").write_text(
         json.dumps({"vulnerabilities": [{}] * 3}))
-    # 新 scan：interrupted（终态、无产物——不依赖 heartbeat 判活）
+    # 第二条 completed：xss 2 条 + cost/duration（同币种）
     _, d2 = store.create_scan("stats-ws", "http://e", "/x")
     s2 = json.loads((d2 / "session.json").read_text())
-    s2["status"] = "interrupted"; s2["created_at"] = 1780003600.0
+    s2["status"] = "completed"; s2["created_at"] = 1780001800.0
+    s2["metrics"] = {"total_cost_usd": 3.25, "cost_currency": "CNY",
+                     "total_duration_ms": 15000}
     (d2 / "session.json").write_text(json.dumps(s2))
+    dl2 = d2 / "deliverables" / "whitebox"
+    dl2.mkdir(parents=True)
+    (dl2 / "xss_exploitation_queue.json").write_text(
+        json.dumps({"vulnerabilities": [{}] * 2}))
+    # 最新 scan：interrupted（终态、无产物——不依赖 heartbeat 判活）
+    _, d3 = store.create_scan("stats-ws", "http://e", "/x")
+    s3 = json.loads((d3 / "session.json").read_text())
+    s3["status"] = "interrupted"; s3["created_at"] = 1780003600.0
+    (d3 / "session.json").write_text(json.dumps(s3))
     rows = WorkspacesIndexer(tmp_workspaces).list_workspaces()
     row = next(r for r in rows if r["name"] == "stats-ws")
     # 状态/时间取最新（动态）
     assert row["status"] == "interrupted"
     assert row["latest_status"] == "interrupted"
     assert row["latest_created_at"] == 1780003600.0
-    # 统计取最近 completed（已知结果不被无产出新 scan 掩盖）
-    assert row["vuln_count"] == 3
-    assert row["vuln_counts"] == {"injection": 3}
+    # 统计跨全部 scans 聚合（无产出的 interrupted 贡献 0，不清零）
+    assert row["vuln_count"] == 5
+    assert row["vuln_counts"] == {"injection": 3, "xss": 2}
+    assert row["total_cost_usd"] == 4.75
+    assert row["cost_currency"] == "CNY"
+    assert row["cost_by_currency"] == {"CNY": 4.75}
+    assert row["total_duration_ms"] == 60000
 
 
-def test_list_ws_stats_fallback_latest_when_no_completed(tmp_workspaces):
-    """无 completed scan 时统计回落 latest（维持原行为，兼容 failed-only ws）。
+def test_list_ws_cost_by_currency_splits_mixed_currencies(tmp_workspaces):
+    """混合币种：cost_by_currency 分币种分组（跨币种直加是错值——对齐 WorkspaceDetail
+    头部 / Dashboard tileCost 口径）；total_cost_usd/cost_currency 保留 last-wins+直加
+    兼容口径（CLAUDE.md §4 metrics_tracker），正确展示走 cost_by_currency。"""
+    from supernova_web.components.scan_store import ScanStore, write_workspace_meta
+    ws = tmp_workspaces / "mixed-ws"
+    ws.mkdir()
+    write_workspace_meta(ws, name="mixed-ws", owner="admin")
+    store = ScanStore(tmp_workspaces)
+    _, d1 = store.create_scan("mixed-ws", "http://e", "/x")
+    s1 = json.loads((d1 / "session.json").read_text())
+    s1["status"] = "completed"; s1["created_at"] = 1780000000.0
+    s1["metrics"] = {"total_cost_usd": 1.5, "cost_currency": "CNY"}
+    (d1 / "session.json").write_text(json.dumps(s1))
+    _, d2 = store.create_scan("mixed-ws", "http://e", "/x")
+    s2 = json.loads((d2 / "session.json").read_text())
+    s2["status"] = "completed"; s2["created_at"] = 1780001800.0
+    s2["metrics"] = {"total_cost_usd": 2.0, "cost_currency": "USD"}
+    (d2 / "session.json").write_text(json.dumps(s2))
+    rows = WorkspacesIndexer(tmp_workspaces).list_workspaces()
+    row = next(r for r in rows if r["name"] == "mixed-ws")
+    assert row["cost_by_currency"] == {"CNY": 1.5, "USD": 2.0}
+    # 兼容字段：直加 + 最新优先币种（metrics_tracker 口径）
+    assert row["total_cost_usd"] == 3.5
+    assert row["cost_currency"] == "USD"
 
-    failed scan 失败前可能有部分产出——回落 latest（而非清零）保留这些已知信息。"""
+
+def test_list_ws_stats_sum_failed_partial_output(tmp_workspaces):
+    """failed-only ws：failed scan 失败前的部分产出计入累计（sum 语义天然保留，
+    不因「无 completed」清零——对齐 WorkspaceDetail 全量聚合口径）。"""
     from supernova_web.components.scan_store import ScanStore, write_workspace_meta
     ws = tmp_workspaces / "fallback-ws"
     ws.mkdir()
@@ -334,7 +380,7 @@ def test_list_ws_stats_fallback_latest_when_no_completed(tmp_workspaces):
     rows = WorkspacesIndexer(tmp_workspaces).list_workspaces()
     row = next(r for r in rows if r["name"] == "fallback-ws")
     assert row["status"] == "failed"
-    assert row["vuln_count"] == 2  # 回落 latest（它自己），不清零
+    assert row["vuln_count"] == 2  # 部分产出计入累计，不清零
 
 
 def test_list_legacy_ws_root_session_count_1(tmp_workspaces):

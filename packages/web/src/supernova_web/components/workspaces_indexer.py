@@ -155,7 +155,7 @@ class WorkspacesIndexer:
         """列 workspace（1 ws : N scans 后）：扫 workspaces/*/ 识别 ws（workspace.json
         优先，回退 legacy ws 根 session.json），每 ws 经 ScanStore.list_scans 聚合
         scan_count/latest_status/latest_created_at；ws 行状态/时间字段取 latest scan，
-        统计字段（vuln/cost/duration）取最近 completed scan（回落 latest）。
+        统计字段（vuln/cost/duration）跨全部 scans 聚合（该 ws 累计）。
 
         空 ws（workspace.json 但无 scan）-> scan_count=0、status=completed（idle，不显
         spinner，对齐旧 POST /api/workspaces 写 status=completed 的行为）。
@@ -179,20 +179,40 @@ class WorkspacesIndexer:
             scans = store.list_scans(name)
             if scans:
                 latest = scans[0]  # list_scans 已按 created_at 倒序
-                # 统计字段取最近 completed scan：running/failed/interrupted scan 无产出
-                # （或仅部分产出），取它会掩盖上一个 completed 的已知结果（回归：
-                # Brightli 43 漏洞被新起 running scan 的 vuln_counts={} 清零）。
-                # 无 completed（failed-only ws）回落 latest，维持原行为不清零。
-                stats = next((s for s in scans if s.status == "completed"), latest)
+                # 统计字段跨全部 scans 聚合（对齐工作区页头部「累计发现/累计花费」口径，
+                # WorkspaceDetail agg = scans 全量 reduce）——「取最近 completed 单条」
+                # （25731b62 修 running 清零）曾致切换器只显第一条任务的数字。sum 语义下
+                # 无产出 scan 贡献 0，同样不清零，两回归兼容。口径注：跨仓 corr 主任务
+                # 与 reused 子仓任务的产出可能重叠计数——与详情页一致，不在 ws 行去重。
+                vuln_counts: dict[str, int] = {}
+                for s in scans:
+                    for k, v in (s.vuln_counts or {}).items():
+                        vuln_counts[k] = vuln_counts.get(k, 0) + v
+                durations = [s.total_duration_ms
+                             for s in scans if s.total_duration_ms is not None]
+                # 花费分币种聚合（跨币种直加是错值，对齐 WorkspaceDetail/Dashboard
+                # tileCost）；total_cost_usd/cost_currency 保留 last-wins+直加兼容口径
+                # （CLAUDE.md §4 metrics_tracker），正确展示走 cost_by_currency。
+                cost_by_currency: dict[str, float] = {}
+                total_cost = 0.0
+                for s in scans:
+                    if s.total_cost_usd is None:
+                        continue
+                    cur = s.cost_currency or "USD"
+                    cost_by_currency[cur] = cost_by_currency.get(cur, 0.0) + s.total_cost_usd
+                    total_cost += s.total_cost_usd
+                # 兼容币种取最新优先（首个非空，与前端 fleet data.find 同式）
+                cost_currency = next((s.cost_currency for s in scans if s.cost_currency), None)
                 out.append({
                     "name": name,
                     "scan_type": latest.scan_type,
                     "status": latest.status,
-                    "vuln_counts": stats.vuln_counts,
-                    "vuln_count": stats.vuln_count,
-                    "total_cost_usd": stats.total_cost_usd,
-                    "cost_currency": stats.cost_currency,
-                    "total_duration_ms": stats.total_duration_ms,
+                    "vuln_counts": vuln_counts,
+                    "vuln_count": sum(s.vuln_count for s in scans),
+                    "total_cost_usd": total_cost if cost_by_currency else None,
+                    "cost_currency": cost_currency,
+                    "cost_by_currency": cost_by_currency or None,
+                    "total_duration_ms": sum(durations) if durations else None,
                     "links": latest.links,
                     "created_at": latest.created_at,
                     "completed_at": latest.completed_at,
@@ -213,6 +233,7 @@ class WorkspacesIndexer:
                     "vuln_count": 0,
                     "total_cost_usd": None,
                     "cost_currency": None,
+                    "cost_by_currency": None,
                     "total_duration_ms": None,
                     "links": {},
                     "created_at": ws_created,

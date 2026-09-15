@@ -18,6 +18,8 @@ vi.mock("@/api/useWorkspaces", () => ({
       { name: "ws-b", status: "completed", scan_type: "blackbox", created_at: 2, scan_count: 1, vuln_count: 0, total_cost_usd: 1.1, cost_currency: "USD" },
       // ws-c 模拟旧后端（Phase 1 未上线）缺字段 → null-safe 回退 0/—
       { name: "ws-c", status: "failed", scan_type: "whitebox", created_at: 3 },
+      // ws-d 模拟新后端：cost_by_currency 分币种（跨全部 scans 聚合）
+      { name: "ws-d", status: "completed", scan_type: "whitebox", created_at: 4, scan_count: 7, vuln_count: 4, cost_by_currency: { CNY: 7.8, USD: 2.5 } },
     ],
     loading: false, lastUpdated: new Date(), error: null, refresh: mockRefresh,
   }),
@@ -114,12 +116,23 @@ describe("WorkspaceSwitcher 状态卡重做（spec 2026-07-28：加宽 + 详情 
     expect(rowC.getAttribute("aria-label")).toContain("0 次扫描");
   });
 
-  it("顶部舰队汇总：累计漏洞 + 累计花费（币种取首个 ws）", async () => {
+  it("顶部舰队汇总：累计漏洞 + 累计花费（分币种，跨币种直加是错值）", async () => {
     renderIt();
     fireEvent.click(screen.getByRole("button", { name: /切换/i }));
     await waitFor(() => expect(screen.getByText("ws-a")).toBeInTheDocument());
-    // 5+0+0=5 漏洞；3.42+1.1+0=4.52，币种 CNY → ¥4.52
-    expect(screen.getByText(/累计花费/)).toHaveTextContent("¥4.52");
+    // 漏洞 5+0+0+4=9；花费按币种分组：CNY 3.42+7.8≈11 / USD 1.1+2.5≈4 →「¥11 + $4」
+    // （旧口径「币种取首个 ws + 直加」把 CNY/USD 加成一个数——¥4.52 是错值，已弃）
+    expect(screen.getByText(/累计花费/)).toHaveTextContent("¥11 + $4");
+  });
+
+  it("行卡片花费：cost_by_currency 多币种紧凑渲染（新后端字段）", async () => {
+    renderIt();
+    fireEvent.click(screen.getByRole("button", { name: /切换/i }));
+    await waitFor(() => expect(screen.getByText("ws-d")).toBeInTheDocument());
+    const rowD = screen.getByText("ws-d").closest("[data-current]") as HTMLElement;
+    expect(rowD.getAttribute("aria-label")).toContain("¥8 + $3");
+    expect(rowD.getAttribute("aria-label")).toContain("4 个漏洞");
+    expect(rowD.getAttribute("aria-label")).toContain("7 次扫描");
   });
 });
 

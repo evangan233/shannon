@@ -23,7 +23,7 @@ import { useWorkspaces } from "@/api/useWorkspaces";
 import { useAuth } from "@/auth/AuthContext";
 import { CreateWorkspaceDialog } from "@/components/CreateWorkspaceDialog";
 import { deleteWorkspace } from "@/api/client";
-import { fmtCost } from "@/utils/currency";
+import { fmtCost, currencySymbol } from "@/utils/currency";
 import type { Workspace } from "@/api/types";
 import { toast } from "sonner";
 
@@ -43,6 +43,22 @@ function fmtTime(unix?: number | null): string {
   return new Date(unix * 1000).toLocaleString();
 }
 
+/** ws 的分币种花费条目：新后端读 cost_by_currency（跨全部 scans 聚合）；旧后端缺该
+ * 字段时回落 total_cost_usd+cost_currency 单币种（无花费 → []）。 */
+function wsCostEntries(w: Workspace): [string, number][] {
+  const cbc = w.cost_by_currency;
+  if (cbc && Object.keys(cbc).length > 0) return Object.entries(cbc);
+  return w.total_cost_usd != null ? [[w.cost_currency ?? "USD", w.total_cost_usd]] : [];
+}
+
+/** 分币种紧凑渲染（对齐 Dashboard tileCost / WorkspaceDetail 头部）：单币种照常
+ *  fmtCost；多币种「¥76 + $29」（跨币种直加是错值，分组才可加）。 */
+function fmtCosts(entries: [string, number][]): string {
+  if (entries.length === 0) return "—";
+  if (entries.length === 1) return fmtCost(entries[0][1], entries[0][0]);
+  return entries.map(([cur, v]) => `${currencySymbol(cur)}${Math.round(v)}`).join(" + ");
+}
+
 export function WorkspaceSwitcher({ currentWorkspace }: { currentWorkspace?: string }) {
   const { t } = useTranslation();
   const nav = useNavigate();
@@ -58,12 +74,17 @@ export function WorkspaceSwitcher({ currentWorkspace }: { currentWorkspace?: str
     return data.filter((w) => w.name.toLowerCase().includes(s));
   }, [data, q]);
 
-  // 舰队汇总（对齐 Dashboard：跨 ws 聚合，币种取首个有 cost_currency 的 ws）。
+  // 舰队汇总（对齐 Dashboard：跨 ws 聚合；花费按币种分组——跨币种直加是错值）。
   const fleet = useMemo(() => {
     const totalVulns = data.reduce((a, w) => a + (w.vuln_count ?? 0), 0);
-    const totalCost = data.reduce((a, w) => a + (w.total_cost_usd ?? 0), 0);
-    const currency = data.find((w) => w.cost_currency)?.cost_currency;
-    return { totalVulns, totalCost, currency };
+    const byCurrency = new Map<string, number>();
+    for (const w of data) {
+      for (const [cur, v] of wsCostEntries(w)) {
+        byCurrency.set(cur, (byCurrency.get(cur) ?? 0) + v);
+      }
+    }
+    const costEntries = [...byCurrency.entries()].sort((a, b) => b[1] - a[1]);
+    return { totalVulns, costEntries };
   }, [data]);
 
   function pick(name: string) {
@@ -120,7 +141,7 @@ export function WorkspaceSwitcher({ currentWorkspace }: { currentWorkspace?: str
                 {t("workspaceSwitcher.stats.vulns")}
               </span>
               <span aria-hidden>·</span>
-              <span>{t("workspaceSwitcher.summary.fleetCost", { cost: fmtCost(fleet.totalCost, fleet.currency) })}</span>
+              <span>{t("workspaceSwitcher.summary.fleetCost", { cost: fmtCosts(fleet.costEntries) })}</span>
             </div>
           </div>
 
@@ -184,7 +205,8 @@ function WorkspaceCard({
 }) {
   const vulns = ws.vuln_count ?? 0;
   const scans = ws.scan_count ?? 0;
-  const cost = fmtCost(ws.total_cost_usd, ws.cost_currency);
+  // 分币种（新后端 cost_by_currency 跨全部 scans 聚合；旧后端回落单币种）
+  const cost = fmtCosts(wsCostEntries(ws));
   const when = fmtTime(ws.created_at);
 
   return (
