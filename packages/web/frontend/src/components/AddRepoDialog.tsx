@@ -79,8 +79,15 @@ export function AddRepoDialog({ ws, open, onOpenChange, onCreated, onBatchCreate
           urls: urlLines,
           group: group.trim() || undefined,
         });
+        // 跨分组同 URL 挡板（2026-09-15）：skipped 里带 existing 的给样例提示，
+        // 用户重贴清单时能立刻看出「已在别的分组下过」而非神秘跳过。
+        const existing = r.skipped.filter((s) => s.existing).map((s) => s.existing as string);
+        const detail = existing.length
+          ? " — " + t("repos.addDialog.batchExisting",
+              { count: existing.length, sample: existing.slice(0, 2).join(" / ") })
+          : "";
         toast.success(t("repos.addDialog.batchResult",
-          { submitted: r.submitted.length, queued: r.queued.length, skipped: r.skipped.length }));
+          { submitted: r.submitted.length, queued: r.queued.length, skipped: r.skipped.length }) + detail);
         const names = [...r.submitted, ...r.queued];
         if (onBatchCreated) onBatchCreated(names);
         else onCreated(r.submitted[0] ?? r.queued[0] ?? "");

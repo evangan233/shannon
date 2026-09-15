@@ -68,6 +68,16 @@ def _resolve_repo_dir(repos_dir: Path, name: str) -> Path:
     return p
 
 
+def _norm_clone_url(u: str | None) -> str:
+    """跨分组挡板的 URL 归一键：剥凭据 + 去尾斜杠 + 剥 ``.git`` 后缀。
+
+    GitLab 同一仓库带不带 ``.git``、带不带尾斜杠是等价 URL（现场 risk_user_side
+    两份恰好差一个 ``.git`` 后缀），不归一则写法差异穿透挡板。
+    """
+    u = (strip_credentials(u) or "").rstrip("/")
+    return u[:-4] if u.endswith(".git") else u
+
+
 def _is_repo(d: Path) -> bool:
     """目录是仓库 iff 有 `.git`（clone 产物）或 `.supernova-repo.json`（已纳入管理）。
 
@@ -508,13 +518,20 @@ class RepoManager:
     async def clone_batch(self, ws: str, urls: list[str], group: str | None = None) -> dict:
         """批量克隆：同步预检立即定局，撞并发上限的余量后台排队补位。
 
-        返回 ``{"submitted": [name], "queued": [name], "skipped": [{"url","reason"}]}``：
+        返回 ``{"submitted": [name], "queued": [name], "skipped": [{"url","reason","existing"?}]}``：
         - 凭据缺失 → PermissionError（整批 fail-fast，端点 503）
         - 去重保序，重复条目 skipped(reason=duplicate)
-        - 已存在（ValueError）→ skipped(reason=exists)，不中断整批
+        - 已存在（ValueError / 跨分组同 URL 或同名挡板）→ skipped(reason=exists,
+          existing=已存在仓库名)，不中断整批
         - TooManyClones → 余量打包成一个后台任务逐条补位（queued），本方法立即
           返回——批量条数 > 并发上限时 HTTP 不悬挂（避免反代读超时掐断长请求），
           每条仍是独立 clone 任务，仓库列表逐个出现 cloning 态。
+
+        跨分组挡板（2026-09-15）：clone() 的 exists 检查按 group/name 完整路径判，
+        批量分多次提交时第二批漏填分组会让同 URL 落到另一路径重复克隆（现场
+        __legacy__ 31/79 重复）。故批量预检按「归一 URL 已在任意分组/顶层」挡；
+        名字挡板只收无 source.url 的仓（cloning 中/failed/linked）——ready 的
+        同名不同 URL 放行（不同远端，非重复下载）。
         """
         if not self._git.available(ws):
             raise PermissionError("未配置 git 凭证（GITLAB_USER/TOKEN）")
@@ -535,16 +552,70 @@ class RepoManager:
         submitted: list[str] = []
         pending: list[str] = []
         for u in ordered:
+            existing = self._batch_existing(ws, u)
+            if existing:
+                skipped.append({"url": u, "reason": "exists", "existing": existing})
+                continue
             try:
                 submitted.append(await self.clone(ws, u, None, None, None, group))
             except ValueError:        # 已存在（含空目录占位）→ 跳过收集
-                skipped.append({"url": u, "reason": "exists"})
+                skipped.append({"url": u, "reason": "exists",
+                                "existing": self._batch_name(u, group)})
             except TooManyClones:
                 pending.append(u)
         queued: list[str] = [self._batch_name(u, group) for u in pending]
         if pending:
             asyncio.create_task(self._batch_submit_task(ws, pending, group))
         return {"submitted": submitted, "queued": queued, "skipped": skipped}
+
+    def _ws_repo_index(self, ws: str) -> tuple[dict[str, str], dict[str, str]]:
+        """跨分组挡板索引：``(归一 URL -> 已有仓库名, repo_name -> 已有仓库名)``。
+
+        扫私有克隆两层目录（顶层仓库 = _is_repo；否则视为分组目录深入一层）+
+        关联清单。names 只收 meta 无 source.url 的仓——cloning 中（.git 无 meta）、
+        failed（meta 无 source）、linked（本就无 URL）——这些 URL 未知，按名字挡
+        （宁挡勿重：同 name 大概率就是同一仓在下）。ready 的只进 urls，避免误伤
+        「同名不同远端」的有意两份。
+        """
+        urls: dict[str, str] = {}
+        names: dict[str, str] = {}
+        root = self._repos_root(ws)
+        if root.is_dir():
+            for sub in root.iterdir():
+                if not sub.is_dir() or sub.name.startswith("."):
+                    continue
+                if _is_repo(sub):
+                    self._index_repo(ws, sub.name, urls, names)
+                    continue
+                for sub2 in sub.iterdir():
+                    if sub2.is_dir() and not sub2.name.startswith(".") and _is_repo(sub2):
+                        self._index_repo(ws, f"{sub.name}/{sub2.name}", urls, names)
+        for link in read_linked_repos(self._ws_dir(ws)):
+            n = link.get("name")
+            if n:
+                names.setdefault(n.rsplit("/", 1)[-1], n)
+        return urls, names
+
+    def _index_repo(self, ws: str, name: str,
+                    urls: dict[str, str], names: dict[str, str]) -> None:
+        meta = self._read_meta(ws, name)
+        u = (meta.get("source") or {}).get("url")
+        if u:
+            urls[_norm_clone_url(u)] = name
+        else:
+            names[name.rsplit("/", 1)[-1]] = name
+
+    def _batch_existing(self, ws: str, u: str) -> str | None:
+        """u 的克隆目标已被占（任意分组/顶层同 URL，或 cloning/failed/linked 同名）。
+
+        返回已存在仓库名，未占用返回 None。每次现扫——排队补位期间新 ready 的
+        仓也要被后续条目看见，不缓存。
+        """
+        url_idx, name_idx = self._ws_repo_index(ws)
+        hit = url_idx.get(_norm_clone_url(u))
+        if hit:
+            return hit
+        return name_idx.get(self._git.repo_name(u))
 
     def _batch_name(self, url: str, group: str | None) -> str:
         name = self._git.repo_name(url)
@@ -555,12 +626,16 @@ class RepoManager:
 
         等位条件看「未完成 job 数」——done-but-not-popped 的 entry 不计数
         （_clone_task finally pop 前的窗口不构成真实占位）。排队期间重名（用户
-        手动加了同名仓）→ 放弃该条；凭据中途失效 → 放弃剩余（均后台静默：
-        仓库列表里不会出现该仓，用户重贴即可）。
+        手动加了同名仓 / 另一批已在其他分组克隆同 URL——2026-09-15 跨批排队
+        竞态：批 A 目录未建时批 B 的同 URL 也进了排队，补位前复查 _batch_existing
+        才能挡住顶层+分组双份）→ 放弃该条；凭据中途失效 → 放弃剩余（均后台
+        静默：仓库列表里不会出现该仓，用户重贴即可）。
         """
         for u in urls:
             waited = 0.0
             while True:
+                if self._batch_existing(ws, u):
+                    break               # 排队期间已被其他批次/分组克隆 → 放弃
                 if sum(1 for t in self._jobs.values() if not t.done()) < self._max_concurrent:
                     try:
                         await self.clone(ws, u, None, None, None, group)
