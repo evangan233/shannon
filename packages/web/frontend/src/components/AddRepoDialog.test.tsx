@@ -27,10 +27,6 @@ vi.mock("@/api/client", () => ({
 
 vi.mock("@/auth/AuthContext", () => ({ useAuth: () => mockUseAuth() }));
 
-// toast 断言用（2026-09-15 跨分组挡板：skipped.existing 样例提示）
-const mockToastSuccess = vi.fn();
-vi.mock("sonner", () => ({ toast: { success: (...a: any[]) => mockToastSuccess(...a), error: vi.fn() } }));
-
 // FileSystemPicker 有自己的测试；这里 mock 它验证 AddRepoDialog 集成（渲染 + onChange 填路径）
 vi.mock("@/components/FileSystemPicker", () => ({
   FileSystemPicker: ({ value, onChange, triggerLabel }: {
@@ -168,22 +164,6 @@ describe("AddRepoDialog", () => {
       { target: { value: "https://gl/a.git\nhttps://gl/b.git" } });
     fireEvent.click(screen.getByTestId("submit"));
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith("be/new-a"));
-  });
-
-  it("批量克隆：skipped 带 existing → toast 附已存在样例（跨分组挡板可感知）", async () => {
-    mockBatchClone.mockResolvedValue({ submitted: [], queued: [], skipped: [
-      { url: "https://x/foo.git", reason: "exists", existing: "2026H2/foo" },
-      { url: "https://x/bar.git", reason: "exists", existing: "2026H2/bar" },
-    ] });
-    render(<AddRepoDialog {...props()} />);
-    await screen.findByPlaceholderText("https://gitlab.example/foo.git");
-    pasteUrls("https://x/foo.git\nhttps://x/bar.git");
-    fireEvent.click(screen.getByTestId("submit"));
-    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalled());
-    expect(mockToastSuccess).toHaveBeenCalledWith(
-      expect.stringContaining("2026H2/foo"));
-    expect(mockToastSuccess).toHaveBeenCalledWith(
-      expect.stringContaining("2"));
   });
 
   it("批量克隆：group 共享透传", async () => {

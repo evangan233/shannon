@@ -165,7 +165,6 @@
       "cloneBtn": "clone",
       "batchHint": "每行一条 git URL，贴多条即批量克隆（超出并发上限的自动排队下载）",
       "batchResult": "已提交 {{submitted}} 个，排队 {{queued}} 个，跳过 {{skipped}} 个",
-      "batchExisting": "{{count}} 个仓库已存在（如 {{sample}}），未重复克隆",
       "urlLinesError": "第 {{lines}} 行不是合法 git URL（https: / git@ / ssh:）",
       "modeClone": "克隆",
       "modeUpload": "上传 zip",

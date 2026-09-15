@@ -165,7 +165,6 @@
       "cloneBtn": "clone",
       "batchHint": "One git URL per line; paste multiple to batch clone (beyond the concurrency limit they queue automatically)",
       "batchResult": "Submitted {{submitted}}, queued {{queued}}, skipped {{skipped}}",
-      "batchExisting": "{{count}} already exist (e.g. {{sample}}); not re-cloned",
       "urlLinesError": "Line {{lines}} is not a valid git URL (https: / git@ / ssh:)",
       "modeClone": "Clone",
       "modeUpload": "Upload zip",
