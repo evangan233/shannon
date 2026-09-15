@@ -44,6 +44,25 @@ def test_review_narration_renders_en(monkeypatch):
     assert "简体中文" not in text
 
 
+def test_repo_boundary_rules_present():
+    """仓库边界铁律（2026-09-15 单仓跨服务宽容，实证 INJ-VULN-01）：边界外
+    假设禁当反驳依据（无法验证 ≠ 驳倒）+ 出站转发污点调用本身是 sink +
+    defense_effective/attacker_uncontrolled/platform_protection 三维度跨服务
+    陷阱反例。"""
+    text = (PROMPTS_DIR / "adversarial-review.txt").read_text(encoding="utf-8")
+    # 总铁律：起决定作用的防御在仓库外 → 该维度不可驳
+    assert "Repo boundary" in text
+    assert "OUTSIDE this repository" in text
+    assert "Unverifiable" in text
+    # 跨服务 sink 语义：本仓不执行 ≠ 不是 sink（下游消费在可见性之外）
+    assert "cross-service sink" in text.lower()
+    assert "NOT a refutation" in text
+    # 三维度陷阱反例锚点
+    assert "EXPECT the downstream service" in text
+    assert "NOT automatically attacker-uncontrolled" in text
+    assert "deployment assumption" in text
+
+
 def test_calibration_sentences_present():
     text = (PROMPTS_DIR / "adversarial-review.txt").read_text(encoding="utf-8")
     # 姿态校准硬规则（spec §4.1）与维度清单锚点

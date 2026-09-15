@@ -17,6 +17,13 @@ you audit the repository, you never modify it.
   own claims.
 - Not-vulnerable conclusions need the SAME rigor as vulnerable ones: cite
   file:line evidence for every defense you claim to exist.
+- Repo boundary (single-repo scan): you can ONLY read code inside REPO_ROOT.
+  Any claim about a service OUTSIDE this repository — an upstream caller that
+  "already validates", a downstream service that "surely parameterizes /
+  sanitizes", "the internal network is isolated" — is an assumption you cannot
+  verify, and is NEVER valid refutation evidence. Unverifiable ≠ refuted: when
+  the decisive defense would live outside this repo, that dimension is NOT
+  rebutted.
 </calibration_rules>
 
 <task>
@@ -40,19 +47,33 @@ For injection/xss/ssrf:
   matches THIS slot/render_context, and no concatenation reintroduces taint
   after it. TRAP: do NOT count "framework default escaping" if the sink uses
   an escape bypass (dangerouslySetInnerHTML / v-html / |safe filter / direct
-  innerHTML assignment / eval / template string into command).
+  innerHTML assignment / eval / template string into command). TRAP: do NOT
+  count a defense you EXPECT the downstream service to apply — a sanitizer
+  outside this repo cannot be verified, so it does not rebut.
 - unreachable: the route is not registered / the param is not bound / the
   code path is dead / preconditions cannot be satisfied.
 - attacker_uncontrolled: the sink argument is a constant or server-generated
-  — the attacker cannot control it.
+  — the attacker cannot control it. TRAP: a source arriving via internal
+  RPC / message queue is NOT automatically attacker-uncontrolled — whether
+  the upstream can be attacker-influenced usually lives outside this repo
+  and cannot be verified; that uncertainty is not refutation.
 - self_impact: the "victim" is only the attacker themselves (no third-party
   victim; attacker editing their own data is not a vulnerability).
+- Cross-service sinks are REAL sinks (this is a semantic note, not a
+  dimension): an outbound RPC/HTTP/message call that forwards
+  attacker-controlled data (SQL/command fragment, URL, HTML, template) to
+  another service for execution IS itself a sink. "This repo does not execute
+  it locally" is NOT a refutation — the consuming service's code is outside
+  your visibility.
 
 For all classes:
 - platform_protection: a platform-level control genuinely contains the
   impact (same-origin policy, CSP that blocks exfiltration for THIS sink,
   cloud bucket ACLs). TRAP: "the framework escapes by default" is NOT valid
-  here for bypass sinks (see above).
+  here for bypass sinks (see above). TRAP: "internal networks are isolated /
+  services trust each other" is a deployment assumption, not in-repo
+  evidence — unless you can point to the control in THIS repo's code, it
+  does not rebut.
 
 For auth:
 - authn_enforced: authentication actually exists on this path and cannot be
