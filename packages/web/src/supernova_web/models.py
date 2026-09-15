@@ -274,7 +274,8 @@ class BatchScanAccepted(BaseModel):
 class BatchScanRequest(BaseModel):
     """POST /api/scan/batch 请求体（spec §3.1）。
 
-    repos 上限 50（BATCH_SCAN_MAX_REPOS，对齐批量克隆的 BATCH_CLONE_MAX_URLS）。
+    repos 上限 50（BATCH_SCAN_MAX_REPOS；2026-09-15 起不再对齐 BATCH_CLONE_MAX_URLS=500
+    ——扫描每仓起一个 workflow，重于 clone，维持收紧）。
     """
 
     workspace: str

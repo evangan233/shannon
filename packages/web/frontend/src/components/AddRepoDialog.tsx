@@ -120,7 +120,14 @@ export function AddRepoDialog({ ws, open, onOpenChange, onCreated, onBatchCreate
         else if (mode === "linkdir" && e.status === 422) toast.error(t("repos.addDialog.errors.badPath"));
         else if (mode === "upload" && e.status === 413) toast.error(t("repos.addDialog.errors.tooLarge"));
         else if (mode === "upload" && e.status === 409) toast.error(t("repos.addDialog.errors.exists"));
-        else toast.error(t("repos.addDialog.errors.failed", { status: e.status }));
+        // 兜底（2026-09-15）：后端人话 detail（如「单次最多 500 条 URL」）优先透出，
+        // 无 detail 才回落状态码文案。只认 string——pydantic 校验错误的 detail 是
+        // 数组形态，透出仍是天书，不如裸状态码。
+        else {
+          const detail = typeof (e.body as { detail?: unknown } | null)?.detail === "string"
+            ? (e.body as { detail: string }).detail : "";
+          toast.error(detail || t("repos.addDialog.errors.failed", { status: e.status }));
+        }
       } else {
         toast.error(t("repos.addDialog.errors.network"));
         console.error(`${mode} failed:`, e);

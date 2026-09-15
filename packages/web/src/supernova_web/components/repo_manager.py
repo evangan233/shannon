@@ -499,9 +499,10 @@ class RepoManager:
         return final_name
 
     # ---- batch clone（批量克隆，2026-09-09）----
-    # 单次批量上限（防超大请求体遍历过久，对齐 batch-delete 的 200 上限思路但
-    # clone 是重操作，收紧到 50）；排队轮询间隔与单条等位上限防 jobs 卡死时无限转。
-    BATCH_CLONE_MAX_URLS = 50
+    # 单次批量上限（防超大请求体的防御性护栏；2026-09-15 50→500——排队是
+    # best-effort 内存补位，50 只是把「静默丢失暴露面」圈小的旧口径，用户批次
+    # 常态 200+ 故放宽）；排队轮询间隔与单条等位上限防 jobs 卡死时无限转。
+    BATCH_CLONE_MAX_URLS = 500
     BATCH_SLOT_POLL_S = 1.0
     BATCH_SLOT_MAX_WAIT_S = 600.0
 

@@ -139,9 +139,15 @@ async def test_batch_clone_dedup(tmp_path, monkeypatch, fake_clone_ok):
 
 @pytest.mark.asyncio
 async def test_batch_clone_limit_and_empty(tmp_path, monkeypatch):
-    """超 50 条 / 空列表 → ValueError（端点转 422）。"""
+    """超 500 条 / 空列表 → ValueError（端点转 422）；51 条（旧上限+1）不再被拒。"""
     rm = _rm(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="不能为空"):
         await rm.clone_batch(WS, [])
-    with pytest.raises(ValueError, match="50"):
-        await rm.clone_batch(WS, [f"https://gitlab.example/r{i}.git" for i in range(51)])
+    with pytest.raises(ValueError, match="500"):
+        await rm.clone_batch(WS, [f"https://gitlab.example/r{i}.git" for i in range(501)])
+    # 2026-09-15 上限 50→500：51 条（旧上限+1）应正常受理——mock clone 免真克隆
+    async def _fake_clone(ws, url, branch, commit, name, group):
+        return f"r{url}"
+    monkeypatch.setattr(rm, "clone", _fake_clone)
+    r = await rm.clone_batch(WS, [f"https://gitlab.example/r{i}.git" for i in range(51)])
+    assert len(r["submitted"]) == 51

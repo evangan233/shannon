@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { toast } from "sonner";
 import i18n from "@/i18n";
 import { AddRepoDialog } from "./AddRepoDialog";
 
@@ -9,12 +10,14 @@ const mockUploadRepoZip = vi.fn();
 const mockBatchClone = vi.fn();
 const mockUseAuth = vi.fn();
 
-vi.mock("@/api/client", () => ({
-  createRepo: (...a: any[]) => mockCreateRepo(...a),
-  linkReposInDir: (...a: any[]) => mockLinkReposInDir(...a),
-  uploadRepoZip: (...a: any[]) => mockUploadRepoZip(...a),
-  batchClone: (...a: any[]) => mockBatchClone(...a),
-  ApiError: class ApiError extends Error {
+// toast 断言用：mock sonner，组件里 toast.error 的入参可直接 expect
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+
+// 组件 catch 走 instanceof ApiError 分支——class 必须与 vi.mock 工厂共享同一引用
+// （工厂内联 class 每次生成新引用，instanceof 永远 false）。vi.mock 被提升到文件
+// 顶部，class 声明会 TDZ，故用 vi.hoisted 随 mock 一起提升。
+const MockApiError = vi.hoisted(() => {
+  return class MockApiError extends Error {
     status: number;
     body: unknown;
     constructor(status: number, body: unknown) {
@@ -22,7 +25,15 @@ vi.mock("@/api/client", () => ({
       this.status = status;
       this.body = body;
     }
-  },
+  };
+});
+
+vi.mock("@/api/client", () => ({
+  createRepo: (...a: any[]) => mockCreateRepo(...a),
+  linkReposInDir: (...a: any[]) => mockLinkReposInDir(...a),
+  uploadRepoZip: (...a: any[]) => mockUploadRepoZip(...a),
+  batchClone: (...a: any[]) => mockBatchClone(...a),
+  ApiError: MockApiError,
 }));
 
 vi.mock("@/auth/AuthContext", () => ({ useAuth: () => mockUseAuth() }));
@@ -120,6 +131,19 @@ describe("AddRepoDialog", () => {
     expect(onCreated).toHaveBeenCalledWith("foo");
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(mockCreateRepo).not.toHaveBeenCalled();
+  });
+
+  it("批量克隆：后端 422 带 detail 人话 → toast 透出 detail 而非裸状态码（2026-09-15）", async () => {
+    mockBatchClone.mockRejectedValue(
+      new MockApiError(422, { detail: "单次最多 500 条 URL" }));
+    render(<AddRepoDialog {...props()} />);
+    pasteUrls("https://x/foo.git\nhttps://x/bar.git\n");
+    fireEvent.click(screen.getByTestId("submit"));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(toast.error).toHaveBeenCalledWith("单次最多 500 条 URL");
+    // 不再显示「添加失败（422）」这类裸状态码文案
+    const flat = vi.mocked(toast.error).mock.calls.map((c) => String(c[0]));
+    expect(flat.some((s) => s.includes("422"))).toBe(false);
   });
 
   it("批量克隆：多行时隐藏 branch/commit（批量无意义），单行保留", async () => {
