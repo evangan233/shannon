@@ -517,7 +517,8 @@
       "urlRequired": "请填写目标 URL",
       "urlLabel": "目标 URL",
       "urlPlaceholder": "http://target.example.com",
-      "urlHint": "黑盒验证的可达目标（应用入口）；自动预填原黑盒目标，可修改。"
+      "urlHint": "黑盒验证的可达目标（应用入口）；自动预填原黑盒目标，可修改。",
+      "scanSearch": "搜索任务 ID / 仓库名"
     },
     "correlation": {
       "subtitle": "串联多个仓库的调用链，发起跨仓关联分析",

@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GroupLabel } from "@/components/GroupLabel";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { ScanCombobox } from "@/components/ScanCombobox";
 // 认证/HOST 块复用既有抽取组件（与白盒组合扫描/跨仓 gateway 同款）——黑盒验证的目标侧
 // 配置与它们语义同构（登录态 + DNS 覆盖），不另起炉灶。
 import { AuthFields, HostFields } from "@/components/ScanFormFields";
@@ -33,7 +34,9 @@ interface Props {
 
 /** 可加黑盒的白盒任务口径（与 ScanDetail「加黑盒」按钮 whiteboxAddable 一致）：
  *  scan_type=whitebox ∧ status ∈ {completed, done, cancelled}——cancelled 也放行（取消过
- *  手动黑盒 run 的任务白盒产物仍完好），failed 不放（产物口径外，后端 422 兜底）。 */
+ *  手动黑盒 run 的任务白盒产物仍完好），failed 不放（真白盒失败产物口径外，后端 422
+ *  兜底）。注：手动加 run 失败不再翻任务级状态（2026-09-15 后端失败归属修正），失败
+ *  任务的 run 在 run 徽章可见，任务保持 completed 可再次发起黑盒。 */
 const BLACKBOX_ADDABLE = new Set(["completed", "done", "cancelled"]);
 
 /** 黑盒验证表单（D3 入口回归 2026-09-10，语义改为 add-run）：① 工作区 ② 已完成白盒任务
@@ -106,28 +109,24 @@ export function BlackboxFormFields({
             )}
           </div>
         </section>
-        {/* ② 白盒任务选择器：只列可加黑盒的白盒终态任务。 */}
+        {/* ② 白盒任务选择器：只列可加黑盒的白盒终态任务；可搜索定位（任务多时靠
+         *  workflow_id/仓库名搜），单选——一次黑盒验证绑定一个白盒任务。 */}
         <section className="space-y-2">
           <GroupLabel>{t("scan.blackbox.scanSelectLabel")}</GroupLabel>
           <div className="space-y-1.5">
-            <Select value={f.reuseScanId || ""} onValueChange={(v) => set({ reuseScanId: v })}>
-              <SelectTrigger className="w-full font-mono text-xs">
-                <SelectValue placeholder={t("scan.blackbox.scanSelectPlaceholder")} />
-              </SelectTrigger>
-              <SelectContent>
-                {!workspace || (scansLoading && !candidates.length) ? (
-                  <SelectItem value="__empty__" disabled>
-                    {workspace ? t("scan.blackbox.loadingScans") : t("scan.fields.selectWsFirst")}
-                  </SelectItem>
-                ) : candidates.length ? candidates.map((s) => (
-                  <SelectItem key={s.scan_id} value={s.scan_id}>
-                    {s.workflow_id ?? s.scan_id}{s.repo ? ` · ${s.repo}` : ""}
-                  </SelectItem>
-                )) : (
-                  <SelectItem value="__empty__" disabled>{t("scan.blackbox.noScansOption")}</SelectItem>
-                )}
-              </SelectContent>
-            </Select>
+            <ScanCombobox
+              scans={candidates}
+              value={f.reuseScanId || ""}
+              onChange={(v) => set({ reuseScanId: v })}
+              placeholder={t("scan.blackbox.scanSelectPlaceholder")}
+              searchPlaceholder={t("scan.blackbox.scanSearch")}
+              emptyText={t("scan.blackbox.noScansOption")}
+              loading={scansLoading && !candidates.length}
+              loadingText={workspace
+                ? t("scan.blackbox.loadingScans")
+                : t("scan.fields.selectWsFirst")}
+              disabled={!workspace}
+            />
             {scanErr && <div className="text-destructive text-xs">{scanErr}</div>}
           </div>
         </section>

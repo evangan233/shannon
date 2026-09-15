@@ -86,13 +86,22 @@ function renderForm() {
   return renderWithSwr(<Harness />);
 }
 
-/** Radix Select：click trigger 打开下拉（jsdom 已验证姿势，见 ScanNewPage.test）。 */
-function selectOption(triggerText: RegExp | string, optionName: RegExp | string) {
-  const trigger = screen.getByText(triggerText).closest("button")!;
-  fireEvent.click(trigger);
-  return screen.findByRole("option", { name: optionName }).then((opt) => {
-    fireEvent.click(opt);
-  });
+/** Combobox（Popover + Command）：click trigger 打开下拉，输入搜索，点 option 选中。
+ *  触发器文本定位：未选时是 placeholder，已选后是任务 workflow_id。 */
+function pickerTrigger() {
+  return (screen.queryByText("选择要验证的白盒任务")
+    ?? screen.getByText(/^ws1-wb-s/)).closest("button")!;
+}
+
+async function openPicker() {
+  fireEvent.click(pickerTrigger());
+  return screen.findByPlaceholderText("搜索任务 ID / 仓库名");
+}
+
+async function selectOption(optionName: RegExp | string) {
+  await openPicker();
+  const opt = await screen.findByRole("option", { name: optionName });
+  fireEvent.click(opt);
 }
 
 describe("BlackboxFormFields 黑盒验证表单", () => {
@@ -106,7 +115,7 @@ describe("BlackboxFormFields 黑盒验证表单", () => {
 
   it("任务选择器只列白盒终态任务（completed/cancelled），排除 running/failed/黑盒/跨仓", async () => {
     renderForm();
-    fireEvent.click(screen.getByText("选择要验证的白盒任务").closest("button")!);
+    await openPicker();
     await waitFor(() => screen.getByRole("option", { name: /wb-s1/ }));
     expect(screen.getByRole("option", { name: /wb-s1/ })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /wb-s4/ })).toBeInTheDocument();
@@ -116,9 +125,34 @@ describe("BlackboxFormFields 黑盒验证表单", () => {
     expect(screen.queryByRole("option", { name: /co-s6/ })).not.toBeInTheDocument();
   });
 
+  it("任务选择器可搜索：按任务 ID / 仓库名过滤候选", async () => {
+    renderForm();
+    const input = await openPicker();
+    fireEvent.change(input, { target: { value: "qux" } }); // wb-s4 的 repo
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /wb-s4/ })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: /wb-s1/ })).not.toBeInTheDocument();
+    });
+    fireEvent.change(input, { target: { value: "wb-s1" } });
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /wb-s1/ })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: /wb-s4/ })).not.toBeInTheDocument();
+    });
+  });
+
+  it("单选语义：改选另一任务时替换（非叠加）选中值", async () => {
+    renderForm();
+    await selectOption(/wb-s1/);
+    await waitFor(() =>
+      expect(screen.getByTestId("state-dump").dataset.reuse).toBe("wb-s1"));
+    await selectOption(/wb-s4/);
+    await waitFor(() =>
+      expect(screen.getByTestId("state-dump").dataset.reuse).toBe("wb-s4"));
+  });
+
   it("选中任务后 getScan 预填 bb_url 为目标 URL + 认证/HOST 原配置", async () => {
     renderForm();
-    await selectOption("选择要验证的白盒任务", /wb-s1/);
+    await selectOption(/wb-s1/);
     const dump = await waitFor(() => {
       const el = screen.getByTestId("state-dump");
       expect(el.dataset.url).toBe("http://target.example.com");
@@ -135,6 +169,6 @@ describe("BlackboxFormFields 黑盒验证表单", () => {
     );
     renderForm();
     fireEvent.click(screen.getByText("选择要验证的白盒任务").closest("button")!);
-    expect(await screen.findByRole("option", { name: "暂无可加黑盒的白盒任务" })).toBeInTheDocument();
+    expect(await screen.findByText("暂无可加黑盒的白盒任务")).toBeInTheDocument();
   });
 });

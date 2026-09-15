@@ -517,7 +517,8 @@
       "urlRequired": "Target URL is required",
       "urlLabel": "Target URL",
       "urlPlaceholder": "http://target.example.com",
-      "urlHint": "Reachable entry of the app under test; pre-filled from the previous blackbox target and editable."
+      "urlHint": "Reachable entry of the app under test; pre-filled from the previous blackbox target and editable.",
+      "scanSearch": "Search by scan ID or repo"
     },
     "correlation": {
       "subtitle": "Chain calls across repositories and run a cross-repo correlation analysis",
