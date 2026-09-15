@@ -274,6 +274,69 @@ describe("ReposTab", () => {
     expect(screen.getByText("main")).toBeTruthy(); // 只读文本仍显示分支
   });
 
+  // ---- 分组筛选（2026-09-16）：搜索框右侧 Select（全部/各分组/未分组），与搜索词 AND ----
+
+  it("分组筛选：选某组只显该组行、未分组档只显扁平仓", async () => {
+    mockFetchByRoute({ "/repos": [
+      { name: "alpha/r1", group: "alpha", state: "ready" },
+      { name: "alpha/r2", group: "alpha", state: "ready" },
+      { name: "beta/r3", group: "beta", state: "ready" },
+      { name: "solo", state: "ready" },
+    ] });
+    render(
+      <AuthProvider><SWRConfig value={{ provider: () => new Map() }}><MemoryRouter><ReposTab workspace="ws1" /></MemoryRouter></SWRConfig></AuthProvider>,
+    );
+    await waitFor(() => expect(screen.getByText("r1")).toBeTruthy());
+    // 默认「全部」：四个仓全在
+    expect(screen.getByText("r3")).toBeTruthy();
+    expect(screen.getByText("solo")).toBeTruthy();
+    // 选 alpha 组：beta/扁平仓出局
+    fireEvent.click(screen.getByRole("combobox", { name: "repos.groupFilter.label" }));
+    fireEvent.click(await screen.findByRole("option", { name: /^alpha$/ }));
+    await waitFor(() => expect(screen.queryByText("r3")).toBeNull());
+    expect(screen.getByText("r1")).toBeTruthy();
+    expect(screen.getByText("r2")).toBeTruthy();
+    expect(screen.queryByText("solo")).toBeNull();
+    // 切「未分组」：只剩无 group 的扁平仓
+    fireEvent.click(screen.getByRole("combobox", { name: "repos.groupFilter.label" }));
+    fireEvent.click(await screen.findByRole("option", { name: "repos.ungrouped" }));
+    await waitFor(() => expect(screen.queryByText("r1")).toBeNull());
+    expect(screen.getByText("solo")).toBeTruthy();
+  });
+
+  it("分组筛选与搜索词 AND 叠加：组内再按名收窄", async () => {
+    mockFetchByRoute({ "/repos": [
+      { name: "alpha/web", group: "alpha", state: "ready" },
+      { name: "alpha/api", group: "alpha", state: "ready" },
+      { name: "beta/web", group: "beta", state: "ready" },
+    ] });
+    render(
+      <AuthProvider><SWRConfig value={{ provider: () => new Map() }}><MemoryRouter><ReposTab workspace="ws1" /></MemoryRouter></SWRConfig></AuthProvider>,
+    );
+    await waitFor(() => expect(screen.getByText("api")).toBeTruthy());
+    expect(screen.getAllByText("web")).toHaveLength(2); // alpha/web + beta/web（名称列渲染 basename）
+    fireEvent.click(screen.getByRole("combobox", { name: "repos.groupFilter.label" }));
+    fireEvent.click(await screen.findByRole("option", { name: /^alpha$/ }));
+    // 名称列是 basename，beta/web 出局 = "web" 只剩一处
+    await waitFor(() => expect(screen.getAllByText("web")).toHaveLength(1));
+    // 组筛选后再搜 "api"：只剩 alpha/api（beta/web 已被组筛掉、alpha/web 被词筛掉）
+    fireEvent.change(screen.getByLabelText("repos.searchPlaceholder"), { target: { value: "api" } });
+    await waitFor(() => expect(screen.queryByText("web")).toBeNull());
+    expect(screen.getByText("api")).toBeTruthy();
+  });
+
+  it("全部仓库都无分组：不渲染分组筛选 Select（避免噪音控件）", async () => {
+    mockFetchByRoute({ "/repos": [
+      { name: "r1", state: "ready" },
+      { name: "r2", state: "ready" },
+    ] });
+    render(
+      <AuthProvider><SWRConfig value={{ provider: () => new Map() }}><MemoryRouter><ReposTab workspace="ws1" /></MemoryRouter></SWRConfig></AuthProvider>,
+    );
+    await waitFor(() => expect(screen.getByText("r1")).toBeTruthy());
+    expect(screen.queryByRole("combobox", { name: "repos.groupFilter.label" })).toBeNull();
+  });
+
   it("切分支：选中其他分支 → POST /checkout + 成功 toast + 刷新列表", async () => {
     const fm = mockFetchByRoute({
       "/branches": { branches: ["dev", "main"] },

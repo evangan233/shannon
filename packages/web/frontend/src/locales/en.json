@@ -91,6 +91,10 @@
     },
     "addRepo": "New repository",
     "searchPlaceholder": "Search repositories",
+    "groupFilter": {
+      "label": "Filter by group",
+      "all": "All groups"
+    },
     "loading": "Loading…",
     "empty": "No repositories yet. Click \"New repository\" to clone one.",
     "noMatch": "No matching repositories.",

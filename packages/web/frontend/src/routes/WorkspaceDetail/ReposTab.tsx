@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatRow, type StatItem } from "@/components/StatRow";
 import { CheckCircle2, XCircle, AlertTriangle, RefreshCw, Trash2, Unlink, FolderX } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -23,6 +24,11 @@ import { CloneProgress } from "@/components/CloneProgress";
 import { CopyButton } from "@/components/CopyButton";
 
 const PULL_REFRESH_DELAY_MS = 1500;
+
+// 分组筛选值（2026-09-16）："all"=全部；GROUP_UNGROUPED=未分组档（group 为 null 的扁平仓）；
+// 其余 = 组名本身。后端组名是单段目录名（不含 /），与哨兵值无碰撞。
+const GROUP_ALL = "all";
+const GROUP_UNGROUPED = "__ungrouped__";
 
 function fmtSize(b?: number) {
   if (!b) return "-";
@@ -103,6 +109,7 @@ export function ReposTab({ workspace: wsProp }: Props) {
   const [pendingBulkDelete, setPendingBulkDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
+  const [groupFilter, setGroupFilter] = useState(GROUP_ALL);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const pullTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // SWR 数据层（2026-08-17 批次 Task 3）：key ["repos", ws] 与 ScanFormFields 下拉共享，
@@ -208,12 +215,34 @@ export function ReposTab({ workspace: wsProp }: Props) {
     }
   }
 
-  // 搜索：按仓库名过滤（跨分组），空分组卡片自动隐藏
+  // 分组筛选（2026-09-16）：选项从当前仓库客户端派生（不动后端契约），与搜索词 AND。
+  // 全部仓库都无分组时不渲染控件（只剩「全部/未分组」的噪音）；插入序对齐 groupRepos。
+  const groups = useMemo(() => {
+    const set = new Set<string>();
+    repos.forEach((r) => { if (r.group) set.add(r.group); });
+    return Array.from(set);
+  }, [repos]);
+  const hasUngrouped = useMemo(() => repos.some((r) => !r.group), [repos]);
+  // 选中组在刷新后消失（组内仓库被删光）→ 派生回落「全部」，避免 Select 值无对应项显空
+  const effectiveGroupFilter =
+    groupFilter === GROUP_ALL
+    || groups.includes(groupFilter)
+    || (groupFilter === GROUP_UNGROUPED && hasUngrouped)
+      ? groupFilter
+      : GROUP_ALL;
+
+  // 搜索：按仓库名过滤（跨分组）；分组筛选先行收窄（AND）
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return repos;
-    return repos.filter((r) => r.name.toLowerCase().includes(q));
-  }, [repos, query]);
+    return repos.filter((r) => {
+      if (effectiveGroupFilter === GROUP_UNGROUPED) {
+        if (r.group) return false;
+      } else if (effectiveGroupFilter !== GROUP_ALL && r.group !== effectiveGroupFilter) {
+        return false;
+      }
+      return !q || r.name.toLowerCase().includes(q);
+    });
+  }, [repos, query, effectiveGroupFilter]);
 
   // 概览条：客户端聚合 repos（不动后端契约）
   const stats: StatItem[] = useMemo(() => {
@@ -259,6 +288,22 @@ export function ReposTab({ workspace: wsProp }: Props) {
             className="w-56"
             aria-label={t("repos.searchPlaceholder")}
           />
+          {groups.length > 0 && (
+            <Select value={effectiveGroupFilter} onValueChange={setGroupFilter}>
+              <SelectTrigger aria-label={t("repos.groupFilter.label")} className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={GROUP_ALL}>{t("repos.groupFilter.all")}</SelectItem>
+                {groups.map((g) => (
+                  <SelectItem key={g} value={g}>{g}</SelectItem>
+                ))}
+                {hasUngrouped && (
+                  <SelectItem value={GROUP_UNGROUPED}>{t("repos.ungrouped")}</SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+          )}
         </div>
 
         {selected.size > 0 && (

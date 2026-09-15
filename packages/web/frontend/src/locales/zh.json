@@ -91,6 +91,10 @@
     },
     "addRepo": "新建仓库",
     "searchPlaceholder": "搜索仓库名",
+    "groupFilter": {
+      "label": "筛选分组",
+      "all": "全部分组"
+    },
     "loading": "加载中…",
     "empty": "暂无仓库。点「新建仓库」clone 一个。",
     "noMatch": "无匹配仓库。",
