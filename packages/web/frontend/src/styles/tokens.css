@@ -85,7 +85,7 @@
      （Anthropic 品牌 Styrene 的开源几何怪诞同族，fonts.css 自托管）。中文回落
      system-ui（中文 webfont 单字重 5-8MB 不可打包——拉丁个性化+中文系统栈，
      kami/mac 先例路径）。 */
-  --font-sans: "Space Grotesk Variable", system-ui, sans-serif;
+  --font-sans: "Space Grotesk", system-ui, sans-serif;
   --font-serif: "IBM Plex Serif", Georgia, serif;
   --radius: 12px;
 
@@ -266,7 +266,7 @@ html body {
   --c-amber: 40 85% 58%;
 
   /* 层 C · 圆角（Linear 中等）+ 字体（Inter——Linear 官网真身，自托管 variable） */
-  --font-sans: "Inter Variable", system-ui, sans-serif;
+  --font-sans: "Inter", system-ui, sans-serif;
   --radius: 12px;
 
   /* 层 D · prose（深靛底） */
@@ -444,7 +444,7 @@ html body {
   --c-amber: 36 78% 58%;
 
   /* 层 C · 圆角（squircle 最软）+ 字体（Figtree——圆润现代贴 Arc 软玻璃） */
-  --font-sans: "Figtree Variable", system-ui, sans-serif;
+  --font-sans: "Figtree", system-ui, sans-serif;
   --radius: 16px;
 
   /* 层 D · prose（玻璃底近中性，prose 同品牌深色微调） */
@@ -582,7 +582,7 @@ html body {
 
   /* 层 C · 圆角（炉膛温和但不软塌，10px 为谱系空档：8 利落/12 软之间）
      + 字体（Cabin——人文温暖，炉膛手作感） */
-  --font-sans: "Cabin Variable", system-ui, sans-serif;
+  --font-sans: "Cabin", system-ui, sans-serif;
   --radius: 10px;
 
   /* 层 D · prose（暖褐底暖白文；links 炭火橙） */
@@ -653,7 +653,7 @@ html body {
   --c-amber: 36 83% 76%;
 
   /* 层 C · 圆角（Catppuccin 官方 UI 柔软）+ 字体（Nunito——全圆端点，粉彩柔） */
-  --font-sans: "Nunito Variable", system-ui, sans-serif;
+  --font-sans: "Nunito", system-ui, sans-serif;
   --radius: 14px;
 
   /* 层 D · prose（冷白文 + mauve 链接 + teal 行内码） */
@@ -713,7 +713,7 @@ html body {
   --c-amber: 36 88% 72%;
 
   /* 层 C · 圆角（官方 UI 中等偏柔）+ 字体（Mulish——细长优雅，静谧文艺） */
-  --font-sans: "Mulish Variable", system-ui, sans-serif;
+  --font-sans: "Mulish", system-ui, sans-serif;
   --radius: 12px;
 
   /* 层 D · prose（月光白文 + rose 链接 + foam 行内码） */
@@ -835,7 +835,7 @@ html body {
   --c-amber: 36 98% 72%;
 
   /* 层 C · 圆角（官方 UI 中等）+ 字体（Rubik——圆润多巴胺） */
-  --font-sans: "Rubik Variable", system-ui, sans-serif;
+  --font-sans: "Rubik", system-ui, sans-serif;
   --radius: 10px;
 
   /* 层 D · prose（纯白文 + purple 链接 + cyan 行内码） */
@@ -940,7 +940,7 @@ html body {
      --radius-cta 980px 胶囊主操作（button cta 变体消费，未定义主题零影响）。 */
   --radius: 12px;
   --radius-cta: 980px;
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Inter Variable", "Segoe UI", sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Inter", "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "IBM Plex Mono", Menlo, Consolas, monospace;
 
   /* 层 D · prose（Apple label 近黑 + 链接蓝 #0066CC 深档保 AA） */
@@ -1108,7 +1108,7 @@ html body {
   --c-amber: 36 73% 34%;
 
   /* 层 C · 圆角（按钮 4 / 卡 12 的折中）+ 字体（Public Sans——中性克制极简） */
-  --font-sans: "Public Sans Variable", system-ui, sans-serif;
+  --font-sans: "Public Sans", system-ui, sans-serif;
   --radius: 6px;
 
   /* 层 D · prose（暖墨文字 + coral 陶土链接） */
@@ -1333,7 +1333,7 @@ html body {
      Inter webfont 兜底即实际渲染字体；行动按钮 12px 矩形圆角——不定义
      --radius-cta 胶囊（芯片才用 9999px，非 mac 全胶囊语言）） */
   --radius: 12px;
-  --font-sans: "Söhne", "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-sans: "Söhne", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "Söhne Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
 
   /* 层 D · prose（正文石墨 #3c3c3c（DESIGN.md 正文阅读色）/ 标题柔黑 #1a1a1a /
@@ -1405,7 +1405,7 @@ html body {
   --c-amber: 36 85% 45%;
 
   /* 层 C · 圆角（同 Mocha 柔软）+ 字体（Nunito 同品牌） */
-  --font-sans: "Nunito Variable", system-ui, sans-serif;
+  --font-sans: "Nunito", system-ui, sans-serif;
   --radius: 14px;
 
   /* 层 D · prose（text 冷紫黑 + mauve 链接 + teal 行内码） */
@@ -1464,7 +1464,7 @@ html body {
   --c-amber: 36 78% 44%;
 
   /* 层 C · 圆角（同 rose-pine 静谧）+ 字体（Mulish 同品牌） */
-  --font-sans: "Mulish Variable", system-ui, sans-serif;
+  --font-sans: "Mulish", system-ui, sans-serif;
   --radius: 12px;
 
   /* 层 D · prose（text 暖紫黑 + rose 链接 + foam 行内码） */

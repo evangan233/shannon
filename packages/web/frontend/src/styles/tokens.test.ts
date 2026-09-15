@@ -43,7 +43,7 @@ describe("tokens.css 漂移护栏", () => {
     // 2026-08-31 曾换纯系统栈（外链 webfont 断供跳变）；2026-09-02 字体全库加强：
     // 自托管 fontsource（内网零外链）+ 拉丁字体逐主题身份 + 中文回落 system-ui
     // （中文 webfont 单字重 5-8MB 不可打包），断供根因根治且保留混排平衡。
-    expect(tokens).toMatch(/--font-sans:\s*"Space Grotesk Variable", system-ui, sans-serif;/);
+    expect(tokens).toMatch(/--font-sans:\s*"Space Grotesk", system-ui, sans-serif;/);
   });
 });
 
@@ -198,7 +198,7 @@ describe("扩展主题（2026-08-25 OpenDesign 六主题移植）", () => {
     const macBlock = m![1];
     // 字体（2026-08-25 质感修订，kami 之外唯一覆盖 --font-sans 的主题）：
     // Apple 设备 -apple-system 解析 SF Pro/苹方；其他平台 Inter（OpenDesign 官方替代）
-    expect(macBlock).toMatch(/--font-sans:\s*-apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Inter Variable",/);
+    expect(macBlock).toMatch(/--font-sans:\s*-apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Inter",/);
     expect(macBlock).toMatch(/--font-mono:\s*ui-monospace, "SF Mono", "IBM Plex Mono",/);
     // 胶囊主操作（macOS Big Sur+ 原生按钮几何；其他主题不定义该 token，组件回落）
     expect(macBlock).toMatch(/--radius-cta:\s*980px;/);
@@ -254,7 +254,7 @@ describe("扩展主题（2026-08-25 OpenDesign 六主题移植）", () => {
     expect(oaiBlock).toMatch(/--accent:\s*0 0% 96%;/);
     // 层 C：12px 软圆角 + Söhne/Inter 栈（真值置首、Inter webfont 兜底）+ Söhne Mono
     expect(oaiBlock).toMatch(/--radius:\s*12px;/);
-    expect(oaiBlock).toMatch(/--font-sans:\s*"Söhne", "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;/);
+    expect(oaiBlock).toMatch(/--font-sans:\s*"Söhne", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;/);
     expect(oaiBlock).toMatch(/--font-mono:\s*"Söhne Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;/);
     // 不覆盖衬线（DESIGN.md 约束：Signifier 仅限编辑展示层，产品控件无衬线）；
     // 不定义胶囊 CTA（OpenAI 行动按钮是 12px 矩形圆角，非 mac 全胶囊语言）

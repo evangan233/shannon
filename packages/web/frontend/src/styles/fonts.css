@@ -1,28 +1,57 @@
 /* —— 自托管字体（2026-09-02 主题字体全库加强：22 主题逐款拉丁字体身份）——
    全部 fontsource 本地 woff2，内网零外链（替代 index.html 的 Google Fonts link——
    外链断供时字体跳变是 2026-08-31 换系统栈的根因，本次自托管根治）。
-   - variable 包（wght 可变单文件全字重，family 名带 " Variable" 后缀——tokens.css
-     消费处须带后缀）；无 variable 版的老字体用 static 400/600/700 三档。
    - 按需下载：@font-face unicode-range 分包，浏览器只拉当前主题消费的 family
      文件（未用主题零下载）。
    - 中文回落系统栈（tokens.css 各 --font-sans 尾部 system-ui）——中文 webfont
      单字重 5-8MB 不可打包，「拉丁个性化 + 中文系统栈」是既定路径（kami/mac 先例）。
    - mono / serif 为全局默认（--font-mono/--font-serif），family 名与旧外链一致，
-     自托管无缝换源。选型表与依据见 tokens.css 各主题块。 */
+     自托管无缝换源。选型表与依据见 tokens.css 各主题块。
+   - ★ 2026-09-14 variable→static 大换血：8 家 variable woff2（inter/space-grotesk/
+     figtree/cabin/nunito/mulish/rubik/public-sans）触发 chromium 文本绘制叠印
+     （glyph 画错位、多层叠压不可读——数据流页「组件重叠」用户报告的根因；
+     DOM 盒几何正常、仅绘制层错乱，dev/dist 一致、8/10 variable 字体中招，
+     static 与 Geist/Mona Sans variable 对照清晰，包 5.3.0 已最新无升级路径）。
+     全部换 static 400-700 档，family 名去 " Variable" 后缀（tokens.css 同步）。
+     Geist / Mona Sans variable 实测不叠，保留。 */
 
-/* variable 版（wght 单文件全字重） */
-@import "@fontsource-variable/space-grotesk";  /* charcoal / warm-paper（基准对） */
-@import "@fontsource-variable/inter";          /* midnight（Linear 真身）+ mac/openai 回落 */
-@import "@fontsource-variable/geist";          /* graphite（Vercel 真身本尊） */
-@import "@fontsource-variable/mona-sans";      /* github（GitHub 官方开源真身） */
-@import "@fontsource-variable/figtree";        /* arc（圆润软玻璃） */
-@import "@fontsource-variable/cabin";          /* ember（人文暖，炉膛手作） */
-@import "@fontsource-variable/nunito";         /* catppuccin / latte（全圆端点粉彩柔） */
-@import "@fontsource-variable/mulish";         /* rose-pine / dawn（细长静谧文艺） */
-@import "@fontsource-variable/rubik";          /* dracula（圆润多巴胺） */
-@import "@fontsource-variable/public-sans";    /* notion（中性克制极简） */
+/* variable 版（wght 单文件全字重；family 名带 " Variable" 后缀——tokens.css 消费处须带后缀） */
+@import "@fontsource-variable/geist";          /* graphite（Vercel 真身本尊）——variable 实测不叠，保留 */
+@import "@fontsource-variable/mona-sans";      /* github（GitHub 官方开源真身）——variable 实测不叠，保留 */
 
-/* static 版（官方无 variable） */
+/* static 版（variable 触发 chromium 叠印 bug 的 8 家换此档 + 官方无 variable 的老字体） */
+@import "@fontsource/space-grotesk/400.css";   /* charcoal / warm-paper（基准对） */
+@import "@fontsource/space-grotesk/500.css";
+@import "@fontsource/space-grotesk/600.css";
+@import "@fontsource/space-grotesk/700.css";
+@import "@fontsource/inter/400.css";           /* midnight（Linear 真身）+ mac/openai 回落 */
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/inter/700.css";
+@import "@fontsource/figtree/400.css";         /* arc（圆润软玻璃） */
+@import "@fontsource/figtree/500.css";
+@import "@fontsource/figtree/600.css";
+@import "@fontsource/figtree/700.css";
+@import "@fontsource/cabin/400.css";           /* ember（人文暖，炉膛手作） */
+@import "@fontsource/cabin/500.css";
+@import "@fontsource/cabin/600.css";
+@import "@fontsource/cabin/700.css";
+@import "@fontsource/nunito/400.css";          /* catppuccin / latte（全圆端点粉彩柔） */
+@import "@fontsource/nunito/500.css";
+@import "@fontsource/nunito/600.css";
+@import "@fontsource/nunito/700.css";
+@import "@fontsource/mulish/400.css";          /* rose-pine / dawn（细长静谧文艺） */
+@import "@fontsource/mulish/500.css";
+@import "@fontsource/mulish/600.css";
+@import "@fontsource/mulish/700.css";
+@import "@fontsource/rubik/400.css";           /* dracula（圆润多巴胺） */
+@import "@fontsource/rubik/500.css";
+@import "@fontsource/rubik/600.css";
+@import "@fontsource/rubik/700.css";
+@import "@fontsource/public-sans/400.css";     /* notion（中性克制极简） */
+@import "@fontsource/public-sans/500.css";
+@import "@fontsource/public-sans/600.css";
+@import "@fontsource/public-sans/700.css";
 @import "@fontsource/barlow/400.css";          /* mission（加州公路牌血统，工程硬朗） */
 @import "@fontsource/barlow/600.css";
 @import "@fontsource/barlow/700.css";
