@@ -107,6 +107,73 @@ async def test_gate_queues_until_slot_released(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_gate_descriptor_carries_ws_cap(tmp_path):
+    """ws 并发上限随 descriptor 进闸门：env_overrides 的
+    SUPERNOVA_WS_SCAN_CONCURRENCY 解析为 int 塞进 descriptor（闸门双维判定的
+    输入；闸门段先于 setup_display 的 set_scan_env，ws_getenv 层不可用）。"""
+    g = gate_mod._gate()
+    captured: list = []
+    calls: list = []
+
+    @activity.defn
+    async def setup_display(i):
+        calls.append("setup_display")
+        captured.append(dict(g.held["w-gate-cap"].descriptor))
+
+    async with await WorkflowEnvironment.start_local() as env:
+        async with Worker(env.client, task_queue="tq-gate",
+                          workflows=[WhiteboxScanWorkflow],
+                          activities=[gate_mod.scan_gate_try_acquire,
+                                      gate_mod.scan_gate_release, setup_display]):
+            with pytest.raises(Exception):  # 死于未注册的主体 activity
+                await asyncio.wait_for(
+                    env.client.execute_workflow(
+                        WhiteboxScanWorkflow.run,
+                        _inp(tmp_path, env_overrides={
+                            "SUPERNOVA_WS_SCAN_CONCURRENCY": "2"}),
+                        id="w-gate-cap", task_queue="tq-gate"),
+                    timeout=30)
+            for _ in range(50):
+                if "w-gate-cap" not in g.candidate_ids():
+                    break
+                await asyncio.sleep(0.1)
+    assert "setup_display" in calls
+    assert captured and captured[0]["ws_cap"] == 2
+
+
+@pytest.mark.asyncio
+async def test_gate_descriptor_omits_ws_cap_when_unset(tmp_path):
+    """未配置的 ws 不带 ws_cap 键（快照/面板据键存在性区分「配置了上限」）。"""
+    g = gate_mod._gate()
+    captured: list = []
+    calls: list = []
+
+    @activity.defn
+    async def setup_display(i):
+        calls.append("setup_display")
+        captured.append(dict(g.held["w-gate-nocap"].descriptor))
+
+    async with await WorkflowEnvironment.start_local() as env:
+        async with Worker(env.client, task_queue="tq-gate",
+                          workflows=[WhiteboxScanWorkflow],
+                          activities=[gate_mod.scan_gate_try_acquire,
+                                      gate_mod.scan_gate_release, setup_display]):
+            with pytest.raises(Exception):
+                await asyncio.wait_for(
+                    env.client.execute_workflow(
+                        WhiteboxScanWorkflow.run,
+                        _inp(tmp_path, env_overrides={"SUPERNOVA_LLM_TRACK_ENABLED": "1"}),
+                        id="w-gate-nocap", task_queue="tq-gate"),
+                    timeout=30)
+            for _ in range(50):
+                if "w-gate-nocap" not in g.candidate_ids():
+                    break
+                await asyncio.sleep(0.1)
+    assert "setup_display" in calls
+    assert captured and "ws_cap" not in captured[0]
+
+
+@pytest.mark.asyncio
 async def test_gate_queue_full_fails_workflow(tmp_path):
     g = gate_mod._gate()
     g.preload(["holder-1"])            # capacity=1 占满

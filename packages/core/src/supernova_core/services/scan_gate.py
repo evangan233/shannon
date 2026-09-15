@@ -16,6 +16,7 @@ spec: docs/superpowers/specs/2026-09-08-worker-scan-gate-design.md
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass
@@ -26,6 +27,35 @@ from temporalio import activity
 
 GATE_POLL_SECONDS = 5.0          # workflow 侧排队轮询间隔；测试 monkeypatch 调小
 _ACTIVITY_TIMEOUT = timedelta(seconds=30)
+
+# per-workspace 并发上限键（2026-09-15）：ws 配置页 env 文本框 → SCAN_ENV_KEYS 白名单
+# → PipelineInput.env_overrides → 闸门 descriptor 携带。闸门段先于 setup_display
+# （set_scan_env 注入点），ws_getenv 覆盖层在闸门 activity 里尚不可用，故走 descriptor。
+WS_CAP_ENV_KEY = "SUPERNOVA_WS_SCAN_CONCURRENCY"
+
+_log = logging.getLogger(__name__)
+
+
+def gate_ws_cap_from_overrides(overrides: dict[str, str] | None) -> int | None:
+    """提交端从 env overrides 解析 ws 并发上限（三类 workflow 构造 descriptor 用）。
+
+    返回 int>=1；未设 / 畸形 / <=0 → None（= 该 ws 不设专属上限，仅受全局容量）。
+    容错契约对齐 concurrency.get_max_concurrent：畸形值 warning 不 raise——
+    ws 文本框手输，不许崩扫描。clamp 到全局容量在闸门侧（_effective_ws_cap），
+    workflow sandbox 不 import worker 进程常量。
+    """
+    raw = (overrides or {}).get(WS_CAP_ENV_KEY)
+    if raw is None:
+        return None
+    try:
+        val = int(raw.strip())
+    except ValueError:
+        _log.warning("%s=%r not an int; ws cap ignored", WS_CAP_ENV_KEY, raw)
+        return None
+    if val < 1:
+        _log.warning("%s=%d must be >=1; ws cap ignored", WS_CAP_ENV_KEY, val)
+        return None
+    return val
 
 
 @dataclass
@@ -64,14 +94,42 @@ class ScanGate:
             self._persist()  # 入列即落盘：web queued 档 + 面板 waiting 吃快照
             # （granted/release/reap/preload 之外唯一的状态变化路径，曾漏——
             # 快照停在旧状态致排队任务误显已中断、面板看不到排队队列）
-        earliest = next(iter(self.waiting))
-        if len(self.held) < self.capacity and workflow_id == earliest:
-            self.held[workflow_id] = _Holder(
-                self.waiting.pop(workflow_id).descriptor, time.time())
-            self._persist()
-            return {**r_base, "granted": True, "queue_full": False, "position": 0}
+        if len(self.held) < self.capacity:
+            # per-ws 上限下的近似 FIFO（2026-09-15）：按 first_seen 序找第一个未被
+            # 自己 ws cap 挡住的 waiter——是调用者则授予；被挡的跳过（否则一个 ws
+            # 大批量排队会 head-of-line 全局饿死）；未被挡的更早者照旧优先（授予
+            # 只发生在该 waiter 自己 poll 时，轮询语义不变）。
+            for wf in self.waiting:
+                if self._ws_admission_blocked(self.waiting[wf].descriptor):
+                    continue
+                if wf != workflow_id:
+                    break
+                self.held[workflow_id] = _Holder(
+                    self.waiting.pop(workflow_id).descriptor, time.time())
+                self._persist()
+                return {**r_base, "granted": True, "queue_full": False, "position": 0}
         return {**r_base, "granted": False, "queue_full": False,
                 "position": list(self.waiting).index(workflow_id) + 1}
+
+    def _effective_ws_cap(self, descriptor: dict) -> int | None:
+        """descriptor 的生效 ws 上限：未配置 / 空 ws → None（仅全局容量）；
+        否则 clamp 到全局容量——「无论怎么配都不会大于全局」的规范化出口。"""
+        ws_cap = descriptor.get("ws_cap")
+        if not descriptor.get("ws") or not isinstance(ws_cap, int):
+            return None
+        return min(ws_cap, self.capacity)
+
+    def _ws_admission_blocked(self, descriptor: dict) -> bool:
+        """该 descriptor 的 ws 持有数已达其上限 → 挡住（空 ws 的 bootstrap 预占
+        条目不归属任何 ws，不计数——重启窗口内 ws cap 可能短暂虚高，全局容量
+        仍由 len(held) < capacity 硬保证，保守无害方向）。"""
+        cap = self._effective_ws_cap(descriptor)
+        if cap is None:
+            return False
+        ws = descriptor["ws"]
+        held_in_ws = sum(
+            1 for h in self.held.values() if h.descriptor.get("ws") == ws)
+        return held_in_ws >= cap
 
     def release(self, workflow_id: str) -> None:
         changed = self.held.pop(workflow_id, None) is not None
@@ -99,13 +157,20 @@ class ScanGate:
         return list(self.held) + list(self.waiting)
 
     def snapshot(self) -> dict:
+        def _desc_view(d: dict) -> dict:
+            # ws_cap 展示生效值（clamp 到全局容量）：面板显示 x/cap 用不误导的
+            # 口径——配置原文 8 显示成 2/8 会谎报全局约束力。
+            d = dict(d)
+            if isinstance(d.get("ws_cap"), int):
+                d["ws_cap"] = min(d["ws_cap"], self.capacity)
+            return d
         return {
             "capacity": self.capacity,
             "max_waiting": self.max_waiting,
-            "held": [{"workflow_id": wf, **h.descriptor, "since": h.acquired_at}
-                     for wf, h in self.held.items()],
-            "waiting": [{"workflow_id": wf, **w.descriptor, "since": w.first_seen}
-                        for wf, w in self.waiting.items()],
+            "held": [{"workflow_id": wf, **_desc_view(h.descriptor),
+                      "since": h.acquired_at} for wf, h in self.held.items()],
+            "waiting": [{"workflow_id": wf, **_desc_view(w.descriptor),
+                         "since": w.first_seen} for wf, w in self.waiting.items()],
         }
 
     def _persist(self) -> None:

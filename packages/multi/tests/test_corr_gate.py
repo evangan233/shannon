@@ -21,13 +21,14 @@ def _gate_env(monkeypatch):
     gate_mod.reset_gate_for_tests()
 
 
-def _inp(tmp_path):
+def _inp(tmp_path, **kw):
     return CorrelationPipelineInput(
         config_path=str(tmp_path / "config.yaml"),
         repo_workspace_paths={"checkout": str(tmp_path / "ws" / "checkout"),
                               "payment": str(tmp_path / "ws" / "payment")},
         out_ws_dir=str(tmp_path / "ws" / "scans" / "corr-main"),
         event_file=str(tmp_path / "ws" / "scans" / "corr-main" / "events.ndjson"),
+        **kw,
     )
 
 
@@ -53,6 +54,35 @@ async def test_correlation_passes_gate_and_runs(tmp_path):
                 timeout=30)
     assert done == [True]
     assert gate_mod._gate().candidate_ids() == []  # finally release 已清
+
+
+@pytest.mark.asyncio
+async def test_correlation_gate_descriptor_carries_ws_cap(tmp_path):
+    """ws 并发上限随 descriptor 进闸门（对齐 whitebox/blackbox 同名测试；关联
+    阶段的 ws 从 event_file 反推，cap 照样归属主 ws——跨仓子仓同理各占一槽
+    全算主 ws 持有）。"""
+    g = gate_mod._gate()
+    captured: list = []
+
+    @activity.defn
+    async def run_correlation_activity(inp):
+        captured.append(dict(g.held["w-corr-cap"].descriptor))
+        return {"status": "completed"}
+
+    async with await WorkflowEnvironment.start_local() as env:
+        async with Worker(env.client, task_queue="tq-corr-gate",
+                          workflows=[CorrelationScanWorkflow],
+                          activities=[gate_mod.scan_gate_try_acquire,
+                                      gate_mod.scan_gate_release,
+                                      run_correlation_activity]):
+            await asyncio.wait_for(
+                env.client.execute_workflow(
+                    CorrelationScanWorkflow.run,
+                    _inp(tmp_path, env_overrides={
+                        "SUPERNOVA_WS_SCAN_CONCURRENCY": "2"}),
+                    id="w-corr-cap", task_queue="tq-corr-gate"),
+                timeout=30)
+    assert captured and captured[0]["ws_cap"] == 2
 
 
 @pytest.mark.asyncio

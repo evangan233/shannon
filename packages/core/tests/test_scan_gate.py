@@ -138,6 +138,93 @@ def test_gate_ws_for_descriptor_prefers_event_file_workspace():
     assert gate_ws_for_descriptor(None, None) == ""
 
 
+# ── per-workspace 并发上限（SUPERNOVA_WS_SCAN_CONCURRENCY，2026-09-15）──
+
+def test_ws_cap_blocks_second_same_ws_when_global_has_room():
+    """全局有空槽但本 ws 持有已达上限 → 不授予（用户需求核心：ws 配 2 只跑 2）。"""
+    g = _mk(capacity=3)
+    g.try_acquire("a1", {"ws": "A", "ws_cap": 2})
+    g.try_acquire("a2", {"ws": "A", "ws_cap": 2})
+    r = g.try_acquire("a3", {"ws": "A", "ws_cap": 2})
+    assert r["granted"] is False
+    assert r["queue_full"] is False  # 是本 ws 满，不是队满
+
+
+def test_ws_cap_skips_blocked_earliest_grants_other_ws():
+    """earliest 被自己 ws cap 挡住时不许 head-of-line 全局饿死：后面的其他 ws 先走。"""
+    g = _mk(capacity=3)
+    g.try_acquire("a1", {"ws": "A", "ws_cap": 2})
+    g.try_acquire("a2", {"ws": "A", "ws_cap": 2})
+    assert g.try_acquire("a3", {"ws": "A", "ws_cap": 2})["granted"] is False  # a3 排队
+    # b1 排在 a3 之后：全局有空槽（3-2=1）且 a3 被自己 cap 挡 → b1 越过 a3 获授
+    assert g.try_acquire("b1", {"ws": "B"})["granted"] is True
+    # a3 依旧被挡（A 持有 2 未变）
+    assert g.try_acquire("a3", {"ws": "A", "ws_cap": 2})["granted"] is False
+
+
+def test_ws_cap_release_restores_same_ws_admission():
+    """本 ws 释放后同 ws 等待者可进（cap 是滑动窗口，非死锁）。"""
+    g = _mk(capacity=3)
+    g.try_acquire("a1", {"ws": "A", "ws_cap": 2})
+    g.try_acquire("a2", {"ws": "A", "ws_cap": 2})
+    g.try_acquire("a3", {"ws": "A", "ws_cap": 2})  # 排队
+    g.release("a1")
+    assert g.try_acquire("a3", {"ws": "A", "ws_cap": 2})["granted"] is True
+
+
+def test_ws_cap_clamped_to_global_capacity_in_snapshot(tmp_path):
+    """ws 配 8 > 全局 2：授予行为无差异（全局先挡），但快照展示生效值 = min(8, 2)。
+
+    clamp 是「无论怎么配都不会大于全局」的规范化出口——前端面板吃快照显示 x/cap，
+    生效值才是不误导的口径（配置原文 8 显示成 2/8 会谎报全局约束力）。
+    """
+    sf = tmp_path / "gate_state.json"
+    g = _mk(capacity=2, state_path=sf)
+    g.try_acquire("a1", {"ws": "A", "ws_cap": 8, "scan_id": "s1"})
+    g.try_acquire("a2", {"ws": "A", "ws_cap": 8, "scan_id": "s2"})
+    g.try_acquire("b1", {"ws": "B", "scan_id": "s3"})  # 全局满排队
+    data = json.loads(sf.read_text())
+    assert all(h["ws_cap"] == 2 for h in data["held"])
+    assert data["waiting"][0].get("ws_cap") is None  # 未配置的 ws 不带键
+
+
+def test_ws_cap_earlier_unblocked_waiter_still_wins():
+    """跳过只发生在「被自己 ws cap 挡住」的 waiter 上：未被挡的更早者照旧优先。
+
+    锁死原 FIFO 语义（test_fifo_earliest_waiter_wins_slot 的 ws-cap 版）——
+    b1（ws=B 无 cap）排在 a3（ws=A 被挡）之前时，b1 poll 也不许越过未受阻的更早者。
+    """
+    g = _mk(capacity=1)
+    g.try_acquire("x1", {"ws": "X"})          # 唯一槽
+    g.try_acquire("b1", {"ws": "B"})          # earliest，未被挡
+    g.try_acquire("a3", {"ws": "A", "ws_cap": 1})  # 更晚，且 A 持有 0 < 1 未挡
+    g.release("x1")
+    # a3 poll：b1 在前且未被挡 → a3 不能插队
+    assert g.try_acquire("a3", {"ws": "A", "ws_cap": 1})["granted"] is False
+    assert g.try_acquire("b1", {"ws": "B"})["granted"] is True
+
+
+def test_preload_empty_ws_not_counted_for_ws_cap():
+    """bootstrap 预占的 descriptor ws 为空串：不归属任何 ws 计数（重启窗口保守）。"""
+    g = _mk(capacity=5)
+    g.preload(["ghost1", "ghost2"])           # ws=""
+    g.try_acquire("a1", {"ws": "A", "ws_cap": 1})   # A 计数 0（ghost 不算 A）
+    g.try_acquire("a2", {"ws": "A", "ws_cap": 1})   # A 持有 1 >= 1 → 排队
+    assert "a1" in g.held and "a2" in g.waiting
+
+
+def test_gate_ws_cap_from_overrides_parsing():
+    """提交端解析 helper：int>=1 生效；未设/畸形/<=0 → None（不限），不 raise。"""
+    from supernova_core.services.scan_gate import gate_ws_cap_from_overrides
+    assert gate_ws_cap_from_overrides({"SUPERNOVA_WS_SCAN_CONCURRENCY": "2"}) == 2
+    assert gate_ws_cap_from_overrides({"SUPERNOVA_WS_SCAN_CONCURRENCY": " 3 "}) == 3
+    assert gate_ws_cap_from_overrides({}) is None
+    assert gate_ws_cap_from_overrides(None) is None
+    assert gate_ws_cap_from_overrides({"SUPERNOVA_WS_SCAN_CONCURRENCY": "abc"}) is None
+    assert gate_ws_cap_from_overrides({"SUPERNOVA_WS_SCAN_CONCURRENCY": "0"}) is None
+    assert gate_ws_cap_from_overrides({"SUPERNOVA_WS_SCAN_CONCURRENCY": "-1"}) is None
+
+
 def test_activity_wrappers_delegate_to_gate():
     """activity 包装：workflow_id 取 activity.info()，逻辑委托进程级 gate。"""
     import asyncio

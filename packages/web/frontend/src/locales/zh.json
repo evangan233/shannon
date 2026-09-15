@@ -241,6 +241,7 @@
     "waiting": "排队中 ({{n}})",
     "waitHint": "入队 · 已等待",
     "own": "本工作区",
+    "wsCap": "本工作区并发上限：{{held}}/{{cap}}（SUPERNOVA_WS_SCAN_CONCURRENCY）",
     "kinds": {
       "whitebox": "白盒",
       "mr": "MR",

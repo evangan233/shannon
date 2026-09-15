@@ -25,12 +25,13 @@ def _gate_env(monkeypatch):
     gate_mod.reset_gate_for_tests()
 
 
-def _inp(tmp_path):
+def _inp(tmp_path, **kw):
     return BlackboxPipelineInput(
         web_url="https://api.example.com",
         workspace_name="ws-bb-gate",
         workspaces_root=str(tmp_path),
         event_file=str(tmp_path / "ws-bb-gate" / "scans" / "s1" / "events.ndjson"),
+        **kw,
     )
 
 
@@ -63,6 +64,40 @@ async def test_blackbox_gate_then_setup_display(tmp_path):
                 await asyncio.sleep(0.1)
     assert "setup_display" in calls
     assert gate_mod._gate().candidate_ids() == []
+
+
+@pytest.mark.asyncio
+async def test_blackbox_gate_descriptor_carries_ws_cap(tmp_path):
+    """ws 并发上限随 descriptor 进闸门（对齐 whitebox 同名测试；黑盒 add-run/
+    rerun 走同 workflow，同样吃本 ws 的 cap）。"""
+    g = gate_mod._gate()
+    captured: list = []
+    calls: list = []
+
+    @activity.defn
+    async def setup_display(i):
+        calls.append("setup_display")
+        captured.append(dict(g.held["w-bb-cap"].descriptor))
+
+    async with await WorkflowEnvironment.start_local() as env:
+        async with Worker(env.client, task_queue="tq-bb-gate",
+                          workflows=[BlackboxScanWorkflow],
+                          activities=[gate_mod.scan_gate_try_acquire,
+                                      gate_mod.scan_gate_release, setup_display]):
+            with pytest.raises(Exception):  # 死于 setup_display 后首个未注册 activity
+                await asyncio.wait_for(
+                    env.client.execute_workflow(
+                        BlackboxScanWorkflow.run,
+                        _inp(tmp_path, env_overrides={
+                            "SUPERNOVA_WS_SCAN_CONCURRENCY": "2"}),
+                        id="w-bb-cap", task_queue="tq-bb-gate"),
+                    timeout=30)
+            for _ in range(50):
+                if "w-bb-cap" not in g.candidate_ids():
+                    break
+                await asyncio.sleep(0.1)
+    assert "setup_display" in calls
+    assert captured and captured[0]["ws_cap"] == 2
 
 
 @pytest.mark.asyncio

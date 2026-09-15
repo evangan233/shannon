@@ -241,6 +241,7 @@
     "waiting": "Queued ({{n}})",
     "waitHint": "queued · waiting",
     "own": "This workspace",
+    "wsCap": "Workspace concurrency limit: {{held}}/{{cap}} (SUPERNOVA_WS_SCAN_CONCURRENCY)",
     "kinds": {
       "whitebox": "Whitebox",
       "mr": "MR",

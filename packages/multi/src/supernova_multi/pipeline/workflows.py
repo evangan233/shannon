@@ -18,7 +18,8 @@ from temporalio.exceptions import ApplicationError
 with workflow.unsafe.imports_passed_through():
     from supernova_core.services.scan_gate import (
         acquire_gate_slot, release_gate_slot,
-        gate_scan_id_from_event_file, gate_ws_from_path)
+        gate_scan_id_from_event_file, gate_ws_from_path,
+        gate_ws_cap_from_overrides)
     from supernova_core.agents.runner import UsageSink, run_claude_prompt
     from supernova_core.agents.tool_audit_logger import ToolAuditLogger
     from supernova_core.config.parser import parse_multi_repo_config
@@ -66,6 +67,10 @@ class CorrelationScanWorkflow:
             "ws": gate_ws_from_path(inp.event_file or inp.out_ws_dir),
             "scan_id": gate_scan_id_from_event_file(inp.event_file or None),
             "label": " + ".join(sorted(inp.repo_workspace_paths)) or "correlation",
+            # ws 并发上限（2026-09-15）：关联阶段与跨仓子仓的 ws 都从 event_file
+            # 反推主 ws——cap 归属主 ws，跨仓 N 子仓各占一槽全计主 ws 持有。
+            **({} if (ws_cap := gate_ws_cap_from_overrides(inp.env_overrides))
+               is None else {"ws_cap": ws_cap}),
         })
         try:
             return await workflow.execute_activity(

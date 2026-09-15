@@ -93,6 +93,26 @@ describe("ScanGatePanel", () => {
     expect(ownRow.querySelector("span.text-primary")).toBeNull();
   });
 
+  it("ws 专属上限显示：配置了的 ws 在 ws 名旁显示 持有数/上限（排队原因可判读）", () => {
+    // 金融配了 SUPERNOVA_WS_SCAN_CONCURRENCY=2 且已占满：占用两条 + 排队一条都
+    // 显示 2/2（排队者被本 ws cap 挡住一目了然）；未配置的 dev 不带上限。
+    const capSnap: ScanGateSnapshot = {
+      capacity: 5,
+      max_waiting: 50,
+      held: [
+        { ws: "金融", scan_id: "s1", kind: "whitebox", label: "a@main", since: 1, ws_cap: 2 },
+        { ws: "金融", scan_id: "s2", kind: "whitebox", label: "b@main", since: 1, ws_cap: 2 },
+      ],
+      waiting: [
+        { ws: "金融", scan_id: "s3", kind: "whitebox", label: "c@main", since: 2, ws_cap: 2 },
+        { ws: "dev", scan_id: "s4", kind: "mr", label: "d!12", since: 2 },
+      ],
+    };
+    renderPanel(<ScanGatePanel snapshot={capSnap} />);
+    // 恰 3 处（金融占用 2 + 排队 1）；dev 未配置不带标记（若带了会变成 4）
+    expect(screen.getAllByText("2/2").length).toBe(3);
+  });
+
   it("ws+scan_id 齐全的条目链接到扫描详情", () => {
     renderPanel(<ScanGatePanel snapshot={snap} />);
     expect(screen.getByRole("link", { name: "payment-svc@main" }))

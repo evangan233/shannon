@@ -51,8 +51,8 @@ function SectionLabel({ children, hint }: { children: ReactNode; hint?: string }
  *  列宽（2026-09-15 修「ws 字段被挤到看不见」）：状态点列收窄（点仅 6px 无需宽列），
  *  ws 列从固定 4.5rem 改弹性（minmax 4.5rem 起步、与任务名列按约 1:1.4 分剩余宽）——
  *  长 ws 名可伸展可读，truncate 只在极限窄屏生效。 */
-function EntryRow({ e, running, own }: {
-  e: ScanGateEntry; running?: boolean; own?: boolean;
+function EntryRow({ e, running, own, wsHeld }: {
+  e: ScanGateEntry; running?: boolean; own?: boolean; wsHeld?: number;
 }) {
   const { t } = useTranslation();
   const kind = e.kind && e.kind !== "unknown"
@@ -71,6 +71,16 @@ function EntryRow({ e, running, own }: {
         title={e.ws}
       >
         {e.ws || "—"}
+        {/* ws 专属上限（2026-09-15）：持有数/上限随 ws 名展示——占用段答「本 ws 用
+            了几个」，排队段答「为什么排队」（本 ws 满 ≠ 全局满）；未配置不带标记。 */}
+        {e.ws_cap != null && wsHeld != null && (
+          <span
+            className="ml-1 font-mono text-[10.5px] tabular-nums text-muted-foreground/90"
+            title={t("scanGate.wsCap", { held: wsHeld, cap: e.ws_cap })}
+          >
+            {wsHeld}/{e.ws_cap}
+          </span>
+        )}
       </span>
       {kind ? (
         <Badge variant="outline" className="justify-self-start px-1.5 font-mono text-[10.5px] text-muted-foreground">
@@ -109,6 +119,11 @@ export function ScanGatePanel({ snapshot, currentWs }: {
   const { t } = useTranslation();
   if (!snapshot || (!snapshot.held.length && !snapshot.waiting.length)) return null;
   const { held, waiting, capacity } = snapshot;
+  // ws → 当前持有数（占槽段按 ws 计数）：ws_cap 标记的分子——排队/占用两段同口径。
+  const wsHeld = new Map<string, number>();
+  for (const e of held) {
+    if (e.ws) wsHeld.set(e.ws, (wsHeld.get(e.ws) ?? 0) + 1);
+  }
   return (
     <Card data-testid="scan-gate-panel" className="space-y-2 p-3">
       {/* 标题行：[标题] [x/capacity 计数右置]——「空几格」语义由此计数接管。 */}
@@ -125,7 +140,8 @@ export function ScanGatePanel({ snapshot, currentWs }: {
           </SectionLabel>
           {held.map((e) => (
             <EntryRow key={e.workflow_id ?? e.scan_id} e={e} running
-                      own={!!currentWs && e.ws === currentWs} />
+                      own={!!currentWs && e.ws === currentWs}
+                      wsHeld={e.ws ? wsHeld.get(e.ws) : undefined} />
           ))}
         </section>
       )}
@@ -140,7 +156,8 @@ export function ScanGatePanel({ snapshot, currentWs }: {
                className="max-h-56 space-y-1 overflow-y-auto overscroll-contain pr-1">
             {waiting.map((e) => (
               <EntryRow key={e.workflow_id ?? e.scan_id} e={e}
-                        own={!!currentWs && e.ws === currentWs} />
+                        own={!!currentWs && e.ws === currentWs}
+                        wsHeld={e.ws ? wsHeld.get(e.ws) : undefined} />
             ))}
           </div>
         </section>

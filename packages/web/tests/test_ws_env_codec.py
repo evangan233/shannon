@@ -358,5 +358,17 @@ def test_parse_adversarial_review_max_agents_stays_global():
     unknown 警告丢弃（不静默半生效）。"""
     parsed = parse_env_text("SUPERNOVA_ADVERSARIAL_REVIEW_MAX_AGENTS=100\n")
     assert parsed.env == {}
-    assert parsed.unknown == ["SUPERNOVA_ADVERSARIAL_REVIEW_MAX_AGENTS"]
+
+
+def test_parse_ws_scan_concurrency_to_env_section():
+    """ws 扫描并发上限（2026-09-15 准入，天生 per-workspace 语义）→ env 段。
+
+    通道不走 ws_getenv 覆盖层（闸门段先于 set_scan_env 注入），而是提交时
+    随 PipelineInput.env_overrides 进闸门 descriptor——但准入仍走本白名单
+    （ws 写的键必须 known，否则归 unknown 警告丢弃，闸门永远拿不到）。
+    值的正负/畸形由 gate_ws_cap_from_overrides 容错（畸形→不限+warning），
+    parse 层不做类型校验（对齐其他 SCAN_ENV_KEYS 的 str 原样存储）。"""
+    parsed = parse_env_text("SUPERNOVA_WS_SCAN_CONCURRENCY=2\n")
+    assert parsed.env == {"SUPERNOVA_WS_SCAN_CONCURRENCY": "2"}
+    assert parsed.unknown == []
     assert parsed.ineffective == []

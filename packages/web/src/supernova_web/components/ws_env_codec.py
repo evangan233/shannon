@@ -94,6 +94,14 @@ SCAN_ENV_KEYS: frozenset[str] = frozenset({
     "SUPERNOVA_ADVERSARIAL_REVIEW_CONCURRENCY",
     "SUPERNOVA_ADVERSARIAL_REVIEW_MAX_TURNS",
     "SUPERNOVA_ADVERSARIAL_REVIEW_SHARD_MAX_CARDS",
+    # 2026-09-15 准入（天生 per-workspace 语义）：ws 扫描并发上限——本 ws 同时
+    # 在跑的扫描 workflow 数（闸门双维判定的第二维，clamp 到全局
+    # SUPERNOVA_SCAN_GATE_CAPACITY）。与上面扫描期旋钮不同路：闸门段先于
+    # setup_display（set_scan_env 注入点），不走 ws_getenv 覆盖层，而是提交时
+    # 随 PipelineInput.env_overrides 进闸门 descriptor（gate_ws_cap_from_overrides
+    # 解析）。全局容量 GATE_CAPACITY 对齐 CHAIN_VERDICT_MAX_AGENTS 先例有意
+    # 不进（全局资源护栏留 worker env）。
+    "SUPERNOVA_WS_SCAN_CONCURRENCY",
 })
 
 # 启动期配置（worker main() 启动时读一次，ws 覆盖不生效）→ 警告不阻塞，不进 fields/env。

@@ -523,6 +523,9 @@ export type ScanGateEntry = {
   kind?: string;
   label?: string;
   since?: number;
+  /** ws 专属并发上限（SUPERNOVA_WS_SCAN_CONCURRENCY，2026-09-15）：快照带的是
+   *  生效值（闸门侧已 clamp 到全局 capacity）；无键 = 该 ws 未配置（仅全局约束）。 */
+  ws_cap?: number;
 };
 export type ScanGateSnapshot = {
   capacity: number;

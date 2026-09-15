@@ -51,7 +51,8 @@ with workflow.unsafe.imports_passed_through():
     from . import activities
     from supernova_core.services.scan_gate import (
         acquire_gate_slot, release_gate_slot,
-        gate_scan_id_from_event_file, gate_ws_for_descriptor)
+        gate_scan_id_from_event_file, gate_ws_for_descriptor,
+        gate_ws_cap_from_overrides)
     from supernova_core.utils.progress import (
         AgentOutcome,
         exploit_result_to_outcome,
@@ -80,6 +81,11 @@ class BlackboxScanWorkflow:
             "ws": gate_ws_for_descriptor(input.workspace_name, input.event_file),
             "scan_id": gate_scan_id_from_event_file(input.event_file),
             "label": input.web_url,
+            # ws 并发上限（2026-09-15）：闸门段先于 setup_display（set_scan_env 注入
+            # 点），从 input.env_overrides 提交时快照解析携带；未配置不带键。
+            # add-run / rerun 走同 workflow，同吃本 ws 的 cap。
+            **({} if (ws_cap := gate_ws_cap_from_overrides(input.env_overrides))
+               is None else {"ws_cap": ws_cap}),
         })
         try:
             self._state.start_time = workflow.time_ns() / 1e9
