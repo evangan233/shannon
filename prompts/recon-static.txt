@@ -27,9 +27,9 @@ Vulnerability classes to test: {{VULN_CLASSES_TESTED}}
 
 <methodology>
 
-### Phase 1: Multi-Angle Source Mapping (5 parallel Task agents)
+### Phase 1: Multi-Angle Source Mapping (6 parallel Task agents)
 
-Launch FIVE Task agents IN PARALLEL in a single message, one per enumeration angle.
+Launch SIX Task agents IN PARALLEL in a single message, one per enumeration angle.
 Each angle catches different blind spots; merge their results (deduplicated) into Section 4.
 Each Task agent MUST return BOTH (a) the endpoints it found
 (METHOD /path + file:line + handler) AND (b) a source anchor count — how many route
@@ -49,6 +49,16 @@ the Section 4.3 reconciliation; do not omit it.
 - **Angle 5 — Gateway config:** nginx `location`/`proxy_pass`, ingress routes, gateway
   config. Count proxied paths. (If no gateway/ingress config exists in the repo,
   classify `not-applicable` with grep evidence.)
+- **Angle 6 — RPC & socket service handlers:** gRPC service implementation methods
+  (implementations of pb-generated server interfaces, e.g. Go `func (s *Server)
+  M(ctx context.Context, req *pb.XxxRequest)`; Java `StreamObserver` params),
+  Thrift/Dubbo service handlers, raw TCP/UDP socket receive handlers (`net.Conn`
+  read loops), WebSocket message handlers. Count service methods / receive handlers.
+  These are service-to-service entry points — reachable from the internet whenever
+  an upstream gateway forwards public input to them. For a pure-backend RPC/socket
+  service repo (no HTTP routes at all), Angles 1-5 all yield zero and this angle is
+  the sole source of entry points — a zero here with `.proto` files or
+  `RegisterXxxServer` calls present is a `true-miss`, NOT `not-applicable`.
 
 After merging, perform **group detection**: identify routes mapping to the SAME handler
 function — these share processing logic; a vulnerability in the handler affects every
@@ -65,7 +75,7 @@ For each vulnerability class being tested, correlate code patterns with known cl
 Populate §3 / §6 / §7.
 
 ### Step 3.5: Enumeration Reconciliation (MANDATORY before writing Section 4)
-- Sum the source anchor counts returned by the five angles in Phase 1.
+- Sum the source anchor counts returned by the six angles in Phase 1.
 - Compare each angle's anchor count against the deduplicated endpoint set you are about
   to write to Section 4.
 - Produce the `### 4.3 Enumeration Reconciliation` table (one row per angle: anchor count,

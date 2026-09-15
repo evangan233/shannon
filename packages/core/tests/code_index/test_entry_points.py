@@ -356,6 +356,115 @@ class TestFrameworkExpansionG4:
             f"non-route calls must not be detected as http_route, got {bad_routes}"
 
 
+class TestGoRpcSocketEntryPoints:
+    """RPC/Socket 入口（2026-09-15 补齐）：单仓扫描下游 gRPC / socket 服务仓曾零识别。
+
+    根因是两层闸门：detect_entry_points 只认 HTTP handler，而 detect_sources
+    只扫 entry_point_ids 内的函数——entry 不识别，source 规则再全也不生效。
+    """
+
+    def test_go_grpc_service_method_detected(self):
+        """unary RPC 形态签名：(ctx context.Context, req *pb.XxxRequest)。"""
+        block = _block(
+            parameters=["ctx context.Context", "req *pb.ExecRequest"],
+            function_name="ExecRobotCommand",
+            language="go",
+        )
+        eps = detect_entry_points([block], "go")
+        grpc = [e for e in eps if e.entry_type == "grpc_service"]
+        assert len(grpc) == 1
+        assert grpc[0].confidence == 0.70
+        assert grpc[0].needs_llm_review is True
+
+    def test_go_grpc_request_param_name_variants(self):
+        """参数名惯例变体（request/in/msg/input/payload）都识别。"""
+        block = _block(
+            parameters=["ctx context.Context", "request *v1.CreateReq"],
+            function_name="Create",
+            language="go",
+        )
+        eps = detect_entry_points([block], "go")
+        assert any(e.entry_type == "grpc_service" for e in eps)
+
+    def test_go_ctx_with_scalar_params_not_grpc(self):
+        """ctx + 纯标量参数的普通函数不算（收敛误报：无消息指针入参）。"""
+        block = _block(
+            parameters=["ctx context.Context", "id int"],
+            function_name="Get",
+            language="go",
+        )
+        eps = detect_entry_points([block], "go")
+        assert len(eps) == 0
+
+    def test_go_ctx_only_not_grpc(self):
+        block = _block(
+            parameters=["ctx context.Context"],
+            function_name="cleanup",
+            language="go",
+        )
+        eps = detect_entry_points([block], "go")
+        assert len(eps) == 0
+
+    def test_go_req_pointer_without_ctx_not_grpc(self):
+        """无 ctx 的 req 指针函数（纯内部透传）不算。"""
+        block = _block(
+            parameters=["req *pb.ExecRequest"],
+            function_name="validate",
+            language="go",
+        )
+        eps = detect_entry_points([block], "go")
+        assert len(eps) == 0
+
+    def test_go_http_handler_not_double_labeled(self):
+        """HTTP handler 走 http 分支，不重复产 grpc_service。"""
+        block = _block(
+            parameters=["w http.ResponseWriter", "r *http.Request"],
+            function_name="handleUsers",
+            language="go",
+        )
+        eps = detect_entry_points([block], "go")
+        assert len(eps) == 1
+        assert eps[0].entry_type == "http_route"
+
+    def test_go_net_conn_socket_handler(self):
+        block = _block(
+            parameters=["conn net.Conn"],
+            function_name="handleConn",
+            language="go",
+        )
+        eps = detect_entry_points([block], "go")
+        socks = [e for e in eps if e.entry_type == "socket_handler"]
+        assert len(socks) == 1
+        assert socks[0].confidence == 0.70
+        assert socks[0].needs_llm_review is True
+
+    def test_go_websocket_handler(self):
+        block = _block(
+            parameters=["conn *websocket.Conn"],
+            function_name="readPump",
+            language="go",
+        )
+        eps = detect_entry_points([block], "go")
+        assert any(e.entry_type == "socket_handler" for e in eps)
+
+
+class TestJavaGrpcEntryPoints:
+    def test_java_grpc_stream_observer_param(self):
+        """gRPC Java service 实现：参数含 StreamObserver（unary 的 response
+        observer / streaming 皆然）。gRPC 方法无注解，注解检测不覆盖。"""
+        block = _block(
+            parameters=["HelloRequest request",
+                        "StreamObserver<HelloReply> responseObserver"],
+            function_name="sayHello",
+            language="java",
+        )
+        eps = detect_entry_points([block], "java")
+        grpc = [e for e in eps if e.entry_type == "grpc_service"]
+        assert len(grpc) == 1
+        assert grpc[0].confidence == 0.75
+        assert grpc[0].needs_llm_review is True
+
+
 class TestUnknownLanguage:
     def test_unknown_language_returns_empty(self):
         block = _block(language="rust")

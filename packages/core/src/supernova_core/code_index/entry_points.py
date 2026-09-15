@@ -118,6 +118,14 @@ _GO_METHOD_NORM: dict[str, str] = {
     "Get": "GET", "Post": "POST", "Put": "PUT", "Delete": "DELETE", "Patch": "PATCH",
 }
 
+# RPC/Socket 入口（2026-09-15 单仓跨服务补齐）：gRPC service 方法签名
+# （ctx + req 形态消息指针入参；自研内部服务同签名也进——正是「收上游
+# 调用」的宽容语义，靠 source 规则 + verdict 收敛）与 socket 收包 handler。
+# HTTP 分支在前 continue，http handler 不会被重复标。
+_GO_GRPC_CTX = re.compile(r"\bcontext\.Context\b")
+_GO_GRPC_REQ_PTR = re.compile(r"\b(?:req|request|in|msg|input|payload)\s+\*")
+_GO_SOCKET_PARAM = re.compile(r"net\.Conn|websocket\.Conn")
+
 
 # Go
 def _detect_go(blocks: list[FuncBlock]) -> list[EntryPoint]:
@@ -143,6 +151,26 @@ def _detect_go(blocks: list[FuncBlock]) -> list[EntryPoint]:
                 confidence=0.95,
                 evidence="Parameter includes *gin.Context",
                 needs_llm_review=False,
+            ))
+            continue
+
+        if _GO_GRPC_CTX.search(params_str) and _GO_GRPC_REQ_PTR.search(params_str):
+            entry_points.append(EntryPoint(
+                func_block_id=block.id,
+                entry_type="grpc_service",
+                confidence=0.70,
+                evidence="Signature includes context.Context with request-message pointer param",
+                needs_llm_review=True,
+            ))
+            continue
+
+        if _GO_SOCKET_PARAM.search(params_str):
+            entry_points.append(EntryPoint(
+                func_block_id=block.id,
+                entry_type="socket_handler",
+                confidence=0.70,
+                evidence="Parameter includes net.Conn / *websocket.Conn",
+                needs_llm_review=True,
             ))
             continue
 
@@ -459,6 +487,18 @@ def _detect_java(blocks: list[FuncBlock]) -> list[EntryPoint]:
                         needs_llm_review=confidence < LLM_REVIEW_THRESHOLD,
                     ))
                     break
+
+        # gRPC service 实现方法（2026-09-15 单仓跨服务补齐）：无注解，靠
+        # StreamObserver 参数签名识别（unary 的 responseObserver / streaming
+        # 双向流皆然）。
+        if "StreamObserver" in " ".join(block.parameters):
+            entry_points.append(EntryPoint(
+                func_block_id=block.id,
+                entry_type="grpc_service",
+                confidence=0.75,
+                evidence="Parameter includes io.grpc.stub.StreamObserver",
+                needs_llm_review=True,
+            ))
 
     return entry_points
 

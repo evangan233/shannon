@@ -123,7 +123,7 @@ An **exploitable vulnerability** is a confirmed source-to-sink path where the en
 			"source": "param name & file:line. MUST be a SINGLE source — see Source Completeness Rule below.",
 			"authentication_required": "true | false — whether login is required to reach this sink via this route. Check the route definition in the router file for authentication middleware (e.g., thirtyLogin, authGuard, passport). A route WITHOUT auth middleware means the vulnerability is exploitable WITHOUT authentication.",
 			"accessible_routes": "list ALL routes whose handlers reach this sink, with their middleware chains. Format: 'METHOD /path [middleware1, middleware2, ...]' — one entry per route. Example: 'GET /preview/v2 [thirtyLogin()]' and 'GET /preview/iframe-demo []'.",
-			"path": "MUST start with 'METHOD /route' of an HTTP entry when HTTP-reachable (e.g., 'POST /contributions → handleContributionsUpdate → eval'), then the brief hop list (controller → fn → sink).",
+			"path": "MUST start with 'METHOD /route' of an HTTP entry when HTTP-reachable (e.g., 'POST /contributions → handleContributionsUpdate → eval'), then the brief hop list (controller → fn → sink). For a non-HTTP entry, start with 'RPC <service>/<Method>' (e.g., 'RPC RobotCommandService/ExecRobotCommand → buildCommand → db.Raw') or 'SOCK <handler>' for a socket-received frame, then the same hop list.",
 			"sink_call": "file:line and function/method.",
 			"slot_type": "SQL-val | SQL-like | SQL-num | SQL-enum | SQL-ident | CMD-argument | CMD-part-of-string | FILE-path | FILE-include | TEMPLATE-expression | DESERIALIZE-object | PATH-component",
 			"sanitization_observed": "name & file:line (all of them, in order).",
@@ -173,7 +173,7 @@ An **exploitable vulnerability** is a confirmed source-to-sink path where the en
 			    MUST extend the sink search yourself with grep (per the language-specific sink list in
 			    this prompt), covering paths recon did not list. An entire path-prefix family silently
 			    absent from recon is the historical source of false-negatives; do not let it happen here.
-		  - Note: All sources are marked as Tainted until they Hit a Sanitization that matches the sink context. normalizers (lowercasing, trimming, JSON parse, schema decode) — still **tainted**.
+		  - Note: All sources are marked as Tainted until they Hit a Sanitization that matches the sink context. normalizers (lowercasing, trimming, JSON parse, schema decode) — still **tainted**. Input arriving via non-HTTP entry points — RPC request fields (gRPC/Thrift/Dubbo message fields consumed by a service method), socket-received frames/messages (raw TCP/UDP reads, WebSocket messages) — is tainted the same way: whether the upstream caller is attacker-influenced usually lives outside this repo, so treat the delivered payload as attacker-controlled until proven otherwise.
     - **2) Trace Data Flow Paths from Source to Sink**
 		    - For each source, your goal is to identify every unique "Data Flow Path" to a database sink. A path is a distinct route the data takes through the code.
 		    - **Path Forking:** If a single source variable is used in a way that leads to multiple, different database queries (sinks), you must treat each route as a **separate and independent path for analysis**. For example, if `userInput` is passed to both `updateProfile()` and `auditLog()`, you will analyze the "userInput → updateProfile → DB_UPDATE" path and the "userInput → auditLog → DB_INSERT" path as two distinct units.
@@ -321,6 +321,7 @@ An **exploitable vulnerability** is a confirmed source-to-sink path where the en
 
 * Test **all** inputs identified in recon: URL params, POST form data, HTTP headers, cookies, JSON API parameters, file upload filenames, hidden form fields, multipart form data.
 * Include GraphQL queries/mutations (trace arguments into resolvers and onward to data access).
+* Include non-HTTP entry inputs when the service has them: RPC request fields (gRPC/Thrift/Dubbo message fields read inside a service method — `req.Xxx` / `req.GetXxx()` / protobuf getters) and socket-received data (TCP/UDP frames, WebSocket messages) — these are attacker-influenced whenever an upstream gateway forwards public input to this service.
 </coverage_requirements>
 
 <analysis_coverage_requirements>

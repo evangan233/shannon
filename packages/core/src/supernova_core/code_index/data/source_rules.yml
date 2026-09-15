@@ -7,6 +7,7 @@
 #                内嵌双引号用 \"、单引号原样 '。
 #   source_type  ParameterSource 枚举值:
 #                  query/path/body/form/header/cookie/file/session/internal/unknown
+#                  /rpc(RPC 请求消息字段,2026-09-15)/socket(收包数据,2026-09-15)
 #
 # 未知 source_type → loader fail-fast(ValueError)。
 
@@ -262,6 +263,26 @@ rules:
     languages: [go]
     pattern: "r\\.Cookie\\(['\"](\\w+)['\"]\\)"
     source_type: cookie
+
+  # ===== §2.6 RPC / Socket 入口 source(2026-09-15 单仓跨服务补齐)=====
+  # gRPC service 方法体内对请求消息的取用(pb 生成 getter / 直接字段访问);
+  # receiver 限定 req 形态惯例名,且 detect_sources 只在 entry(签名已识别为
+  # grpc_service)内扫——双层结构收敛「req.Xxx 泛 struct 访问」误报。
+  - rule_id: go-grpc-req-getter
+    languages: [go]
+    pattern: "\\b(?:req|request|in|msg|input|payload)\\.Get([A-Z]\\w*)\\(\\)"
+    source_type: rpc
+  - rule_id: go-grpc-req-field
+    languages: [go]
+    pattern: "\\b(?:req|request|in|msg|input|payload)\\.([A-Z]\\w*)\\b(?!\\()"
+    source_type: rpc
+  # socket 收包读调用(net.Conn.Read / websocket ReadMessage/ReadJSON/
+  # ReadString/ReadBytes...;group(1)=方法名占位,仿 ts-hono-json 先例)。
+  # 只认 Read 前缀——出站 Write 不是 source。
+  - rule_id: go-socket-read
+    languages: [go]
+    pattern: "\\b(?:conn|c|ws|client|session)\\.(Read\\w*)\\("
+    source_type: socket
 
   # ===== §2.4 Java 注解 + HttpServlet(原规则有 @RequestParam/@PathVariable/@RequestBody)=====
   # 注:header/cookie 注解的 header 名可含 '-',捕获组用 [\\w-]+

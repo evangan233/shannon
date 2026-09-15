@@ -399,6 +399,81 @@ class TestDeepsecSourceJava:
                    for s in out)
 
 
+class TestRpcSocketSourceRules:
+    """RPC/Socket source 规则（2026-09-15 单仓跨服务补齐）。
+
+    gRPC service 方法体内对请求消息的取用（pb getter / 字段访问）→ rpc；
+    socket 收包读调用（conn.Read*）→ socket。receiver 限定 req/conn 形态
+    惯例名，实际误报收敛靠「只在 entry（签名已识别）内扫」双层结构。
+    """
+
+    def _detect(self, src, params=None, lang="go"):
+        block = _block("a.go", "handler", 1, src, lang, params or [])
+        return detect_sources([block], parser=None, entry_point_ids={block.id},
+                              source_provider=_provider_from(block))
+
+    def test_grpc_getter_yields_rpc_source(self):
+        src = (
+            "func h(ctx Context, req *pb.ExecReq){\n"
+            "  cmd := req.GetCommand()\n"
+            "}\n"
+        )
+        out = self._detect(src, ["ctx context.Context", "req *pb.ExecReq"])
+        assert any(s.param_name == "Command" and s.source_type.value == "rpc"
+                   and s.rule_id == "go-grpc-req-getter" for s in out)
+
+    def test_grpc_field_access_yields_rpc_source(self):
+        src = (
+            "func h(ctx Context, req *pb.ExecReq){\n"
+            "  name := req.Name\n"
+            "}\n"
+        )
+        out = self._detect(src, ["ctx context.Context", "req *pb.ExecReq"])
+        assert any(s.param_name == "Name" and s.source_type.value == "rpc"
+                   and s.rule_id == "go-grpc-req-field" for s in out)
+
+    def test_grpc_field_rule_not_match_method_call(self):
+        """字段规则负向前瞻：方法调用 req.Reset() 不当字段。"""
+        src = "func h(ctx Context, req *pb.ExecReq){ req.Reset() }\n"
+        out = self._detect(src, ["ctx context.Context", "req *pb.ExecReq"])
+        assert not any(s.rule_id == "go-grpc-req-field" for s in out)
+
+    def test_non_req_receiver_not_rpc(self):
+        """普通 struct 字段访问（receiver 非 req 形态惯例名）不产 rpc source。"""
+        src = "func h(ctx Context, o *Order){ v := o.Name }\n"
+        out = self._detect(src, ["ctx context.Context", "o *Order"])
+        assert not any(s.source_type.value == "rpc" for s in out)
+
+    def test_socket_read_yields_socket_source(self):
+        src = (
+            "func h(conn Conn){\n"
+            "  n, _ := conn.Read(buf)\n"
+            "  msg, _ := conn.ReadMessage()\n"
+            "}\n"
+        )
+        out = self._detect(src, ["conn net.Conn"])
+        assert any(s.source_type.value == "socket"
+                   and s.rule_id == "go-socket-read" for s in out)
+
+    def test_socket_readjson_readstring(self):
+        src = (
+            "func h(conn Conn){\n"
+            "  var m Msg\n"
+            "  _ = conn.ReadJSON(&m)\n"
+            "  s, _ := conn.ReadString('\\n')\n"
+            "}\n"
+        )
+        out = self._detect(src, ["conn *websocket.Conn"])
+        params = {s.param_name for s in out if s.source_type.value == "socket"}
+        assert {"ReadJSON", "ReadString"} <= params
+
+    def test_write_call_not_socket_source(self):
+        """出站写调用不是收包 source。"""
+        src = "func h(conn Conn){ conn.Write(data) }\n"
+        out = self._detect(src, ["conn net.Conn"])
+        assert not any(s.source_type.value == "socket" for s in out)
+
+
 class TestDeepsecSourcePhp:
     """PHP superglobal 补齐 + Laravel(原规则只有 $_GET/$_POST/$_REQUEST)。"""
 

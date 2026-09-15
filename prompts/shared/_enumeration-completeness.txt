@@ -7,10 +7,10 @@ catch endpoints that exist in the source code but never made it into your Sectio
 inventory — the historical source of downstream false-negatives (an entire path-prefix
 family silently skipped, so the authz/injection phase never sees it and cannot test it).
 
-### Step EC-A: Confirm 5-angle enumeration coverage
+### Step EC-A: Confirm 6-angle enumeration coverage
 
 Your Route Mapper agent (launched in systematic_approach step 3) MUST have covered ALL
-FIVE enumeration angles and returned, for each, BOTH the endpoints found AND a source
+SIX enumeration angles and returned, for each, BOTH the endpoints found AND a source
 anchor count (the grep pattern + file used + count of route sources matched in code):
 
 1. **Route-definition layer** — router.get/post/put/delete, framework decorators,
@@ -21,6 +21,12 @@ anchor count (the grep pattern + file used + count of route sources matched in c
 4. **Frontend-call layer** — axios/fetch/rpc calls in frontend code, reverse-inferred
    backend endpoints NOT declared in route files.
 5. **Gateway layer** — nginx `location`/`proxy_pass`, ingress routes, gateway config.
+6. **RPC & socket layer** — gRPC service implementation methods (pb server interface
+   implementations), Thrift/Dubbo handlers, TCP/UDP socket receive handlers,
+   WebSocket message handlers. Service-to-service entry points reachable when an
+   upstream gateway forwards public input. In a pure-backend RPC/socket repo this
+   layer is the sole source of entry points; zero here with `.proto` files or
+   `RegisterXxxServer` calls present is a `true-miss`, NOT `not-applicable`.
 
 If any angle was skipped, run the Route Mapper for that angle now and merge. Each
 angle's anchor count drives the Section 4.3 reconciliation table below.

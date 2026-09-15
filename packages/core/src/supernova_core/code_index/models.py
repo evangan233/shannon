@@ -118,6 +118,10 @@ class ParameterSource(str, Enum):
     INTERNAL = "internal"
     UNKNOWN = "unknown"
     STORAGE = "storage"
+    # RPC/Socket 入口（2026-09-15 单仓跨服务补齐）：gRPC 等请求消息字段 /
+    # socket 收包读到的帧。可达性标签 = 上游网关转发公网输入时公网可达。
+    RPC_FIELD = "rpc"
+    SOCKET_DATA = "socket"
 
 
 class TypedParameter(BaseModel):
