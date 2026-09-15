@@ -5,7 +5,7 @@ Task 1 先锁 pydantic 校验语义（不发 HTTP）；Task 2 加端点行为测
 import pytest
 from pydantic import ValidationError
 
-from supernova_web.models import BatchScanRequest
+from supernova_web.models import BatchScanRequest, ScanIdsBatchRequest
 
 
 def _base(**kw):
@@ -30,6 +30,42 @@ class TestBatchScanRequestValidation:
     def test_repos_over_50_rejected(self):
         with pytest.raises(ValidationError):
             _base(repos=[f"r{i}" for i in range(51)])
+
+
+class TestBatchScanMaxReposEnv:
+    """SUPERNOVA_BATCH_SCAN_MAX_REPOS（2026-09-16 由硬编码 50 改 env 可配）。
+
+    运维参数（全局资源防呆），走全局 env 直读——按白名单准入原则不进
+    SCAN_ENV_KEYS / ws 文本框。容错对齐 get_max_concurrent：未设/畸形/<1
+    回落默认 50 + warning，绝不 crash 请求。"""
+
+    def test_env_overrides_limit(self, monkeypatch):
+        monkeypatch.setenv("SUPERNOVA_BATCH_SCAN_MAX_REPOS", "200")
+        req = _base(repos=[f"r{i}" for i in range(51)])
+        assert len(req.repos) == 51
+
+    def test_env_over_limit_rejected_with_effective_value(self, monkeypatch):
+        monkeypatch.setenv("SUPERNOVA_BATCH_SCAN_MAX_REPOS", "200")
+        with pytest.raises(ValidationError) as ei:
+            _base(repos=[f"r{i}" for i in range(201)])
+        assert "200" in str(ei.value)
+        assert "SUPERNOVA_BATCH_SCAN_MAX_REPOS" in str(ei.value)
+
+    def test_env_malformed_falls_back_50(self, monkeypatch):
+        monkeypatch.setenv("SUPERNOVA_BATCH_SCAN_MAX_REPOS", "abc")
+        with pytest.raises(ValidationError):
+            _base(repos=[f"r{i}" for i in range(51)])
+
+    def test_env_nonpositive_falls_back_50(self, monkeypatch):
+        monkeypatch.setenv("SUPERNOVA_BATCH_SCAN_MAX_REPOS", "0")
+        with pytest.raises(ValidationError):
+            _base(repos=[f"r{i}" for i in range(51)])
+
+    def test_scan_ids_batch_follows_env(self, monkeypatch):
+        # 批量取消/续跑同一上限（对齐语义：批量操作逐项起副作用）
+        monkeypatch.setenv("SUPERNOVA_BATCH_SCAN_MAX_REPOS", "200")
+        req = ScanIdsBatchRequest(scan_ids=[f"s{i}" for i in range(51)])
+        assert len(req.scan_ids) == 51
 
     def test_combined_url_with_auth_profile_ok(self):
         # 组合模式（带 url）：认证字段合法（profile 子集模式）

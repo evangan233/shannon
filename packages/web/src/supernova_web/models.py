@@ -1,9 +1,41 @@
 from __future__ import annotations
 
+import logging
+import os
 from typing import Literal, Union
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, field_validator, model_validator
+
+_log = logging.getLogger(__name__)
+
+_BATCH_SCAN_MAX_REPOS_DEFAULT = 50
+
+
+def _batch_scan_max_repos() -> int:
+    """SUPERNOVA_BATCH_SCAN_MAX_REPOS（默认 50）：单次批量扫描/批量操作的仓数上限。
+
+    2026-09-16 由硬编码 50 改 env 可配（现场需一次提交 >50 仓）。运维参数——
+    全局资源防呆（扫描每仓起一个 workflow，重于 clone），按白名单准入原则
+    走全局 env 直读、不进 SCAN_ENV_KEYS / ws 文本框；真并发由扫描闸门管。
+
+    返回 env 值(int>=1)；未设 / 畸形 / <1 回退默认(50)并 warning。
+    畸形值绝不 crash 请求（对齐 core get_max_concurrent 的容错契约——
+    全局 env 手输容错）。"""
+    raw = os.environ.get("SUPERNOVA_BATCH_SCAN_MAX_REPOS")
+    if raw is None:
+        return _BATCH_SCAN_MAX_REPOS_DEFAULT
+    try:
+        val = int(raw)
+    except ValueError:
+        _log.warning("SUPERNOVA_BATCH_SCAN_MAX_REPOS=%r not an int; "
+                     "falling back to %d", raw, _BATCH_SCAN_MAX_REPOS_DEFAULT)
+        return _BATCH_SCAN_MAX_REPOS_DEFAULT
+    if val < 1:
+        _log.warning("SUPERNOVA_BATCH_SCAN_MAX_REPOS=%d must be >=1; "
+                     "falling back to %d", val, _BATCH_SCAN_MAX_REPOS_DEFAULT)
+        return _BATCH_SCAN_MAX_REPOS_DEFAULT
+    return val
 
 
 class PathSource(BaseModel):
@@ -274,8 +306,9 @@ class BatchScanAccepted(BaseModel):
 class BatchScanRequest(BaseModel):
     """POST /api/scan/batch 请求体（spec §3.1）。
 
-    repos 上限 50（BATCH_SCAN_MAX_REPOS；2026-09-15 起不再对齐 BATCH_CLONE_MAX_URLS=500
-    ——扫描每仓起一个 workflow，重于 clone，维持收紧）。
+    repos 上限默认 50（SUPERNOVA_BATCH_SCAN_MAX_REPOS 可配；2026-09-15 起
+    不再对齐 BATCH_CLONE_MAX_URLS=500——扫描每仓起一个 workflow，重于 clone，
+    2026-09-16 由硬编码改 env 可配，真并发由扫描闸门管）。
     """
 
     workspace: str
@@ -333,8 +366,10 @@ class BatchScanRequest(BaseModel):
             if name not in seen:
                 seen.add(name)
                 out.append(name)
-        if len(out) > 50:
-            raise ValueError("单次批量扫描最多 50 个仓库（BATCH_SCAN_MAX_REPOS）")
+        if len(out) > _batch_scan_max_repos():
+            raise ValueError(
+                f"单次批量扫描最多 {_batch_scan_max_repos()} 个仓库"
+                "（SUPERNOVA_BATCH_SCAN_MAX_REPOS）")
         return out
 
     def _validate_auth_fields(self) -> None:
@@ -389,7 +424,8 @@ class BatchScanRequest(BaseModel):
 class ScanIdsBatchRequest(BaseModel):
     """POST /api/workspaces/{ws}/scans/batch-cancel|batch-resume 请求体（2026-09-15
     批量取消/续跑）。与 BatchScanRequest._dedup_repos 同规则：保序去重（重复提交
-    容错），去重后上限 50（对齐 BATCH_SCAN_MAX_REPOS——批量操作同样逐项起副作用）。"""
+    容错），去重后上限同一 env（SUPERNOVA_BATCH_SCAN_MAX_REPOS——批量操作同样
+    逐项起副作用）。"""
 
     scan_ids: list[str]
 
@@ -404,8 +440,10 @@ class ScanIdsBatchRequest(BaseModel):
             if sid not in seen:
                 seen.add(sid)
                 out.append(sid)
-        if len(out) > 50:
-            raise ValueError("单次批量操作最多 50 个扫描任务")
+        if len(out) > _batch_scan_max_repos():
+            raise ValueError(
+                f"单次批量操作最多 {_batch_scan_max_repos()} 个扫描任务"
+                "（SUPERNOVA_BATCH_SCAN_MAX_REPOS）")
         return out
 
 
