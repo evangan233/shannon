@@ -15,8 +15,18 @@ export function LastVisitedTracker() {
 
   useEffect(() => {
     const m = pathname.match(/^\/p\/([^/]+)/);
-    const ws = m?.[1];
-    if (!ws || ws === reportedRef.current) return;
+    if (!m) return;
+    // pathname 是 URL-encoded 形态（react-router/history 保留地址栏原样），中文 ws 名
+    // （如「金融」）提取到的是 %E9%87%91... 编码串——直接上报后端按目录名找不到、
+    // 404 静默失败、last_visited 永不落库（2026-09-15 现场「工作区」入口跳错 ws
+    // 的主根因）。decode 成真名再上报；畸形编码（URIError）静默跳过。
+    let ws: string;
+    try {
+      ws = decodeURIComponent(m[1]);
+    } catch {
+      return;
+    }
+    if (ws === reportedRef.current) return;
     reportedRef.current = ws;
     setLastVisitedWorkspace(ws).catch(() => {
       /* 静默：上报失败不影响导航；下次进 ws 自然重试 */

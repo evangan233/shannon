@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import { useWorkspaces } from "@/api/useWorkspaces";
+import { fetchCurrentUser } from "@/api/client";
 
 /**
  * 顶栏「工作区」入口的三段跳转（2026-09-11 置顶→最近访问替换）：
@@ -11,15 +12,30 @@ import { useWorkspaces } from "@/api/useWorkspaces";
  * 3) 无归属 ws -> / （Dashboard 自带空态）
  *
  * loading 期间不跳转（等 useWorkspaces 首次拉取完成避免误判空态）。
+ * last_visited 取后端 SSOT（挂载现拉 /auth/me，2026-09-15）：AuthContext 快照只在
+ * 首屏/登录/改密时更新，LastVisitedTracker PUT 后不刷新——同页面会话内进过新 ws
+ * 后读快照会跳旧 ws。拉取失败回落快照（降级不降级到底：比白屏等强）。
  */
 export function WorkspacesEntry() {
   const { user } = useAuth();
   const { data, loading } = useWorkspaces();
   const nav = useNavigate();
+  // undefined=在途（不跳）；null=/auth/me 失败（回落快照）；对象=成功
+  const [fresh, setFresh] = useState<
+    { last_visited_workspace?: string | null } | null | undefined
+  >(undefined);
 
   useEffect(() => {
-    if (loading) return;
-    const lastVisited = user?.last_visited_workspace;
+    let cancelled = false;
+    fetchCurrentUser()
+      .then((r) => { if (!cancelled) setFresh(r.user); })
+      .catch(() => { if (!cancelled) setFresh(null); });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (loading || fresh === undefined) return;
+    const lastVisited = (fresh ?? user)?.last_visited_workspace;
     if (lastVisited && data.some((w) => w.name === lastVisited)) {
       nav(`/p/${lastVisited}`, { replace: true });
       return;
@@ -32,7 +48,7 @@ export function WorkspacesEntry() {
       return;
     }
     nav("/", { replace: true });
-  }, [user?.last_visited_workspace, data, loading, nav]);
+  }, [fresh, user, data, loading, nav]);
 
   return null;
 }

@@ -247,6 +247,12 @@ export const listAllScans = () => apiGet<ScanSummary[]>("/scans");
 export const setLastVisitedWorkspace = (ws: string) =>
   apiPut<{ last_visited: string }>("/users/me/last-visited-workspace", { workspace: ws });
 
+/** 现拉当前用户（GET /auth/me，后端 SSOT）。WorkspacesEntry 跳转前取最新
+ *  last_visited_workspace——AuthContext 快照在页面会话内不随 tracker PUT 刷新
+ *  （2026-09-15：同会话进过新 ws 后读快照会跳旧 ws）。只取所需窄字段。 */
+export const fetchCurrentUser = () =>
+  apiGet<{ user: { last_visited_workspace?: string | null } }>("/auth/me", { silent: true });
+
 /** scan 详情（同旧 GET /workspaces/{ws} payload shape，读 scan_dir）。 */
 export const getScan = (ws: string, scanId: string) =>
   apiGet<SessionData>(`/workspaces/${encWs(ws)}/scans/${encWs(scanId)}`);

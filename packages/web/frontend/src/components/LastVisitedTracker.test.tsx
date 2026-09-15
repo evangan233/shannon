@@ -75,6 +75,18 @@ describe("LastVisitedTracker", () => {
     expect(mockSetLastVisited).not.toHaveBeenCalled();
   });
 
+  // 2026-09-15 现场「金融」ws：pathname 是 URL-encoded 形态，编码串直接上报后端
+  // 按目录名找不到 404、last_visited 永不落库（「工作区」入口跳错 ws 的主根因）。
+  it("decodes percent-encoded workspace names before reporting (中文 ws 名)", () => {
+    renderAt("/p/%E9%87%91%E8%9E%8D");
+    expect(mockSetLastVisited).toHaveBeenCalledWith("金融");
+  });
+
+  it("stays silent on malformed percent-encoding (decode throw 不上报)", () => {
+    renderAt("/p/%E4%BD%");
+    expect(mockSetLastVisited).not.toHaveBeenCalled();
+  });
+
   it("stays silent on report failure (fire-and-forget)", async () => {
     mockSetLastVisited.mockRejectedValue(new Error("network down"));
     renderAt("/p/ws-a");
