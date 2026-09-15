@@ -1182,7 +1182,10 @@
       "legendCut": "剪断 · 防护拦下",
       "legendShieldBypass": "黄盾 · 防护被绕过",
       "legendShieldEffective": "绿盾 · 有效防护（剪断点）",
-      "legendTarget": "靶心：红=有打通枝到达 · 灰虚线=无输入到达"
+      "legendTarget": "靶心：红=有打通枝到达 · 灰虚线=无输入到达",
+      "treeRowExpand": "展开",
+      "treeRowCollapse": "收起",
+      "treeRowToggleAria": "树 {{sink}}：{{state}}树详情"
     },
     "evidence": {
       "emptyTitle": "无接口证据产物",

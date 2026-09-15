@@ -24,7 +24,10 @@ export function PruningTreeFig({ trees }: PruningTreeFigProps) {
   return (
     <div className="space-y-4">
       {trees.map((tree) => (
-        <TreeCard key={tree.tree_id} tree={tree} crossTreeTip={crossTreeTip} />
+        /* data-tree-id 挂 wrapper（TreeCard 自身不挂——TreeList 场景由树行挂载，避免展开态双锚点） */
+        <div key={tree.tree_id} data-tree-id={tree.tree_id}>
+          <TreeCard tree={tree} crossTreeTip={crossTreeTip} />
+        </div>
       ))}
     </div>
   );
@@ -33,8 +36,9 @@ export function PruningTreeFig({ trees }: PruningTreeFigProps) {
 /** 单棵树卡：树头徽章 + RF 画布 + 枝条明细列表。
  *  图↔行交互（spec §5「交互」段）：TreeCard 是图与明细行的共同父级，联动 state 提升至
  *  此——hover 任一侧（边/节点或 BranchRow）→ 两侧同高亮（双向）；点枝条 → 选中对应
- *  明细行（高亮 + 展开首个节点 code，再点取消）；剪断枝折叠展开/收起。 */
-function TreeCard({
+ *  明细行（高亮 + 展开首个节点 code，再点取消）；剪断枝折叠展开/收起。
+ *  2026-09-14 信息架构重做：export 供 TreeList 展开态消费（收起行见 TreeList）。 */
+export function TreeCard({
   tree,
   crossTreeTip,
 }: {
@@ -74,7 +78,6 @@ function TreeCard({
     <section
       className="rounded-lg border border-border bg-card p-4 shadow-card"
       data-testid="pruning-tree-card"
-      data-tree-id={tree.tree_id}
     >
       <TreeHeader
         tree={tree}

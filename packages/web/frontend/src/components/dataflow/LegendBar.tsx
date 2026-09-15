@@ -7,12 +7,13 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-/** 单个图例项：小 SVG 样例 + 白话文案（i18n zh/en，禁词口径同 spec §5 白话表）。 */
+/** 单个图例项：小 SVG 样例 + 白话文案（i18n zh/en，禁词口径同 spec §5 白话表）。
+ *  文案单行 ellipsis（title 全文）——瘦身版不折行。 */
 function LegendItem({ kind, sample, text }: { kind: string; sample: ReactNode; text: string }) {
   return (
-    <span className="flex shrink-0 items-center gap-1.5" data-legend={kind}>
+    <span className="flex shrink-0 items-center gap-1.5" data-legend={kind} title={text}>
       {sample}
-      <span>{text}</span>
+      <span className="max-w-56 truncate whitespace-nowrap">{text}</span>
     </span>
   );
 }
@@ -23,7 +24,9 @@ export function LegendBar() {
     <div
       data-testid="dataflow-legend-bar"
       aria-label={t("workspaceDetail.dataflow.legendTitle")}
-      className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground"
+      /* 瘦身（2026-09-14 信息架构重做）：单行 + 横向滚动（34 树长页里教学条不再占两行屏）；
+         项 shrink-0 保持样例+文案不折行，窄屏溢出侧滚。 */
+      className="flex items-center gap-x-4 overflow-x-auto rounded-md border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground"
     >
       <span className="font-medium text-foreground">
         {t("workspaceDetail.dataflow.legendTitle")}

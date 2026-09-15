@@ -230,6 +230,51 @@ describe("DataFlowTab", () => {
     expect(follows(legend, firstTree)).toBe(true);
   });
 
+  it("信息架构重做：默认仅展开第一棵漏洞树（其余收起行），漏洞树置顶排序", async () => {
+    await renderWithData();
+    // mockView：T-INJ-VULN（有 findings）唯一漏洞树 → 默认展开它
+    const expandedRow = document.querySelector('[data-tree-row="expanded"]');
+    expect(expandedRow?.getAttribute("data-tree-id")).toBe("T-INJ-VULN");
+    // 树卡只挂载一张（React Flow 画布仅展开态存在）
+    expect(document.querySelectorAll('[data-testid="pruning-tree-card"]').length).toBe(1);
+    // 收起行仍在 DOM（锚点/scrollspy 稳定）：3 行 = 1 展开 + 2 收起
+    expect(document.querySelectorAll("[data-tree-id]").length).toBe(3);
+    expect(document.querySelectorAll('[data-tree-row="collapsed"]').length).toBe(2);
+    // 排序：漏洞树置顶（数据序 T-INJ-VULN 本在首位，用 DOM 序校验首行）
+    expect(document.querySelector("[data-tree-id]")?.getAttribute("data-tree-id")).toBe("T-INJ-VULN");
+  });
+
+  it("信息架构重做：收起行点击展开/收起（受控交互）", async () => {
+    await renderWithData();
+    const safeRow = document.querySelector('[data-tree-id="T-XSS-SAFE"]') as HTMLElement;
+    expect(safeRow.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(safeRow);
+    await waitFor(() =>
+      expect(document.querySelector('[data-tree-id="T-XSS-SAFE"]')?.getAttribute("aria-expanded")).toBe("true"));
+    // 该树卡挂载（xss 树），且 T-INJ-VULN 仍展开 → 2 张卡
+    expect(document.querySelectorAll('[data-testid="pruning-tree-card"]').length).toBe(2);
+    // 再点收起
+    fireEvent.click(document.querySelector('[data-tree-id="T-XSS-SAFE"]') as HTMLElement);
+    await waitFor(() =>
+      expect(document.querySelectorAll('[data-testid="pruning-tree-card"]').length).toBe(1));
+  });
+
+  it("信息架构重做：?tree= 深链展开目标树（VulnCard「查看数据流」落点）", async () => {
+    server.use(
+      http.get("/api/workspaces/:ws/scans/:scanId/dataflow", () =>
+        HttpResponse.json(mockView)),
+    );
+    renderAt("/p/w1/scans/s1/dataflow?tree=T-INJ-SAFE");
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-tree-id="T-INJ-SAFE"]')?.getAttribute("aria-expanded"),
+      ).toBe("true"));
+    // 深链目标展开；默认第一棵漏洞树也保持展开（互不挤占）
+    expect(
+      document.querySelector('[data-tree-id="T-INJ-VULN"]')?.getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
+
   it("汇总条 unknown 枝计数：总数含未判定 + 独立「N 条未判定」项（无 unknown 时不显示该噪音）", async () => {
     // 无 unknown：不出现「未判定」段
     server.use(

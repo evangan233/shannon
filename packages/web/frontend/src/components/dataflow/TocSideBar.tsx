@@ -15,6 +15,9 @@ export interface TocSideBarProps {
   trees: DataflowTree[];
   controls: ControlFinding[];
   safeVectors: SafeVector[];
+  /** 目录点击定位回调（2026-09-14 信息架构重做）：宿主可先展开目标树（收起态行）
+   *  再定位；缺省 = 直接 focusDataflowAnchor（向后兼容旧行为）。 */
+  onLocate?: (id: string) => void;
 }
 
 /** 排查过的入口分组锚点 id（对应 SafeEntries 区的 data-safe-section）。 */
@@ -58,7 +61,7 @@ function anchorIdOf(el: Element): string | null {
   return el.hasAttribute("data-safe-section") ? SAFE_SECTION_ID : null;
 }
 
-export function TocSideBar({ trees, controls, safeVectors }: TocSideBarProps) {
+export function TocSideBar({ trees, controls, safeVectors, onLocate }: TocSideBarProps) {
   const { t } = useTranslation();
   const [activeId, setActiveId] = useState<string | null>(null);
   const visibleRef = useRef<Set<string>>(new Set());
@@ -91,7 +94,8 @@ export function TocSideBar({ trees, controls, safeVectors }: TocSideBarProps) {
 
   const locate = (id: string) => {
     setActiveId(id);
-    focusDataflowAnchor(id);
+    if (onLocate) onLocate(id);
+    else focusDataflowAnchor(id);
   };
 
   const entryCls = (id: string) =>

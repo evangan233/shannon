@@ -1182,7 +1182,10 @@
       "legendCut": "Cut · stopped by a guard",
       "legendShieldBypass": "Yellow shield · guard bypassed",
       "legendShieldEffective": "Green shield · effective guard (cut point)",
-      "legendTarget": "Target: red = a breached branch reaches it · gray dashed = no input reaches it"
+      "legendTarget": "Target: red = a breached branch reaches it · gray dashed = no input reaches it",
+      "treeRowExpand": "Expand",
+      "treeRowCollapse": "Collapse",
+      "treeRowToggleAria": "Tree {{sink}}: {{state}} tree details"
     },
     "evidence": {
       "emptyTitle": "No API evidence matrix",

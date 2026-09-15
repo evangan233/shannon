@@ -59,9 +59,12 @@ const TOKENS_CSS = readFileSync(
 );
 
 describe("PruningTreeFig — 树卡外壳与树头（spec §5）", () => {
-  it("每树一卡：data-tree-id + sink 名 + file:line + rule_id + finding IDs", () => {
+  it("每树一卡：data-tree-id（wrapper 锚点，2026-09-14 锚点挂载上移）+ sink 名 + file:line + rule_id + finding IDs", () => {
     render(<PruningTreeFig trees={[tree("T-1", [branch("B-1", "vulnerable", [node("a", 1)])], { findings: [{ id: "F-9" }] })]} />);
-    const card = document.querySelector('[data-testid="pruning-tree-card"][data-tree-id="T-1"]')!;
+    // 锚点（data-tree-id）挂 wrapper；卡（testid）在其内——同一树容器
+    const wrapper = document.querySelector('[data-tree-id="T-1"]')!;
+    expect(wrapper).toBeTruthy();
+    const card = wrapper.querySelector('[data-testid="pruning-tree-card"]')!;
     expect(card).toBeTruthy();
     expect(card.textContent).toContain("eval");
     expect(card.textContent).toContain("s.js:9");
