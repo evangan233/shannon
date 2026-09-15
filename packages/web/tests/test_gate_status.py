@@ -25,6 +25,21 @@ def test_compute_status_queued_when_in_gate_waiting(tmp_path):
     assert _compute_status(scan_dir, None) == "queued"
 
 
+def test_compute_status_queued_beats_submit_grace(tmp_path):
+    """提交宽限期内 + 闸门 waiting 命中 → queued（2026-09-15 修「排队中显示运行中」）。
+
+    旧顺序 alive（含 120s 提交宽限）先于 queued 档：批量发起槽满排队时，排队任务
+    在头 120s 误显「运行中」。闸门 waiting = workflow 尚未获槽的权威信号，先于
+    宽限门的「可能还在冷启动」猜测。
+    """
+    import time
+    scan_dir = _mk_scan(tmp_path)
+    (scan_dir / "session.json").write_text(json.dumps({"submitted_at": time.time()}))
+    _write_gate(tmp_path, [{"ws": "prod", "scan_id": "20260908-120000",
+                            "kind": "whitebox", "label": "r@main", "since": 1.0}])
+    assert _compute_status(scan_dir, None) == "queued"
+
+
 def test_compute_status_interrupted_when_gate_miss(tmp_path):
     scan_dir = _mk_scan(tmp_path)
     _write_gate(tmp_path, [{"ws": "prod", "scan_id": "other-scan",

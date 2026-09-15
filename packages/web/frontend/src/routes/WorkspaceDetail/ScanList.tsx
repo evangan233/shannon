@@ -344,8 +344,6 @@ export function ScanList() {
 function ScanRow({ ws, scan, scansById, onChanged }: {
   ws: string; scan: ScanSummary; scansById: Map<string, ScanSummary>; onChanged: () => void;
 }) {
-  // 闸门快照（与主列表同 key，SWR 缓存共享）：queued 行显示排队位次
-  const { data: gateSnap } = useSWR<ScanGateSnapshot>(["scan-gate"], getScanGate);
   const { t } = useTranslation();
   const nav = useNavigate();
   const [busy, setBusy] = useState(false);
@@ -372,7 +370,9 @@ function ScanRow({ ws, scan, scansById, onChanged }: {
   const isTerminal = TERMINAL.has(scan.status);
   // 续跑入口（§4.6）：非 running ∧ 非 completed/done ∧ 白盒行（含组合；correlation
   // 走重新提交、无黑盒独立行）——failed/cancelled/killed/crashed/interrupted 全放行。
+  // queued 排除（2026-09-15）：排队等槽不是断点，给「恢复」入口是误导（无断可续）。
   const canResume = !isRunning
+    && scan.status !== "queued"
     && !["completed", "done"].includes(scan.status)
     && scan.scan_type === "whitebox";
   const scanPath = `/p/${ws}/scans/${scan.scan_id}`;
@@ -543,16 +543,10 @@ function ScanRow({ ws, scan, scansById, onChanged }: {
           )}
         </TableCell>
         {/* 状态徽标：所有行同构（类型归属在类型列徽标，2026-09-10 起状态列不再
-            追加 🔗——emoji 基线漂移且撑爆 112px 列宽致换行） */}
+            追加 🔗——emoji 基线漂移且撑爆 112px 列宽致换行）。排队行不再标 #N 位次
+            （2026-09-15 用户反馈：位次描述是噪音——队列顺序在并发面板已可见）。 */}
         <TableCell>
-          <div className="flex items-center gap-1">
-            <StatusBadge status={scan.status} />
-            {scan.status === "queued" && (() => {
-              const pos = gateSnap?.waiting.findIndex((e) => e.scan_id === scan.scan_id) ?? -1;
-              return pos >= 0
-                ? <span className="text-xs text-muted-foreground">#{pos + 1}</span> : null;
-            })()}
-          </div>
+          <StatusBadge status={scan.status} />
         </TableCell>
         <TableCell className="max-w-0 truncate font-mono">
           <Link
@@ -632,6 +626,10 @@ function ScanRow({ ws, scan, scansById, onChanged }: {
             <span className="whitespace-nowrap font-mono text-xs text-muted-foreground">
               100%{dur && ` · ${t("workspaceDetail.scans.duration", { dur })}`}
             </span>
+          ) : scan.status === "queued" ? (
+            /* 排队中无进度可言（progress_pct 恒 0，直显会成误导性的「停在 0%」）——
+               状态徽标已表达排队，进度列静默占位。 */
+            <span className="text-xs text-muted-foreground">—</span>
           ) : isTerminal ? (
             <span className="text-xs text-muted-foreground">—</span>
           ) : scan.progress_pct != null ? (

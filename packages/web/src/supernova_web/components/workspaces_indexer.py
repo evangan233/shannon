@@ -45,17 +45,23 @@ def _compute_status(path: Path, session_status: str | None) -> str:
     # completed/failed + 兜底推断 interrupted」的混乱(spec §4.3)。
     if session_status in _TERMINAL_STATUSES:
         return session_status
+    # queued 档先于判活（2026-09-15 修「排队中显示运行中」）：命中 worker 闸门
+    # waiting = workflow 尚未获槽、绝无可能真在跑——这是比提交宽限（猜「可能还在
+    # 冷启动」）更强的权威信号。原顺序 alive(含 120s 宽限) → queued 使排队任务
+    # 在提交宽限窗口内误显「运行中」（批量发起 N 个、槽满排队时尤为明显）。
+    # 排队期间 workflow 在闸门轮询 try_acquire、不写 heartbeat 是预期行为。
+    # 边界：提交后到 worker 首次 try_acquire 落盘 waiting 前的数秒不在 waiting →
+    # 落到下方宽限门判 running（不误杀）；获槽瞬间 waiting 摘除 + heartbeat 开写，
+    # 与原顺序同窗口。回归背景（spec 2026-09-08-worker-scan-gate §7.4）：排队
+    # >120s 无心跳曾误显已中断——queued 档同样兜住。
+    if _is_queued_in_gate(path):
+        return "queued"
     # 判活:heartbeat fresh(worker 在跑)OR 提交宽限内(workflow 刚提交、worker 还没写首个
     # heartbeat 的冷启动窗口)。pid 表不参与判活(只服务 cancel)。回归:
     # kol_mapping_service_20260708-193139(host CLI 活 scan)被误标 interrupted 即缺 heartbeat 门;
     # hr_1784014329(提交后 1s 误杀)即缺提交宽限门。
     if is_scan_alive(path):
         return "running"
-    # queued 档（spec 2026-09-08-worker-scan-gate §7.4）：非终态 + 心跳死但命中
-    # worker 闸门 waiting——修「排队 >120s 无心跳误显已中断」的预存 bug（排队期间
-    # workflow 在闸门轮询、不写 heartbeat 是预期行为）。
-    if _is_queued_in_gate(path):
-        return "queued"
     # 无终态 + 无 fresh heartbeat = 未正常结束(死掉的孤儿/容器重启后子进程同死)。
     return "interrupted"
 

@@ -240,7 +240,6 @@
     "heldHint": "started · running",
     "waiting": "Queued ({{n}})",
     "waitHint": "queued · waiting",
-    "ownRank": "You're #{{n}}",
     "own": "This workspace",
     "kinds": {
       "whitebox": "Whitebox",

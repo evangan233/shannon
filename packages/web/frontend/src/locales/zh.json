@@ -240,7 +240,6 @@
     "heldHint": "启动 · 已运行",
     "waiting": "排队中 ({{n}})",
     "waitHint": "入队 · 已等待",
-    "ownRank": "我排第 {{n}} 位",
     "own": "本工作区",
     "kinds": {
       "whitebox": "白盒",

@@ -886,9 +886,11 @@ export function ScanNewPage() {
       }
       // 批量白盒（2026-09-11）：≥2 仓走 /scan/batch，跳扫描列表页 + location.state
       // 带汇总（ScanList 顶部横幅显示成功/失败明细）；1 仓维持单发直跳 live（零变化）。
+      // 列表页 = /p/{ws} index 路由（2026-09-15 修 404：曾跳 /p/{ws}/scans——路由表
+      // 无此路径，提交成功反而落 404，须手动回工作区才能恢复）。
       if (type === "whitebox" && f.selectedRepos.length > 1) {
         const r = await createBatchScan(buildBatchBody(f.selectedRepos, f, workspace));
-        nav(`/p/${r.workspace}/scans`, { state: { batchResult: r } });
+        nav(`/p/${r.workspace}`, { state: { batchResult: r } });
         return;
       }
       // 提交 payload（2026-09-04 tabs 重组统一）：带分析来源 → 确认快照原文（锁定确认
@@ -908,7 +910,7 @@ export function ScanNewPage() {
       // 批量全失败（422 顶层 BatchScanResponse，无 detail 包裹）：同样跳列表页横幅展示
       // 全部失败明细（spec §3.3），不落 toast——与 202 部分失败的呈现统一。
       if (e instanceof ApiError && isBatchResponse(e.body)) {
-        nav(`/p/${e.body.workspace}/scans`, { state: { batchResult: e.body } });
+        nav(`/p/${e.body.workspace}`, { state: { batchResult: e.body } });
         return;
       }
       if (e instanceof ApiError) toast.error(renderError(e, t));
