@@ -39,6 +39,7 @@ from .scan_store import (
     ScanStore,
     _read_workflow_id_from_ndjson,
     effective_scan_status,
+    is_post_hoc_runs_task,
     merge_latest_run_view,
     write_repo_snapshot,
 )
@@ -332,7 +333,10 @@ class ScanManager:
             scan_dir, SessionManager(scan_dir.parent).get_status(scan_dir))
         combined = data.get("combined") if isinstance(data, dict) else None
         bb_phase, _bb_reason, _merged = merge_latest_run_view(scan_dir, data)
-        status = effective_scan_status(raw, combined, bb_phase)
+        status = effective_scan_status(
+            raw, combined, bb_phase,
+            post_hoc_runs=is_post_hoc_runs_task(data)
+            if isinstance(data, dict) else False)
         return status in _SWEEP_ACTIVE_STATUSES
 
     async def sweep_all_workspaces(self) -> int:
@@ -2275,7 +2279,9 @@ class ScanManager:
         raw = _compute_status(scan_dir, mgr.get_status(scan_dir))
         data = mgr.get_session_data(scan_dir)
         bb_phase, _reason, _merged = merge_latest_run_view(scan_dir, data)
-        return effective_scan_status(raw, data.get("combined"), bb_phase)
+        return effective_scan_status(
+            raw, data.get("combined"), bb_phase,
+            post_hoc_runs=is_post_hoc_runs_task(data))
 
     async def cancel(self, ws: str, scan_id: str) -> dict | None:
         """取消 scan 三轨(C1 后):
@@ -3299,18 +3305,43 @@ class ScanManager:
 
         成功路径黑盒 finalize 已写 scan_end → ``_ensure_scan_end`` no-op；异常/提交失败
         → 补写 scan_end 防 _watch 永久 tail。
+
+        任务级终态口径（2026-09-15 失败归属修正）：run 的成败属于那一次 run（run 级
+        session/bb_runs[] 徽章/续跑守卫消费），任务级回落白盒预跑终态（_posthoc_run_task_terminal
+        读 stash）——run 失败不再把整个白盒任务翻 failed（现场 gw_trade：run 失败后任务从
+        黑盒表单候选消失，无法再次发起黑盒）。
         """
-        final_status = "completed"
+        final_status = self._posthoc_run_task_terminal(scan_dir)
         try:
             await self._run_blackbox_phase(
                 scan_dir, ws, scan_id, auth_ref, run_id, workflow_id_suffix=suffix)
         except Exception as exc:
-            final_status = "failed"
             await self._mark_run(scan_dir, run_id, "failed",
                                  reason=str(exc), status="failed")
         finally:
             await self._ensure_scan_end(scan_dir, status=final_status)
             self._orchestrator_tasks.pop(scan_key, None)
+
+    @staticmethod
+    def _posthoc_pre_run_status(data: dict) -> str:
+        """加 run 前的任务级终态（stash 值计算）：仅收 _write_scan_end 可写的
+        session_status 值（done/缺失 → completed——产物完好的常态值）。"""
+        pre = data.get("status") if isinstance(data, dict) else None
+        return pre if pre in ("completed", "cancelled", "failed") else "completed"
+
+    def _posthoc_run_task_terminal(self, scan_dir: Path) -> str:
+        """加 run 收尾的任务级终态：预跑白盒终态（bb_pre_run_status stash）。
+
+        加 run 的前置是白盒产物完好（_whitebox_deliverables_ready）——run 失败/成功都
+        不改变白盒本体的完成事实。stash 取 _add_blackbox_run 进入 running 前的任务
+        状态（completed 常态；cancelled 保留——预跑取消语义不被 run 结果抹掉/升级）；
+        缺失（历史数据/极端路径）回落 completed。"""
+        try:
+            pre = SessionManager(scan_dir.parent).get_session_data(scan_dir) \
+                .get("bb_pre_run_status")
+        except Exception:  # noqa: BLE001 - 读不到回落 completed（产物完好的常态值）
+            pre = None
+        return pre if pre in ("completed", "cancelled", "failed") else "completed"
 
     async def _add_blackbox_run(self, ws: str, wb_scan_id: str,
                                 req: ScanRequest | None = None) -> str:
@@ -3365,8 +3396,12 @@ class ScanManager:
         # 且 SSE 不回放旧 scan_end、orphan_reconciler 的 has_scan_end 门不短路组合恢复。
         # 刷新 submitted_at 盖 precheck 冷启动（run/.authcheck heartbeat 由判活候选覆盖，
         # 宽限只补 worker 起写前的空窗）。
+        # bb_pre_run_status stash（2026-09-15 失败归属修正）：收尾写回白盒预跑终态——
+        # run 失败属于 run，不翻任务级 failed。
         self._strip_trailing_scan_end(scan_dir / "events.ndjson")
-        mgr.update_session(scan_dir, {"status": "running", "completed_at": None})
+        mgr.update_session(scan_dir, {
+            "status": "running", "completed_at": None,
+            "bb_pre_run_status": self._posthoc_pre_run_status(data)})
         self._mark_submitted_at(scan_dir)
         k = int(run_id.split("-")[1])
         scan_key = (ws, wb_scan_id)
@@ -3387,7 +3422,8 @@ class ScanManager:
         cancel 经 _orchestrator_tasks 取消本 task 即终止 precheck + 黑盒全链（同步内联时
         precheck 期间 cancel 无效——orchestrator 未注册，precheck 过后黑盒照常提交）。
 
-        - precheck fail → run 标 failed（读回 bb_failure_* 供横幅）+ _ensure_scan_end(failed)。
+        - precheck fail → run 标 failed（读回 bb_failure_* 供横幅）+ 任务级写回白盒
+          预跑终态（2026-09-15：认证失败属于这次 run，不翻白盒任务 failed）。
         - CancelledError（cancel 路径）：向上抛出，终态由 _cancel_combined/_mark_cancelled 负责。
         - finally 幂等 pop _orchestrator_tasks（_rerun_orchestrator finally 已 pop，兜底防
           precheck-fail 路径泄漏）。
@@ -3405,7 +3441,10 @@ class ScanManager:
                     scan_dir, run_id, "failed", reason="auth_failed", status="failed",
                     extra={"bb_failure_point": pdata.get("bb_failure_point"),
                            "bb_failure_detail": pdata.get("bb_failure_detail")})
-                await self._ensure_scan_end(scan_dir, status="failed")
+                # 任务级写回白盒预跑终态（2026-09-15）：认证失败属于这次 run，不翻白盒
+                # 任务 failed（失败详情已在 run 级 bb_failure_* 供横幅/排查）。
+                await self._ensure_scan_end(
+                    scan_dir, status=self._posthoc_run_task_terminal(scan_dir))
                 return
             await self._rerun_orchestrator(
                 scan_key, scan_dir, ws, wb_scan_id, auth_ref, run_id, f"-bb-{k}")

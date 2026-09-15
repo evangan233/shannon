@@ -72,6 +72,20 @@ def _is_combined_scan(data: dict, combined: object) -> bool:
     return bool(runs) if isinstance(runs, list) else False
 
 
+def is_post_hoc_runs_task(data: dict) -> bool:
+    """加 run 式任务判据（2026-09-15 失败归属修正）：combined=True 但任务级 bb_phase
+    从未写过——bb_phase 只在组合提交/编排路径写（start 组合分支 _mark_bb precheck/
+    pending），加 run 路径（create_blackbox_run）只写 combined/bb_runs/latest_bb_run。
+
+    语义：这类任务的黑盒 run 是白盒完成后追加的辅助验证，run 终态（failed/skipped）
+    属于那一次 run、不翻任务级状态（白盒产物完好是加 run 的前置，任务状态如实透出）；
+    真组合提交（任务级 bb_phase 存在）不变——run 失败仍翻 failed（换认证重跑/续跑守卫
+    的口径依赖）。"""
+    if not isinstance(data, dict) or data.get("combined") is not True:
+        return False
+    return "bb_phase" not in data
+
+
 # run_id 校验：^run-\d+$（K = per-task 单调序号，从 1 起）。get/create/list run 据此
 # 拒绝越界（../）/ 非法格式（run-x），避免路径穿越读其他目录。
 _RUN_ID_RE = re.compile(r"^run-(\d+)$")
@@ -107,7 +121,8 @@ def merge_latest_run_view(scan_dir: Path, data: dict) -> tuple[str | None, str |
 
 
 def effective_scan_status(status: str, combined: bool | None,
-                          bb_phase: str | None) -> str:
+                          bb_phase: str | None,
+                          post_hoc_runs: bool = False) -> str:
     """返回组合扫描对外可见的整体状态。
 
     组合扫描的白盒 workflow 会先在任务根 session 写入 ``status=completed``，
@@ -115,6 +130,12 @@ def effective_scan_status(status: str, combined: bool | None,
     否则会在「白盒完成、黑盒待接力/运行中」期间提前显示整个扫描已完成。
 
     非组合扫描以及缺失/未知阶段保持原状态，兼容历史 session。
+
+    post_hoc_runs（加 run 式任务，is_post_hoc_runs_task）：黑盒 run 是白盒完成后
+    追加的验证，run 在跑仍如实上浮 running（取消/轮询/is_running 依赖），但 run 终态
+    不翻任务级状态——失败属于那一次 run（run 徽章/续跑守卫消费 bb_phase），白盒任务
+    本体 status 如实透出（2026-09-15 现场根因修：run 失败曾把整个白盒任务翻 failed，
+    致黑盒表单/详情「加黑盒」候选消失）。
     """
     if combined is not True:
         return status
@@ -123,6 +144,10 @@ def effective_scan_status(status: str, combined: bool | None,
         return status
     if bb_phase in {"precheck", "pending", "running"}:
         return "running"
+    if post_hoc_runs:
+        # run 终态（failed/skipped/completed）不改写任务状态：status 即白盒本体终态
+        # （加 run 前置=白盒产物完好，写入侧 _rerun_orchestrator 收尾写回预跑终态）。
+        return status
     if bb_phase == "failed":
         return "failed"
     if bb_phase == "skipped":
@@ -141,7 +166,7 @@ def _compute_progress_pct(status: str, combined: bool | None,
         白盒中(pending) → 5 + 50 × (wb_completed / wb_expected)
         黑盒中(running) → 55 + 45 × (bb_completed / bb_expected)
         completed       → 100%
-        failed/skipped  → 0%（终态，非成功完成）
+        failed/skipped  → 0%（终态，非成功完成；加 run 式任务例外——跟随白盒本体终态）
     纯白盒/纯黑盒（combined 非 True）：completed / expected × 100（expected 缺失 → 0）。
 
     收起态精度门槛低（用户不展开不细看），故除零保护 + 容错缺失字段。
@@ -173,6 +198,10 @@ def _compute_progress_pct(status: str, combined: bool | None,
         if bb_phase == "completed":
             return 100.0
         if bb_phase in ("failed", "cancelled", "skipped"):
+            # 加 run 式任务：run 终态不改任务状态（effective_scan_status 同口径），
+            # 进度跟随任务（白盒本体）终态而非归零——run 失败在 run 徽章上可见。
+            if is_post_hoc_runs_task(data if isinstance(data, dict) else {}):
+                return 100.0 if status == "completed" else 0.0
             return 0.0
         # 未知阶段保留旧 session 的 status 兜底；正常组合阶段均已在上面处理。
         return 100.0 if status == "completed" else 0.0
@@ -727,7 +756,9 @@ class ScanStore:
         # completed_agents) + latest run completed_agents，bb_phase/bb_reason 取自 latest
         # run（与 api/scans._scan_detail 同一视图，list/detail 口径一致）。
         bb_phase, bb_reason, progress_data = merge_latest_run_view(scan_dir, data)
-        status = effective_scan_status(raw_status, combined, bb_phase)
+        status = effective_scan_status(
+            raw_status, combined, bb_phase,
+            post_hoc_runs=is_post_hoc_runs_task(data))
         progress_pct = _compute_progress_pct(status, combined, bb_phase, progress_data)
         # 组合扫描用时走墙钟口径（含黑盒段+预验证+间隙；metrics 只含白盒，见
         # combined_wallclock_ms docstring）。纯白盒/纯黑盒仍读 metrics。

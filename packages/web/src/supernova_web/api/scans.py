@@ -71,7 +71,8 @@ async def _scan_detail(request: Request, ws: str, scan_id: str, scan_dir) -> dic
     from supernova_web.components.workspaces_indexer import _to_unix
     from supernova_web.components.scan_store import (
         resolve_workflow_id, _compute_progress_pct, effective_scan_status,
-        merge_latest_run_view, combined_wallclock_ms, _is_combined_scan)
+        merge_latest_run_view, combined_wallclock_ms, _is_combined_scan,
+        is_post_hoc_runs_task)
     mgr = SessionManager(scan_dir.parent)
     data = mgr.get_session_data(scan_dir)
     idx = request.app.state.indexer
@@ -91,7 +92,8 @@ async def _scan_detail(request: Request, ws: str, scan_id: str, scan_dir) -> dic
     # phase 消费（ScanProgressOverview.resolveActiveEventsUrl），不合并则黑盒段永显「待
     # 接力」、run 级实时进度不可见（list/detail 口径一致，修 run 版本化重构遗留）。
     bb_phase, bb_reason, progress_data = merge_latest_run_view(scan_dir, data)
-    status = effective_scan_status(raw_status, combined, bb_phase)
+    status = effective_scan_status(
+        raw_status, combined, bb_phase, post_hoc_runs=is_post_hoc_runs_task(data))
     # 组合扫描重跑预填（2026-09-03）：bb_url=黑盒目标；bb_auth_ref=profile 模式认证
     # 档案引用（非敏感 profile_id/cred_ids，inline 模式 profile_id=None——明文在
     # scan-config.yaml，走下方 authentication）。前端 RerunPreset 早已就位等这组字段。
