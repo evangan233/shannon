@@ -3365,12 +3365,23 @@ class ScanManager:
         cfg = scan_dir / "scan-config.yaml"
         if req is not None:
             await self._dump_auth_config(req, ws, scan_dir)
+            # HOST（2026-09-15 gw_trade 事故）：req 带 HOST 来源（档案/URL）→ 解析快照
+            # 写主 session（对齐 start() 的 immutable host_config 语义；下游
+            # _session_host_mappings 统一读快照 → kickoff precheck / _run_blackbox_phase
+            # 提交 worker 全链生效）；req 不带 HOST → 沿用旧快照不抹。解析失败（档案
+            # 不存在/refresh 失败/映射冲突）在创建 run 之前 raise → API 层 422，不留
+            # ghost run。曾此分支只处理认证、HOST 字段被静默丢弃 → 内网域名 preflight
+            # 公网 DNS 解析秒败（Cannot resolve hostname）。
+            host_config = await self._resolve_host_config(req, ws)
             bb_url = req.url or data.get("bb_url") or data.get("web_url") or ""
-            mgr.update_session(scan_dir, {
+            session_patch: dict = {
                 "bb_url": bb_url,
                 "bb_auth_ref": self._snapshot_auth_ref(req),
-            })
-            data = mgr.get_session_data(scan_dir)  # 刷新（bb_url/bb_auth_ref 已写）
+            }
+            if host_config is not None:
+                session_patch["host_config"] = host_config
+            mgr.update_session(scan_dir, session_patch)
+            data = mgr.get_session_data(scan_dir)  # 刷新（bb_url/bb_auth_ref/host_config 已写）
         config_path = str(cfg) if cfg.exists() else None
         bb_url = data.get("bb_url") or data.get("web_url") or ""
         # 空 bb_url 守卫：纯白盒任务（未填 url）无黑盒目标。黑盒 workflow 不 fail-fast

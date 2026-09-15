@@ -213,3 +213,109 @@ async def test_add_blackbox_run_rejects_active_latest_run(tmp_path):
     store.create_blackbox_run("ws", wb_id)  # run-1（status=pending，非终态）
     with pytest.raises(ValueError, match="仍在进行"):
         await mgr._add_blackbox_run("ws", wb_id)
+
+
+def _mgr_with_host_profiles(tmp_path):
+    """ScanManager + 真 HostProfileStore（含一个无 source_url 的档案 → 解析不走网络）。"""
+    from supernova_web.components.host_profile_store import (
+        HostMapping, HostProfile, HostProfileStore)
+    from supernova_web.components.scan_manager import ScanManager
+    hp = HostProfileStore(tmp_path)
+    hp.upsert_profile("ws", HostProfile(
+        id="host-1", name="金融",
+        mappings=[HostMapping(ip="10.254.19.209", host="test-futu-webapi.futuoa.com")]))
+    return ScanManager(workspaces_dir=tmp_path, repos_dir=tmp_path,
+                       config_store=object(), host_profile_store=hp)
+
+
+async def test_add_blackbox_run_without_req_host_keeps_existing_snapshot(tmp_path):
+    """req 不带 HOST 来源 → 不解析不覆盖：沿用主 session 既有 host_config 快照
+    （老任务若带映射续用；空 body 直连模式同理零变化）。"""
+    from supernova_web.components.scan_store import ScanStore
+    from supernova_core.session import SessionManager
+    from supernova_web.models import ScanRequest
+    mgr = _mgr_with_host_profiles(tmp_path)
+    store = ScanStore(tmp_path); mgr._store = store
+    wb_id, scan_dir = store.create_scan("ws", "http://t.internal", "/code/x")
+    _ready_whitebox(scan_dir)
+    (scan_dir / "scan-config.yaml").write_text("url: http://t.internal")
+    # 主 session 预置旧快照（resolved_at 标记守卫：未被覆盖）
+    SessionManager(scan_dir.parent).update_session(scan_dir, {"host_config": {
+        "enabled": True, "source": "profile", "profile_id": "host-old",
+        "mappings": {"t.internal": "10.0.0.2"}, "warnings": [],
+        "resolved_at": 123.0}})
+    req = ScanRequest(type="whitebox", workspace="ws", url="http://t.internal")
+
+    captured = {}
+
+    async def _capture_precheck(scan_dir, ws, scan_id, web_url, config_path,
+                                host_mappings=None):
+        captured["host_mappings"] = host_mappings
+        return True
+
+    with patch.object(mgr, "_run_precheck", new=_capture_precheck), \
+         patch.object(mgr, "_rerun_orchestrator", new=AsyncMock()):
+        await mgr._add_blackbox_run("ws", wb_id, req)
+        await mgr._orchestrator_tasks[("ws", wb_id)]
+
+    cfg = _task_session(scan_dir)["host_config"]
+    assert cfg["resolved_at"] == 123.0, "无 HOST 的 req 不得覆盖旧快照"
+    assert captured["host_mappings"] == {"t.internal": "10.0.0.2"}, \
+        "下游须沿用旧快照映射"
+
+
+async def test_add_blackbox_run_with_req_host_writes_snapshot_and_feeds_precheck(tmp_path):
+    """2026-09-15 gw_trade 事故：add-run 请求带 HOST 档案 → 须解析快照写主 session
+    （_run_blackbox_phase 提交 worker 读它）+ kickoff precheck 拿映射。曾 req 分支只
+    处理认证、HOST 字段被静默丢弃 → 内网域名 preflight 走公网 DNS 秒败
+    （Cannot resolve hostname，run-1 session.json host_mappings={} 实锤）。"""
+    from supernova_web.components.scan_store import ScanStore
+    from supernova_web.models import ScanRequest
+    mgr = _mgr_with_host_profiles(tmp_path)
+    store = ScanStore(tmp_path); mgr._store = store
+    wb_id, scan_dir = store.create_scan("ws", "http://test-futu-webapi.futuoa.com", "/code/x")
+    _ready_whitebox(scan_dir)
+    # 有认证文件 → kickoff 走 precheck（捕获 host_mappings 的观测点）
+    (scan_dir / "scan-config.yaml").write_text("url: http://test-futu-webapi.futuoa.com")
+    req = ScanRequest(type="whitebox", workspace="ws",
+                      url="http://test-futu-webapi.futuoa.com",
+                      host_profile_ids=["host-1"])
+
+    captured = {}
+
+    async def _capture_precheck(scan_dir, ws, scan_id, web_url, config_path,
+                                host_mappings=None):
+        captured["host_mappings"] = host_mappings
+        return True
+
+    with patch.object(mgr, "_run_precheck", new=_capture_precheck), \
+         patch.object(mgr, "_rerun_orchestrator", new=AsyncMock()):
+        run_id = await mgr._add_blackbox_run("ws", wb_id, req)
+        await mgr._orchestrator_tasks[("ws", wb_id)]
+
+    assert run_id == "run-1"
+    cfg = _task_session(scan_dir).get("host_config")
+    assert cfg and cfg.get("mappings") == {
+        "test-futu-webapi.futuoa.com": "10.254.19.209"}, (
+        "主 session 须落 host_config 快照（_run_blackbox_phase/详情重跑预填读它）")
+    assert captured["host_mappings"] == {
+        "test-futu-webapi.futuoa.com": "10.254.19.209"}, (
+        "kickoff precheck 须拿到映射（登录目标站走 pinned host）")
+
+
+async def test_add_blackbox_run_host_profile_missing_rejects_before_run_creation(tmp_path):
+    """req 带 HOST 来源但解析失败（档案不存在）→ 创建 run 之前 raise（API 层 422），
+    不留 ghost run——对齐 start() 的「HOST 解析在目录创建前」防幽灵语义。"""
+    from supernova_web.components.scan_store import ScanStore
+    from supernova_web.models import ScanRequest
+    mgr = _mgr_with_host_profiles(tmp_path)
+    store = ScanStore(tmp_path); mgr._store = store
+    wb_id, scan_dir = store.create_scan("ws", "http://t", "/code/x")
+    _ready_whitebox(scan_dir)
+    req = ScanRequest(type="whitebox", workspace="ws", url="http://t",
+                      host_profile_ids=["ghost-profile"])
+
+    with pytest.raises(ValueError, match="不存在"):
+        await mgr._add_blackbox_run("ws", wb_id, req)
+    assert not (scan_dir / "blackbox-runs").exists() or \
+        not list((scan_dir / "blackbox-runs").iterdir()), "失败须发生在 run 创建之前"
