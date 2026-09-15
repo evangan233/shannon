@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ControlFinding, DataflowTree, SafeVector } from "@/api/types";
-import { focusAnchor } from "@/utils/focusAnchor";
+import { focusAnchor, stickyHeaderOffset } from "@/utils/focusAnchor";
 import { controlAnchorId } from "./GuardChain";
 
 export interface TocSideBarProps {
@@ -73,7 +73,13 @@ export function TocSideBar({ trees, controls, safeVectors, onLocate }: TocSideBa
       document.querySelectorAll("[data-tree-id], [data-control-id], [data-safe-section]"),
     );
     if (els.length === 0) return;
-    const order = els.map(anchorIdOf).filter((x): x is string => x !== null);
+    // id → 锚点元素（文档序，Map 保插入序）：精确判定时反查元素量实时几何
+    const elById = new Map<string, Element>();
+    for (const el of els) {
+      const id = anchorIdOf(el);
+      if (id) elById.set(id, el);
+    }
+    const order = [...elById.keys()];
     const io = new IntersectionObserver(
       (entries) => {
         for (const e of entries) {
@@ -82,11 +88,23 @@ export function TocSideBar({ trees, controls, safeVectors, onLocate }: TocSideBa
           if (e.isIntersecting) visibleRef.current.add(id);
           else visibleRef.current.delete(id);
         }
-        const first = order.find((id) => visibleRef.current.has(id));
+        // 精确判定（2026-09-15 修「点击跳转后高亮落到前一个条目」，与 ReportToc
+        // 同款）：IO 带只当粗筛，命中集合内再按实时几何校验——上沿 = sticky 遮蔽带
+        // 下沿（与 focusAnchor 落点同源，每次回调现量），下沿 = 视口 40%。跳转后
+        // 目标卡顶贴遮蔽带下沿，前一张卡尾只落在被遮蔽区 → 剔除，不再被文档序
+        // 更靠前的前卡抢走高亮。
+        const bandTop = stickyHeaderOffset();
+        const bandBottom = window.innerHeight * 0.4;
+        const first = order.find((id) => {
+          if (!visibleRef.current.has(id)) return false;
+          const rect = elById.get(id)?.getBoundingClientRect();
+          return !!rect && rect.bottom > bandTop && rect.top < bandBottom;
+        });
         if (first) setActiveId(first);
       },
-      // 视口上 10%~40% 带内命中才算「当前区块」（读者视线区）
-      { rootMargin: "-10% 0px -60% 0px" },
+      // 粗筛带上沿与遮蔽带同源（创建时固化；sticky 后续长高由回调内实时校验兜住），
+      // 避免大视口（10% 视口 > 遮蔽带下沿）时目标卡落点落在粗筛带外被漏报。
+      { rootMargin: `-${Math.ceil(stickyHeaderOffset())}px 0px -60% 0px` },
     );
     for (const el of els) io.observe(el);
     return () => io.disconnect();

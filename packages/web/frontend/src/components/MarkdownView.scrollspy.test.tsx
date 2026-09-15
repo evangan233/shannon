@@ -68,7 +68,27 @@ describe("TOC scroll-spy 累积展开", () => {
   });
   afterEach(() => {
     delete (globalThis as any).IntersectionObserver;
+    document.body.innerHTML = "";
   });
+
+  /** 挂固定视口几何（2026-09-15 判定带对齐遮蔽带后 scrollspy 需真实 rect，
+   *  jsdom 默认全 0 会被精确判定剔除）。 */
+  function viewportRect(top: number, bottom: number): DOMRect {
+    return { top, bottom, height: bottom - top, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+  }
+
+  /** 挂 sticky 遮蔽带元素：TopBar(0→48) + scan sticky 头(48→stickyBottom)
+   *  → stickyHeaderOffset() = stickyBottom + 8（jsdom 无样式走 rect.bottom 回落）。 */
+  function mountStickyBand(stickyBottom: number) {
+    const mk = (testid: string, top: number, bottom: number) => {
+      const el = document.createElement("div");
+      el.setAttribute("data-testid", testid);
+      el.getBoundingClientRect = () => viewportRect(top, bottom);
+      document.body.appendChild(el);
+    };
+    mk("topbar", 0, 48);
+    mk("scan-sticky-header", 48, stickyBottom);
+  }
 
   it("滚动到下方章节时，上方同级章节不应保持展开（复现联动 bug）", async () => {
     const { container } = render(<MarkdownView markdown={MD} />);
@@ -101,6 +121,10 @@ describe("TOC scroll-spy 累积展开", () => {
     expect(inj).not.toBeNull();
     expect(xss).not.toBeNull();
     expect(chain).not.toBeNull();
+    // 2026-09-15 判定带对齐遮蔽带后需真实几何（trigger 逐条进入视线带）
+    inj.getBoundingClientRect = () => viewportRect(100, 500);
+    xss.getBoundingClientRect = () => viewportRect(100, 500);
+    chain.getBoundingClientRect = () => viewportRect(100, 500);
 
     // 1) 滚到 INJ-VULN-01（Injection 章节）-> 不自动展开，但 Injection 父标题高亮
     io.trigger(inj, true);
@@ -135,6 +159,28 @@ describe("TOC scroll-spy 累积展开", () => {
       "false",
       "false",
     ]);
+  });
+
+  it("跳转落点与判定带同源（2026-09-15 修「高亮前一个」）：目标顶贴遮蔽带下沿、前章尾只在被遮蔽区 → 同批合并通知也高亮目标", async () => {
+    mountStickyBand(191); // 遮蔽带 191 → stickyHeaderOffset=199；旧粗筛带 [-80px, 30%] 起点在被遮蔽区
+    const { container } = render(<MarkdownView markdown={MD} />);
+    await waitFor(() => {
+      expect(container.querySelectorAll('[data-testid="toc-toggle"]').length).toBe(3);
+    });
+    const io = MockIO.last!;
+    const inj = container.querySelector("#INJ-VULN-01") as HTMLElement;
+    const xss = container.querySelector("#XSS-VULN-01") as HTMLElement;
+    // 跳转完成几何：前章尾 = 目标顶 − gap = 183（落在遮蔽区内）；目标顶贴 199。
+    inj.getBoundingClientRect = () => viewportRect(-600, 183);
+    xss.getBoundingClientRect = () => viewportRect(199, 1099);
+    // 快速 smooth 跳转的合并通知批次：两章同批 intersecting（旧实现 sort by top → 前章赢）
+    io.cb([
+      { target: inj, isIntersecting: true, boundingClientRect: { top: -600 } },
+      { target: xss, isIntersecting: true, boundingClientRect: { top: 199 } },
+    ]);
+    // XSS 父标题高亮，Injection 不被抢
+    await waitFor(() => expect(isActive(parentLink(container, 1))).toBe(true));
+    expect(isActive(parentLink(container, 0))).toBe(false);
   });
 });
 

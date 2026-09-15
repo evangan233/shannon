@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, act } from "@testing-library/react";
 import i18n from "@/i18n";
 import { ReportToc, REPORT_EXEC_SUMMARY_ID, REPORT_CHAINS_ID } from "./ReportToc";
 import type { ReportData, ReportVulnerability } from "@/api/types";
@@ -47,6 +47,48 @@ function mountAnchor(id: string) {
   el.id = id;
   document.body.appendChild(el);
   return el;
+}
+
+// —— IntersectionObserver stub（jsdom 无实现，scrollspy 需手动喂 entry），
+//    对齐 TocSideBar.test 的 MockIO 模式 ——
+class MockIO {
+  static instances: MockIO[] = [];
+  cb: IntersectionObserverCallback;
+  observed: Element[] = [];
+  constructor(cb: IntersectionObserverCallback) {
+    this.cb = cb;
+    MockIO.instances.push(this);
+  }
+  observe(el: Element) {
+    this.observed.push(el);
+  }
+  unobserve() {}
+  disconnect() {}
+  takeRecords() {
+    return [];
+  }
+}
+
+/** 挂 sticky 遮蔽带元素并量出固定几何：TopBar(0→48) + scan sticky 头(48→stickyBottom)
+ *  → stickyHeaderOffset() = stickyBottom + 8 呼吸（jsdom getComputedStyle 无样式，
+ *  pinnedBottom 走 rect.bottom 回落分支，mock rect 即可控制量取值）。 */
+function mountStickyBand(stickyBottom: number) {
+  const mk = (testid: string, top: number, bottom: number) => {
+    const el = document.createElement("div");
+    el.setAttribute("data-testid", testid);
+    el.getBoundingClientRect = () =>
+      ({ top, bottom, height: bottom - top, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+    document.body.appendChild(el);
+  };
+  mk("topbar", 0, 48);
+  mk("scan-sticky-header", 48, stickyBottom);
+}
+
+/** 给锚点元素挂固定视口几何（复现「点击跳转完成后」的真实布局：
+ *  前卡尾=目标顶−16px gap；目标顶=遮蔽带下沿 199px）。 */
+function setViewportRect(el: Element, top: number, bottom: number) {
+  el.getBoundingClientRect = () =>
+    ({ top, bottom, height: bottom - top, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
 }
 
 describe("ReportToc — 报告目录（2026-08-26 结构化路径新增）", () => {
@@ -110,5 +152,96 @@ describe("ReportToc — 报告目录（2026-08-26 结构化路径新增）", () 
     const { container } = render(<ReportToc data={data} />);
     fireEvent.click(container.querySelector('[data-toc-id="INJ-VULN-02"]')!);
     expect(target.classList.contains("dataflow-flash")).toBe(true);
+  });
+});
+
+describe("ReportToc — scrollspy 判定带与跳转落点同源（2026-09-15 修「高亮前一个」）", () => {
+  beforeEach(() => {
+    MockIO.instances = [];
+    vi.stubGlobal("IntersectionObserver", MockIO);
+    window.scrollTo = vi.fn();
+  });
+  afterEach(() => {
+    // 顶层平级块（外层 describe 的 afterEach 不跨块生效）——必须自清 body，
+    // 否则前条用例的锚点/几何 mock 残留，getElementById 取到旧元素污染后续用例。
+    document.body.innerHTML = "";
+    vi.unstubAllGlobals();
+  });
+
+  /** 渲染目录 + 挂锚点并复现「点击跳转完成后」几何，返回容器。
+   *  前卡尾 bottom = 目标顶 − 16px(space-y-4 gap)；目标顶 = 遮蔽带下沿。 */
+  function setupJumpGeometry(stickyBottom: number, gap = 16) {
+    mountStickyBand(stickyBottom);
+    const prev = mountAnchor("XSS-VULN-01");
+    const target = mountAnchor("INJ-VULN-02");
+    setViewportRect(prev, -600, stickyBottom + 8 - gap);
+    setViewportRect(target, stickyBottom + 8, stickyBottom + 8 + 900);
+    const view = render(<ReportToc data={data} />);
+    return view;
+  }
+
+  it("点击跳转后：目标卡顶部贴遮蔽带下沿、前卡尾只在被遮蔽区 → 高亮目标卡（非前一个）", async () => {
+    // 遮蔽带 191px → stickyHeaderOffset=199；jsdom 视口 768 → 旧观察带 [76.8, 307.2]
+    const { container } = setupJumpGeometry(191);
+    const io = MockIO.instances[0];
+    expect(io).toBeTruthy();
+    expect(io.observed.length).toBe(2); // 只挂了两张 vuln 卡锚点（exec/chains 未挂）
+    // 旧观察带下前卡尾(183>76.8)与目标卡(199<307.2)都「相交」——这正是 bug 几何
+    const prev = document.getElementById("XSS-VULN-01")!;
+    const target = document.getElementById("INJ-VULN-02")!;
+    await act(async () => {
+      io.cb(
+        [
+          { isIntersecting: true, target: prev } as unknown as IntersectionObserverEntry,
+          { isIntersecting: true, target } as unknown as IntersectionObserverEntry,
+        ],
+        io as unknown as IntersectionObserver,
+      );
+    });
+    expect(container.querySelector('[data-toc-id="INJ-VULN-02"]')!.getAttribute("aria-current")).toBe("true");
+    expect(container.querySelector('[data-toc-id="XSS-VULN-01"]')!.getAttribute("aria-current")).toBeNull();
+  });
+
+  it("普通滚动（前卡独占视线带）→ 仍高亮前卡（文档序第一可见者语义不变）", async () => {
+    mountStickyBand(191);
+    const prev = mountAnchor("XSS-VULN-01");
+    const target = mountAnchor("INJ-VULN-02");
+    setViewportRect(prev, 100, 500); // 完整在视线区
+    setViewportRect(target, 520, 1400); // 在带下方不可见
+    const { container } = render(<ReportToc data={data} />);
+    const io = MockIO.instances[0];
+    await act(async () => {
+      io.cb(
+        [
+          { isIntersecting: true, target: prev } as unknown as IntersectionObserverEntry,
+          { isIntersecting: false, target } as unknown as IntersectionObserverEntry,
+        ],
+        io as unknown as IntersectionObserver,
+      );
+    });
+    expect(container.querySelector('[data-toc-id="XSS-VULN-01"]')!.getAttribute("aria-current")).toBe("true");
+  });
+
+  it("sticky 遮蔽带滚动中长高（SSE 进度概览）→ 回调内实时重量，前卡尾落入新遮蔽区仍被剔除", async () => {
+    // IO 创建时遮蔽带 191；之后 sticky 长高到 232（+41），目标落点被 focusAnchor 校正下移
+    const { container } = setupJumpGeometry(191);
+    const io = MockIO.instances[0];
+    const prev = document.getElementById("XSS-VULN-01")!;
+    const target = document.getElementById("INJ-VULN-02")!;
+    // 模拟校正后几何：遮蔽带 232+8=240；前卡尾 240-16=224；目标顶 240
+    document.querySelector('[data-testid="scan-sticky-header"]')!.getBoundingClientRect = () =>
+      ({ top: 48, bottom: 232, height: 184, left: 0, right: 0, width: 0, x: 0, y: 48, toJSON: () => ({}) }) as DOMRect;
+    setViewportRect(prev, -600, 224);
+    setViewportRect(target, 240, 1140);
+    await act(async () => {
+      io.cb(
+        [
+          { isIntersecting: true, target: prev } as unknown as IntersectionObserverEntry,
+          { isIntersecting: true, target } as unknown as IntersectionObserverEntry,
+        ],
+        io as unknown as IntersectionObserver,
+      );
+    });
+    expect(container.querySelector('[data-toc-id="INJ-VULN-02"]')!.getAttribute("aria-current")).toBe("true");
   });
 });

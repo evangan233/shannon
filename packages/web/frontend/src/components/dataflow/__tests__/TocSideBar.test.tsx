@@ -75,6 +75,24 @@ class MockIO {
   }
 }
 
+/** 挂固定视口几何（jsdom 无布局，scrollspy 精确判定需可控 rect）。 */
+function viewportRect(top: number, bottom: number): DOMRect {
+  return { top, bottom, height: bottom - top, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+}
+
+/** 挂 sticky 遮蔽带元素：TopBar(0→48) + scan sticky 头(48→stickyBottom)
+ *  → stickyHeaderOffset() = stickyBottom + 8（jsdom 无样式走 rect.bottom 回落）。 */
+function mountStickyBand(stickyBottom: number) {
+  const mk = (testid: string, top: number, bottom: number) => {
+    const el = document.createElement("div");
+    el.setAttribute("data-testid", testid);
+    el.getBoundingClientRect = () => viewportRect(top, bottom);
+    document.body.appendChild(el);
+  };
+  mk("topbar", 0, 48);
+  mk("scan-sticky-header", 48, stickyBottom);
+}
+
 describe("TocSideBar — 目录侧栏（spec §5）", () => {
   beforeEach(() => {
     i18n.changeLanguage("zh");
@@ -87,6 +105,8 @@ describe("TocSideBar — 目录侧栏（spec §5）", () => {
   afterEach(() => {
     i18n.changeLanguage("zh");
     vi.unstubAllGlobals();
+    // 手工挂的 sticky 遮蔽带元素清理（几何 mock 残留会让后续用例量到旧遮蔽带）
+    document.body.innerHTML = "";
   });
 
   it("分组镜像三区：漏洞数据流树 (N) / 认证·授权风险 (N) / 排查过的入口 (N)", () => {
@@ -156,11 +176,19 @@ describe("TocSideBar — 目录侧栏（spec §5）", () => {
     expect(io).toBeTruthy();
     // 观察了两个树锚点
     expect(io.observed.length).toBe(2);
-    // 滚动到第二棵树 → 第二个条目高亮（IO 回调触发 setState，须包 act 等 commit）
+    // 滚动到第二棵树 → 第二个条目高亮（IO 回调触发 setState，须包 act 等 commit）。
+    // 2026-09-15 判定带对齐遮蔽带后需真实几何（jsdom 默认全 0 rect 会被剔除）：
+    // T-SAFE-01 完整在视线带内、T-VULN-01 已滚出带外。
+    const prev = container.querySelector('[data-tree-id="T-VULN-01"]')!;
     const target = container.querySelector('[data-tree-id="T-SAFE-01"]')!;
+    prev.getBoundingClientRect = () => viewportRect(-600, -100);
+    target.getBoundingClientRect = () => viewportRect(100, 500);
     await act(async () => {
       io.cb(
-        [{ isIntersecting: true, target, boundingClientRect: {} } as unknown as IntersectionObserverEntry],
+        [
+          { isIntersecting: false, target: prev } as unknown as IntersectionObserverEntry,
+          { isIntersecting: true, target } as unknown as IntersectionObserverEntry,
+        ],
         io as unknown as IntersectionObserver,
       );
     });
@@ -168,6 +196,35 @@ describe("TocSideBar — 目录侧栏（spec §5）", () => {
     expect(active?.getAttribute("aria-current")).toBe("true");
     const inactive = container.querySelector('[data-toc-id="T-VULN-01"]');
     expect(inactive?.getAttribute("aria-current")).toBeNull();
+  });
+
+  it("scrollspy 判定带与跳转落点同源（2026-09-15 修「高亮前一个」）：目标卡顶贴遮蔽带下沿、前卡尾只在被遮蔽区 → 高亮目标卡", async () => {
+    mountStickyBand(191); // 遮蔽带 191 → stickyHeaderOffset=199；jsdom 视口 768 → 旧观察带 [76.8, 307.2]
+    const { container } = render(
+      <div>
+        <div data-tree-id="T-VULN-01">tree1</div>
+        <div data-tree-id="T-SAFE-01">tree2</div>
+        <TocSideBar trees={[vulnTree, safeTree]} controls={[]} safeVectors={[]} />
+      </div>,
+    );
+    // 跳转完成几何：前卡尾 = 目标顶 − 16px gap = 183（落在遮蔽区内，用户看不见）；
+    // 目标顶贴遮蔽带下沿 199。旧观察带下两者都「相交」——这正是 bug 几何。
+    const prev = container.querySelector('[data-tree-id="T-VULN-01"]')!;
+    const target = container.querySelector('[data-tree-id="T-SAFE-01"]')!;
+    prev.getBoundingClientRect = () => viewportRect(-600, 183);
+    target.getBoundingClientRect = () => viewportRect(199, 1099);
+    const io = MockIO.instances[0];
+    await act(async () => {
+      io.cb(
+        [
+          { isIntersecting: true, target: prev } as unknown as IntersectionObserverEntry,
+          { isIntersecting: true, target } as unknown as IntersectionObserverEntry,
+        ],
+        io as unknown as IntersectionObserver,
+      );
+    });
+    expect(container.querySelector('[data-toc-id="T-SAFE-01"]')!.getAttribute("aria-current")).toBe("true");
+    expect(container.querySelector('[data-toc-id="T-VULN-01"]')!.getAttribute("aria-current")).toBeNull();
   });
 
   it("点击条目 → 精准滚动到目标卡（window.scrollTo，量遮蔽带算落点）+ coral 描边闪烁", () => {

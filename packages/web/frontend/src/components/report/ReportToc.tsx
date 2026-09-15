@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ReportData } from "@/api/types";
-import { focusAnchor } from "@/utils/focusAnchor";
+import { focusAnchor, stickyHeaderOffset } from "@/utils/focusAnchor";
 
 /** 执行摘要 / 攻击链区锚点 id（ReportView 对应 section 挂载，与漏洞卡 id=vuln_id 同域）。 */
 export const REPORT_EXEC_SUMMARY_ID = "report-exec-summary";
@@ -57,11 +57,23 @@ export function ReportToc({
           if (e.isIntersecting) visibleRef.current.add(e.target.id);
           else visibleRef.current.delete(e.target.id);
         }
-        const first = anchorIds.find((id) => visibleRef.current.has(id));
+        // 精确判定（2026-09-15 修「点击跳转后高亮落到前一个条目」）：IO 带只当粗筛，
+        // 命中集合内再按实时几何校验——上沿 = sticky 遮蔽带下沿（与 focusAnchor 落点
+        // 同源，每次回调现量，SSE 进度概览长高天然跟随），下沿 = 视口 40%。跳转后
+        // 目标卡顶贴遮蔽带下沿，前一张卡尾（gap 之上）只落在被遮蔽区 → 剔除，
+        // 不再被文档序更靠前的前卡抢走高亮。
+        const bandTop = stickyHeaderOffset();
+        const bandBottom = window.innerHeight * 0.4;
+        const first = anchorIds.find((id) => {
+          if (!visibleRef.current.has(id)) return false;
+          const rect = document.getElementById(id)?.getBoundingClientRect();
+          return !!rect && rect.bottom > bandTop && rect.top < bandBottom;
+        });
         if (first) setActiveId(first);
       },
-      // 视口上 10%~40% 带内命中才算「当前区块」（读者视线区）
-      { rootMargin: "-10% 0px -60% 0px" },
+      // 粗筛带上沿与遮蔽带同源（创建时固化；sticky 后续长高由回调内实时校验兜住），
+      // 避免大视口（10% 视口 > 遮蔽带下沿）时目标卡落点落在粗筛带外被漏报。
+      { rootMargin: `-${Math.ceil(stickyHeaderOffset())}px 0px -60% 0px` },
     );
     for (const el of els) io.observe(el);
     return () => io.disconnect();

@@ -14,7 +14,7 @@ import { AttackChainSection } from "./report/AttackChainSection";
 import { ThreatOverview } from "./report/ThreatOverview";
 import { TypeSummaryCards } from "./report/TypeSummaryCards";
 import { splitByVulnBlocks, inferSeverity, type Segment } from "@/lib/vuln-block";
-import { focusAnchor } from "@/utils/focusAnchor";
+import { focusAnchor, stickyHeaderOffset } from "@/utils/focusAnchor";
 import { splitAttackChainSection, splitPocSection, parsePocEntries, stripCardPocLines } from "@/lib/report-sections";
 import {
   computeStats,
@@ -529,12 +529,24 @@ export function MarkdownView({ markdown }: { markdown: string }) {
     if (typeof IntersectionObserver === "undefined" || tocItems.length === 0) return;
     const observer = new IntersectionObserver(
       (entries) => {
+        // 精确判定（2026-09-15，与 ReportToc/TocSideBar 同款修「点击跳转后高亮落到
+        // 前一个条目」）：旧 -80px 粗筛带上沿落在 sticky 遮蔽带（~199px）内，被遮住
+        // 的前一章节尾被算「可见」且 top 更小，快速 smooth 跳转的合并通知批次里高亮
+        // 被前一个抢走。对粗筛命中者按实时几何校验（上沿 = 遮蔽带下沿，与 focusAnchor
+        // 落点同源、每次回调现量；下沿 = 视口 30%）再取最靠上者。
+        const bandTop = stickyHeaderOffset();
+        const bandBottom = window.innerHeight * 0.3;
         const visible = entries
-          .filter((e) => e.isIntersecting)
+          .filter((e) => {
+            if (!e.isIntersecting) return false;
+            const rect = e.target.getBoundingClientRect(); // 实时几何（IO 快照滞后于 sticky 长高）
+            return rect.bottom > bandTop && rect.top < bandBottom;
+          })
           .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
         if (visible[0]?.target.id) setActiveId(visible[0].target.id);
       },
-      { rootMargin: "-80px 0px -70% 0px", threshold: 0 },
+      // 粗筛带上沿与遮蔽带同源（创建时固化；sticky 后续长高由回调内实时校验兜住）
+      { rootMargin: `-${Math.ceil(stickyHeaderOffset())}px 0px -70% 0px`, threshold: 0 },
     );
     for (const { id } of tocItems) {
       const el = document.getElementById(id);
