@@ -123,3 +123,45 @@ async def test_blackbox_queues_until_slot_released(tmp_path):
                 await asyncio.sleep(0.1)
     assert "setup_display" in calls
     assert g.candidate_ids() == []
+
+
+@pytest.mark.asyncio
+async def test_blackbox_long_queue_continue_as_new(tmp_path, monkeypatch):
+    """黑盒侧 CAN call-site：BlackboxPipelineInput 经 continue_as_new(args=[input])
+    序列化往返无损——长 stint 重开 run 后仍在排队（first_seen 保留），释放后放行。
+    CAN 机制本体由 whitebox test_workflow_gate 全链路覆盖，此处锁输入类型路径。"""
+    from datetime import timedelta
+    monkeypatch.setattr(gate_mod, "GATE_CONTINUE_AFTER", timedelta(seconds=0.3))
+    g = gate_mod._gate()
+    g.try_acquire("holder", {"kind": "whitebox"})
+    calls: list = []
+    async with await WorkflowEnvironment.start_local() as env:
+        async with Worker(env.client, task_queue="tq-bb-gate",
+                          workflows=[BlackboxScanWorkflow],
+                          activities=_acts(calls)):
+            handle = await env.client.start_workflow(
+                BlackboxScanWorkflow.run, _inp(tmp_path),
+                id="w-bb-can", task_queue="tq-bb-gate")
+            for _ in range(50):
+                if "w-bb-can" in g.waiting:
+                    break
+                await asyncio.sleep(0.1)
+            first_seen = g.waiting["w-bb-can"].first_seen
+            changed = False
+            for _ in range(100):
+                desc = await env.client.get_workflow_handle("w-bb-can").describe()
+                if desc.run_id != handle.first_execution_run_id:
+                    changed = True
+                    break
+                await asyncio.sleep(0.1)
+            assert changed, "长 stint 未发生 continue-as-new"
+            assert g.waiting["w-bb-can"].first_seen == first_seen
+            g.release("holder")
+            with pytest.raises(Exception):
+                await asyncio.wait_for(handle.result(), timeout=30)
+            for _ in range(50):
+                if "w-bb-can" not in g.candidate_ids():
+                    break
+                await asyncio.sleep(0.1)
+    assert "setup_display" in calls
+    assert g.candidate_ids() == []

@@ -6,7 +6,9 @@ spec: docs/superpowers/specs/2026-09-08-worker-scan-gate-design.md
 - 闸门是 worker **进程内**信号量（部署假设单 worker 副本；多副本时信号量分裂，
   需迁共享存储——runner.py 的挂载注释同此口径，不预做）。
 - 排队发生在 temporal 里：workflow 在闸门段轮询 try_acquire 直到获槽，
-  workflow 活着 = 在排队，持久化/重启恢复免费。
+  workflow 活着 = 在排队，持久化/重启恢复免费。排队不限时（2026-09-16）：
+  长 stint 靠 acquire_gate_slot 周期性 continue-as-new 防事件历史膨胀，
+  workflow_id 不变故 waiting/held 语义对 CAN 透明。
 - 槽泄漏兜底 = runner 的 janitor（周期校验持有者存活性，spec §6）；
   worker 重启防超卖 = bootstrap 预占（所有 RUNNING 扫描类 workflow 计槽）。
 - gate_state.json 快照仅供 web 展示（env 指定路径；CLI 未设 = 不落盘优雅降级），
@@ -26,6 +28,10 @@ from pathlib import Path
 from temporalio import activity
 
 GATE_POLL_SECONDS = 5.0          # workflow 侧排队轮询间隔；测试 monkeypatch 调小
+# 排队 stint 超此时长即 continue-as-new 重开 run（实效 = min(本值, run_timeout/3)）：
+# 5s 轮询每圈 ~11 events，20min ≈ 2.6k events/run，远低于 temporal 单 workflow
+# ~50k 事件历史上限——排队不限时的前提下靠周期重开防历史膨胀。测试 monkeypatch 调小。
+GATE_CONTINUE_AFTER = timedelta(minutes=20)
 _ACTIVITY_TIMEOUT = timedelta(seconds=30)
 
 # per-workspace 并发上限键（2026-09-15）：ws 配置页 env 文本框 → SCAN_ENV_KEYS 白名单
@@ -192,7 +198,11 @@ def _gate() -> ScanGate:
         state_file = os.environ.get("SUPERNOVA_SCAN_GATE_STATE_FILE", "")
         _GATE = ScanGate(
             capacity=int(os.environ.get("SUPERNOVA_SCAN_GATE_CAPACITY", "5")),
-            max_waiting=int(os.environ.get("SUPERNOVA_SCAN_GATE_MAX_WAITING", "50")),
+            # 默认 500（2026-09-16，原 50）：对齐批量提交上限 SUPERNOVA_BATCH_SCAN_
+            # MAX_REPOS 默认 500——批量场景第 56 个起 queue_full 秒拒（金融平台
+            # 事故 139 个秒败）违背「排队不限时」语义；防雪崩靠 workflow 侧
+            # continue-as-new（历史膨胀已治）+ 轮询超时容忍，不靠拒绝。
+            max_waiting=int(os.environ.get("SUPERNOVA_SCAN_GATE_MAX_WAITING", "500")),
             state_path=Path(state_file) if state_file else None,
         )
     return _GATE
@@ -265,32 +275,89 @@ async def scan_gate_release() -> None:
     _gate().release(activity.info().workflow_id)
 
 
-async def acquire_gate_slot(descriptor: dict) -> None:
+async def acquire_gate_slot(descriptor: dict, input) -> None:
     """workflow 侧闸门段（workflow 上下文调用）：排队轮询直到获槽；满队 raise。
+
+    2026-09-16 排队不限时 + continue-as-new（spec 2026-09-16-scan-budget-queue-unlimited）：
+    - 排队 stint ≥ min(GATE_CONTINUE_AFTER, run_timeout/3) → ``continue_as_new(args=[input])``
+      重开 run：事件历史清零防 temporal ~50k 上限；workflow_id 不变 → worker 内存
+      gate 的 waiting 条目（含 first_seen）原样保留，FIFO 位置不丢。新 run 重入本
+      函数继续轮询，排队多久都等（对齐 scan-gate spec「不做排队超时」）。
+    - 获槽时若已排过队（stint>0）同样重开：新 run 首次 try_acquire 走 ``held`` 幂等
+      路径（try_acquire 对 held 中 workflow_id 直接 granted），扫描预算（run_timeout，
+      提交端按 scan_budget() 设定）满额从**获槽**起算。免排队快路径（stint==0）不
+      重启、原地进扫描。
+    - 安全性：三个扫描 workflow 的调用点都在 run() 的 try/finally（release_gate_slot）
+      **之前**——ContinueAsNewError 是 BaseException 子类（不被 except Exception 吞）
+      直接展开出 run，finally release 不会误摘 waiting 条目。
 
     cancel 传导：temporal cancel 在 sleep/execute_activity await 点抛 CancelledError，
     此时尚未获槽、无需 release——waiting 残留由 janitor 回收（spec §6）。
     retry_policy=maximum_attempts=1：activity 是读内存 dict 的瞬时操作，失败无重试
     价值（轮询循环下一轮天然重试）；且默认无限重试会把 unregistered activity
     （CLI worker 漏注册等部署不一致）变成「workflow 永挂闸门」而非快速失败。
+    唯一例外：**超时**（ActivityError 且 cause 是 TimeoutError） tolerated——worker
+    过载时轮询 activity 可能撞 30s start-to-close，排队不限时原则下不允许此死法
+    （2026-09-16 事故 cloud_sync_svr 排队 47min 死于此），本轮视同未获槽重试；
+    非超时 ActivityError 照旧上抛快速失败。
     """
     from temporalio import workflow
     from temporalio.common import RetryPolicy
-    from temporalio.exceptions import ApplicationError
+    from temporalio.exceptions import ActivityError, ApplicationError
+    from temporalio.exceptions import TimeoutError as ActivityTimeoutError
+    stint = 0.0
     while True:
-        r = await workflow.execute_activity(
-            scan_gate_try_acquire, descriptor,
-            start_to_close_timeout=_ACTIVITY_TIMEOUT,
-            retry_policy=RetryPolicy(maximum_attempts=1),
-        )
+        timed_out = False
+        try:
+            r = await workflow.execute_activity(
+                scan_gate_try_acquire, descriptor,
+                start_to_close_timeout=_ACTIVITY_TIMEOUT,
+                retry_policy=RetryPolicy(maximum_attempts=1),
+            )
+        except ActivityTimeoutError:
+            # server TIMEOUT failure 直接转 TimeoutError（不包 ActivityError）
+            timed_out = True
+        except ActivityError as err:
+            if not isinstance(err.cause, ActivityTimeoutError):
+                raise  # 漏注册等部署不一致照旧快速失败（maximum_attempts=1 的初衷）
+            timed_out = True
+        if timed_out:
+            # 排队中轮询超时（worker 过载打满 activity 并发——2026-09-16 事故
+            # cloud_sync_svr 排队 47min 死于 30s poll 超时的死法）：排队不限时
+            # 原则下不容忍此死法，本轮视同未获槽，睡一拍重试（轮询幂等）。
+            await workflow.sleep(GATE_POLL_SECONDS)
+            stint += GATE_POLL_SECONDS
+            continue
         if r.get("granted"):
+            if stint > 0:
+                # 获槽重启：预算满额从获槽起算（held 幂等路径兜住新 run 首轮 try_acquire）
+                workflow.continue_as_new(args=[input])
             return
         if r.get("queue_full"):
             # 文案数字来自 activity 返回值：workflow sandbox 不 import worker 进程常量
             raise ApplicationError(
                 f"扫描排队已满（上限 {r.get('max_waiting')}），请稍后重试",
                 non_retryable=True)
+        if stint >= _continue_after_seconds():
+            # 排队重启：history 清零；waiting 条目按 workflow_id 保留（FIFO 不丢）
+            workflow.continue_as_new(args=[input])
         await workflow.sleep(GATE_POLL_SECONDS)
+        stint += GATE_POLL_SECONDS
+
+
+def _continue_after_seconds() -> float:
+    """实效 CAN 间隔秒数 = min(GATE_CONTINUE_AFTER, run_timeout/3)；run_timeout
+    缺省（None/零，提交方未设时 temporal 返回 None）用常量。
+
+    /3 防小预算自掐：stint 消耗的是当前排队 run 自己的 run_timeout，预算 <1h 时
+    20min stint 会占掉大头，排队 run 可能在获槽前先被 run_timeout 杀掉。
+    """
+    from temporalio import workflow
+    cont = GATE_CONTINUE_AFTER
+    rt = workflow.info().run_timeout
+    if rt:
+        cont = min(cont, rt / 3)
+    return cont.total_seconds()
 
 
 async def release_gate_slot() -> None:

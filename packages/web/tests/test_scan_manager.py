@@ -676,7 +676,7 @@ def test_scan_summary_corr_children(tmp_path):
 async def test_submit_correlation_to_correlation_queue(tmp_path, monkeypatch):
     """C2: _submit_correlation 镜像 _submit_whitebox —— WEB_TASK_QUEUE_CORRELATION 提交、
     workflow_id 加 -corr、CorrelationPipelineInput 全 str 路径、成功后锚定 submitted_at。"""
-    from supernova_core.runtime.workflow_timeout import workflow_run_timeout
+    from supernova_core.runtime.workflow_timeout import scan_budget
     from supernova_core.services.temporal_infra import WEB_TASK_QUEUE_CORRELATION
     from supernova_multi.pipeline.shared import CorrelationPipelineInput
 
@@ -685,6 +685,8 @@ async def test_submit_correlation_to_correlation_queue(tmp_path, monkeypatch):
     repo_ws = tmp_path / "ws" / "scans" / "wb-1"
     repo_ws.mkdir(parents=True)
     mock_client = _patch_client(monkeypatch)
+    # 预算调小（3h）验证 4.5h 下限仍生效（final-fix ④ 的被测分支）
+    monkeypatch.setenv("SUPERNOVA_SCAN_BUDGET_HOURS", "3")
 
     handle = await sm._submit_correlation(
         config_path=tmp_path / "web-multi-x.yaml",
@@ -696,10 +698,12 @@ async def test_submit_correlation_to_correlation_queue(tmp_path, monkeypatch):
     call = mock_client.start_workflow.call_args
     assert call.kwargs["task_queue"] == WEB_TASK_QUEUE_CORRELATION
     assert call.kwargs["id"] == f"ws-{scan_id}-corr"
-    # final-fix ④：corr run_timeout 须严格大于 activity 预算 4h —— max(env, 4.5h)，
-    # 默认 3h 时抬到 4.5h（防 3h workflow 掐死 4h activity）。
+    # final-fix ④：corr run_timeout 须严格大于 activity 预算 4h —— max(预算, 4.5h)，
+    # 预算 3h 时抬到 4.5h（防预算 workflow 掐死 4h activity）；预算默认 5h > 4.5h
+    # 时尊重预算，此处以调小档锁下限分支。
     assert call.kwargs["run_timeout"] == max(
-        workflow_run_timeout(), timedelta(hours=4, minutes=30))
+        scan_budget(), timedelta(hours=4, minutes=30))
+    assert call.kwargs["run_timeout"] == timedelta(hours=4, minutes=30)
     inp = call.args[1]
     assert isinstance(inp, CorrelationPipelineInput)
     assert inp.config_path == str(tmp_path / "web-multi-x.yaml")

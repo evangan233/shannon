@@ -22,9 +22,10 @@ api_error_status=429），故以 result 字段判定、非 try/except。
   timeout 也重试会放大 stall）；SDK 快速短退避先兜一层，失败的到本层慢退避。
 - **叠加关系**：chunk 路径 TRANSIENT_RETRIES 与 Temporal RetryPolicy 均不动——
   各层退避充分（10s/20s/40s），总量有界；Temporal 退化为真正持续过载的最后手段。
-- **预算计入总闸**（SUPERNOVA_WORKFLOW_TIMEOUT_HOURS，默认 3h）：默认 2 次 ×
-  指数退避 20s/40s（上限 120s），单 agent 最多 +60s 量级，对总闸可忽略，又能盖过
-  实测分钟级网关过载窗口（2026-09-02 两次 429 间隔 25min、单窗 ~2min）。
+- **预算计入扫描预算**（SUPERNOVA_SCAN_BUDGET_HOURS，默认 5h，获槽起算）：默认
+  2 次 × 指数退避 20s/40s（上限 120s），单 agent 最多 +60s 量级，对扫描预算可
+  忽略，又能盖过实测分钟级网关过载窗口（2026-09-02 两次 429 间隔 25min、单窗
+  ~2min）。
 
 不覆盖（有意）：credential_validator 裸 httpx 预检（fail-fast 语义）；providers_openai
 _lightweight_reparse（call 内部降级路径，异常全吞不抛）。

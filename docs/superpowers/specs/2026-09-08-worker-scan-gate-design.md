@@ -65,7 +65,7 @@ worker 三 queue 各自 `max_concurrent_workflow_tasks=4`（`runner.py:159-161/1
 ```python
 class ScanGate:                       # 进程级单例（模块级实例）
     capacity: int                     # env SUPERNOVA_SCAN_GATE_CAPACITY，默认 5
-    max_waiting: int                  # env SUPERNOVA_SCAN_GATE_MAX_WAITING，默认 50
+    max_waiting: int                  # env SUPERNOVA_SCAN_GATE_MAX_WAITING，默认 500（2026-09-16 放宽，原 50——对齐批量提交默认，queue_full 秒拒违背排队不限时，见 2026-09-16-scan-budget-queue-unlimited-design）
     held: dict[workflow_id, {descriptor, acquired_at}]
     waiting: OrderedDict[workflow_id, {descriptor, first_seen_at}]   # 首次尝试序
 
@@ -238,7 +238,7 @@ async def _gate_bootstrap(client: Client) -> None:
 | 配置 | 位置 | 默认 | 说明 |
 |---|---|---|---|
 | `SUPERNOVA_SCAN_GATE_CAPACITY` | worker env | `5` | 全局扫描并发槽位（用户需求的「5」） |
-| `SUPERNOVA_SCAN_GATE_MAX_WAITING` | worker env | `50` | 排队长度上限（防雪崩 + 压轮询负载：50 × 每 5s = 10 activity/s） |
+| `SUPERNOVA_SCAN_GATE_MAX_WAITING` | worker env | `500`（2026-09-16，原 50） | 排队长度上限。原防雪崩职责由 workflow 侧 continue-as-new（防历史膨胀）+ 轮询超时容忍接手；500 排队者 × 每 5s = 100 activity/s 为理论峰值，轮询超时容忍下过载只会退化重试不会死 |
 | `SUPERNOVA_SCAN_GATE_STATE_FILE` | worker env | 空=不落盘 | 快照路径；生产 compose 指 `<workspaces_mount>/gate_state.json` |
 | `SUPERNOVA_WEB_MAX_CONCURRENT` | web env | — | **退役**（曾默认 4） |
 | `SUPERNOVA_WORKER_MAX_CONCURRENT_WF` | worker env | `4` | **不动**（workflow task 编排推进并发，与闸门正交） |
@@ -268,11 +268,11 @@ compose 变更：worker 服务加三个新 env；web 服务删 `SUPERNOVA_WEB_MA
 
 - **单 worker 副本假设**：进程内信号量在多副本下分裂（每副本独立容量 5 → 总 10）。部署现状单副本；将来 scale 时把 gate 迁共享存储（Redis/DB 租约）。**不预做**，在 runner.py 注释注明此假设。
 - **cancel 后 release 依赖**：finally 的 release activity 尽力执行，失败由 janitor 10s 兜底。与旧方案的「泄漏到人工干预」相比数量级改善；残余风险 = 多占 ≤10s。
-- **轮询负载**：排队者每 5s 一个短 activity（读内存 dict 即返回）。上限 50 排队者 = 10 activity/s，三 queue 分摊，可忽略。
+- **轮询负载**：排队者每 5s 一个短 activity（读内存 dict 即返回）。上限 500 排队者（2026-09-16 放宽）= 峰值 100 activity/s，三 queue 分摊；过载时轮询超时被容忍重试（2026-09-16），退化为慢而非死。
 - **资源联动**：闸门 5 × 每扫描内部 3 并发 agent（`SUPERNOVA_MAX_CONCURRENT`）≈ 15 并发 LLM（现状 4×3=12），worker 8cpu/4g 可扛；黑盒内部另有 Semaphore 不变。
 - **bootstrap 保守性**：TaskQueue visibility 过滤不可用时 CLI 同类型 workflow 被误预占（web 侧短暂少槽，保守无害）。
 - **快照新鲜度**：gate_state.json 只在 worker 进程内变化时写；worker 挂了文件停在旧态 → 面板显示僵尸条目，直到 worker 恢复。缓解：API 读文件时对 `since` 超过阈值（如 2h）的 held 条目标记 stale（前端弱化显示）。首版可只做时间展示，用户自行判断。
-- **queue_full 体验**：提交成功后 scan 才 failed（非提交时 409）。上限 50 足够宽，正常使用碰不到；碰到时提示明确。
+- **queue_full 体验**：提交成功后 scan 才 failed（非提交时 409）。默认 500（2026-09-16，原 50 曾在金融平台批量事故秒拒 139 个）后正常批量碰不到；碰到时提示明确。
 
 ## 12. 与被否决方案的关系（历史记录）
 

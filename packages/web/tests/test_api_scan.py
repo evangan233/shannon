@@ -205,11 +205,11 @@ def test_get_scan_gate_returns_snapshot(_authed_app):
 
 
 def test_get_scan_gate_missing_file_empty(_authed_app):
-    """worker 未起/未落盘：空快照不 500。"""
+    """worker 未起/未落盘：空快照不 500（max_waiting 兜底 = 默认 500，2026-09-16 放宽）。"""
     client = _authed_client(_authed_app)
     resp = client.get("/api/scan/gate")
     assert resp.status_code == 200
-    assert resp.json() == {"capacity": 5, "max_waiting": 50, "held": [], "waiting": []}
+    assert resp.json() == {"capacity": 5, "max_waiting": 500, "held": [], "waiting": []}
 
 
 def test_get_scan_gate_repairs_ws_from_workflow_id(_authed_app):

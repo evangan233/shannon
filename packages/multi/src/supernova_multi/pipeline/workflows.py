@@ -71,7 +71,7 @@ class CorrelationScanWorkflow:
             # 反推主 ws——cap 归属主 ws，跨仓 N 子仓各占一槽全计主 ws 持有。
             **({} if (ws_cap := gate_ws_cap_from_overrides(inp.env_overrides))
                is None else {"ws_cap": ws_cap}),
-        })
+        }, inp)
         try:
             return await workflow.execute_activity(
                 run_correlation_activity, inp,

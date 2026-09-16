@@ -187,7 +187,7 @@ class WhiteboxScanWorkflow:
             # import worker 进程常量）。
             **({} if (ws_cap := gate_ws_cap_from_overrides(input.env_overrides))
                is None else {"ws_cap": ws_cap}),
-        })
+        }, input)
         try:
             # resume: 预填已完成 agent，激活下方 `if X not in completed_agents` 守卫
             if input.resume_completed_agents:
@@ -1170,13 +1170,22 @@ class MrScanWorkflow:
             child_input = _mr_child_input(input, prepared, diff_result)
 
             # 4. child workflow 跑全量主体（MR 消费点在其内生效）
+            # 预算对齐（2026-09-16 scan_budget 获槽起算重构）：child 是父预算内
+            # 最大的一块——6h 上限 > 父预算（默认 5h）会父先 TIMED_OUT 白跑 child。
+            # clamp 到父 run 剩余预算（下限 30min 防负/零）；child 自身过闸门，
+            # 获槽后有 CAN 重启给满额预算（排队不限时）。注意父不过闸门，child
+            # 的闸门排队时间仍计入父预算（MR 既有语义，批量白盒不走此路径）。
+            _parent_rt = workflow.info().run_timeout or _MR_CHILD_TIMEOUT
+            _elapsed = timedelta(seconds=workflow.time_ns() / 1e9 - self._state.start_time)
+            child_run_timeout = max(min(_MR_CHILD_TIMEOUT, _parent_rt - _elapsed),
+                                    timedelta(minutes=30))
             child_launched = True
             child_state = await workflow.execute_child_workflow(
                 WhiteboxScanWorkflow.run,
                 args=[child_input],
                 id=f"{workflow.info().workflow_id}-wb",
                 retry_policy=RetryPolicy(maximum_attempts=1),
-                run_timeout=_MR_CHILD_TIMEOUT,
+                run_timeout=child_run_timeout,
             )
             # 泡沫：child 完成了 MR 主流程，返回其 PipelineState（状态/错误沿用）
             self._state.status = child_state.status

@@ -86,7 +86,7 @@ class BlackboxScanWorkflow:
             # add-run / rerun 走同 workflow，同吃本 ws 的 cap。
             **({} if (ws_cap := gate_ws_cap_from_overrides(input.env_overrides))
                is None else {"ws_cap": ws_cap}),
-        })
+        }, input)
         try:
             self._state.start_time = workflow.time_ns() / 1e9
 

@@ -15,7 +15,7 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from supernova_core.logging import print_line
-from supernova_core.runtime.workflow_timeout import workflow_run_timeout
+from supernova_core.runtime.workflow_timeout import scan_budget
 from supernova_core.services.temporal_infra import generate_task_queue
 
 
@@ -208,7 +208,7 @@ async def run_scan_graceful(
             workflow_input,
             id=workflow_id,
             task_queue=task_queue,
-            run_timeout=workflow_run_timeout(),
+            run_timeout=scan_budget(),
         )
         try:
             return await await_workflow_with_shutdown(

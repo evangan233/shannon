@@ -162,7 +162,7 @@ async def get_scan_gate(request: Request, user: User = Depends(current_user)):
     from supernova_core.services.scan_gate import read_gate_snapshot_file
     sf = request.app.state.config.workspaces_dir / "gate_state.json"
     snap = read_gate_snapshot_file(sf) or {
-        "capacity": 5, "max_waiting": 50, "held": [], "waiting": []}
+        "capacity": 5, "max_waiting": 500, "held": [], "waiting": []}
     _repair_gate_ws(snap.get("held", []))
     _repair_gate_ws(snap.get("waiting", []))
     return snap

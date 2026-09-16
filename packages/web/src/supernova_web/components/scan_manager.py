@@ -17,7 +17,7 @@ from temporalio.client import Client
 
 from supernova_core.models.multi_repo_config import MultiRepoConfig
 from supernova_core.services.temporal_infra import WEB_TASK_QUEUE_WHITEBOX
-from supernova_core.runtime.workflow_timeout import workflow_run_timeout
+from supernova_core.runtime.workflow_timeout import scan_budget
 from supernova_core.session import SessionManager
 from supernova_core.utils.paths import (
     INTERMEDIATE_SUBDIR, WHITEBOX_SUBDIR, blackbox_dir, blackbox_run_dir,
@@ -1026,7 +1026,7 @@ class ScanManager:
         handle = await client.start_workflow(
             WhiteboxScanWorkflow.run, inp, id=workflow_id,
             task_queue=WEB_TASK_QUEUE_WHITEBOX,
-            run_timeout=workflow_run_timeout(),
+            run_timeout=scan_budget(),
         )
         # 提交成功后锚定 submitted_at(scan_liveness 提交宽限门据此判冷启动窗口, 防误杀).
         # 失败分支(start_workflow 抛)不会到达此处 -> 提交失败不写 submitted_at.
@@ -1065,7 +1065,7 @@ class ScanManager:
         handle = await client.start_workflow(
             MrScanWorkflow.run, inp, id=workflow_id,
             task_queue=WEB_TASK_QUEUE_WHITEBOX,
-            run_timeout=workflow_run_timeout(),
+            run_timeout=scan_budget(),
         )
         self._mark_submitted_at(scan_dir)
         return handle
@@ -1417,7 +1417,7 @@ class ScanManager:
         handle = await client.start_workflow(
             BlackboxScanWorkflow.run, inp, id=workflow_id,
             task_queue=WEB_TASK_QUEUE_BLACKBOX,
-            run_timeout=workflow_run_timeout(),
+            run_timeout=scan_budget(),
         )
         self._mark_submitted_at(scan_dir)
         return handle
@@ -1455,10 +1455,10 @@ class ScanManager:
         )
         # final-fix ④（Important）：run_timeout 必须严格大于 workflow 内 activity 的
         # start_to_close_timeout（CorrelationScanWorkflow 关联 activity 预算 4h）——
-        # 裸 workflow_run_timeout()（默认 3h）会先掐死 4h activity，大 multi-edge run
-        # 必 TIMED_OUT。取 env 超时与 4.5h（4h activity + 30min 余量）的较大者：默认
-        # 3h 时抬到 4.5h，env 调大（如 6h）时尊重 env。wb/bb 提交不受影响（零回归）。
-        corr_run_timeout = max(workflow_run_timeout(), timedelta(hours=4, minutes=30))
+        # 裸 scan_budget()（默认 5h）会先掐死 4h activity，大 multi-edge run
+        # 必 TIMED_OUT。取扫描预算与 4.5h（4h activity + 30min 余量）的较大者：预算
+        # 调小（如 3h）时抬到 4.5h，预算 ≥4.5h 时尊重预算。wb/bb 提交不受影响（零回归）。
+        corr_run_timeout = max(scan_budget(), timedelta(hours=4, minutes=30))
         handle = await client.start_workflow(
             CorrelationScanWorkflow.run, inp, id=workflow_id,
             task_queue=WEB_TASK_QUEUE_CORRELATION,

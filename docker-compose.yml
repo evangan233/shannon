@@ -101,7 +101,7 @@ services:
       # 全局扫描闸门（spec 2026-09-08-worker-scan-gate §9）：快照落 workspaces
       # bind mount（web/worker 容器共享），供 /api/scan/gate 读展示。
       - SUPERNOVA_SCAN_GATE_CAPACITY=${SUPERNOVA_SCAN_GATE_CAPACITY:-5}
-      - SUPERNOVA_SCAN_GATE_MAX_WAITING=${SUPERNOVA_SCAN_GATE_MAX_WAITING:-50}
+      - SUPERNOVA_SCAN_GATE_MAX_WAITING=${SUPERNOVA_SCAN_GATE_MAX_WAITING:-500}
       - SUPERNOVA_SCAN_GATE_STATE_FILE=/app/workspaces/gate_state.json
     depends_on:
       temporal:

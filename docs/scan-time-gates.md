@@ -1,7 +1,8 @@
 # 扫描时间闸门全景（为什么会「扫不完」、哪些能放宽）
 
 > 2026-08-31 盘点，2026-09-01 修订（NodeGoat-20260901-015018 组合扫描失败诊断驱动，修正 4 处：判链闸门的开轨行为、模型敏感性、MAX_CONCURRENT web 接线、OPENAI_\* 生效判断）。
-> 一句话：**扫描从点开始到出报告，要过 5 道能弄死它的闸门；其中总闸 3 小时是最该放宽的，而所有单步时长都写死在代码里，env 调不了。**
+> 2026-09-16 修订（金融平台批量事故驱动：总闸重构为「扫描预算」——获槽起算默认 5h、排队不限时，见 §二.1 与 spec 2026-09-16-scan-budget-queue-unlimited-design）。
+> 一句话：**扫描从点开始到出报告，要过 5 道能弄死它的闸门；其中扫描预算（获槽后 5h）是最该认识清楚的，而所有单步时长都写死在代码里，env 调不了。**
 > 当前 `.env` 没配任何超时变量，全部在吃代码默认值。
 
 ---
@@ -9,7 +10,8 @@
 ## 一、闸门长什么样（叠层）
 
 ```
-[总闸]  整场扫描最多跑多久            run_timeout 3h（env 可调）
+[预算]  获槽后整场扫描最多跑多久      run_timeout 5h（env 可调；排队不计入）
+[排队]  闸门排队                       不限时（continue-as-new 防历史膨胀）
 [单步]  每个环节最多跑多久            start_to_close_timeout（全部硬编码）
 [重试]  超时后重试几次、隔多久重试    RetryPolicy（全部硬编码，max 3）
 [内层]  单次 LLM 调用 / 子进程超时    env 大多可调
@@ -22,16 +24,18 @@
 
 ## 二、真正会「扫不完」的 5 道闸门
 
-### 1. 总闸：3 小时，到点直接掐死
+### 1. 扫描预算：5 小时（**获槽起算**，排队不计），到点直接掐死
 
-- 位置：`packages/core/src/supernova_core/runtime/workflow_timeout.py:16`，env `SUPERNOVA_WORKFLOW_TIMEOUT_HOURS`，默认 3。
-- 超了会怎样：Temporal 服务端判 TIMED_OUT，**扫描代码里的收尾逻辑根本不执行**，救不回来。web 侧 15 秒内发现，把扫描标 failed。不可恢复、不可续跑。
-- 调法：`.env` 加 `SUPERNOVA_WORKFLOW_TIMEOUT_HOURS=6`。注意它不在工作区白名单里，只能全局设，不能按工作区覆盖。关联扫描会自动取 `max(env, 4.5h)`。
+- 位置：`packages/core/src/supernova_core/runtime/workflow_timeout.py`（`scan_budget()`），env `SUPERNOVA_SCAN_BUDGET_HOURS`，默认 5。
+- **2026-09-16 重构**（金融平台批量事故：原 `SUPERNOVA_WORKFLOW_TIMEOUT_HOURS` 3h 从**提交**起算，闸门排队发生在 workflow 内部轮询，排队时间全额吃掉预算——37 个扫描排队 3h 未获槽被整点收割，一个 phase 都没跑）。新口径：预算从**获槽**起算；排队**不限时**——`acquire_gate_slot` 排队 stint 超 min(20min, 预算/3) 自动 continue-as-new 重开 run（事件历史清零防 temporal ~50k 上限、workflow_id 不变故 FIFO 位置保持），获槽后再重开一次让预算满额从获槽起算（spec 2026-09-16-scan-budget-queue-unlimited-design）。排队中的扫描在 web 恒为 queued 档（`_is_queued_in_gate`），不会被误判 interrupted。
+- 超了会怎样：Temporal 服务端判 TIMED_OUT（与旧总闸同路径），**扫描代码里的收尾逻辑根本不执行**，救不回来。web 侧 15 秒内发现，把扫描标 failed。不可恢复、不可续跑。
+- 调法：`.env` 加 `SUPERNOVA_SCAN_BUDGET_HOURS=8`。注意它不在工作区白名单里，只能全局设，不能按工作区覆盖。关联扫描会自动取 `max(预算, 4.5h)`。
+- 已知例外：**MR 增量扫描**的父 workflow 不过闸门，child（全量白盒）的闸门排队时间仍计入父预算（既有语义；MR 不走批量场景，如遇长排队需另立 spec 让父周期重开）。
 
-### 2. 数学冲突：单步 2h × 重试 3 次 > 总闸 3h
+### 2. 数学冲突：单步 2h × 重试 3 次 > 预算 5h
 
-- agent 类单步（白盒 vuln / 黑盒 exploit / pre-recon / recon）窗口都是 **2h**，重试最多 3 次。2+2+2=6h，早就超 3h 总闸。
-- 结果：**第 2 次重试跑到一半就被总闸掐死，白跑**。这也是「调大总闸」最直接的理由。
+- agent 类单步（白盒 vuln / 黑盒 exploit / pre-recon / recon）窗口都是 **2h**，重试最多 3 次。2+2+2=6h，仍超 5h 预算（旧 3h 总闸时更甚，第 2 次重试中途就被掐死）。
+- 结果：**第 3 次重试跑到一半可能被预算掐死，白跑**。全重试场景罕见（重试意味着同相失败），但大仓 + 慢模型下要留意。
 - 位置：whitebox `workflows.py:276/356/442/459`、blackbox `workflows.py:395`。
 
 ### 3. 判链环节 15 分钟（2026-08-27 事故原样未改；2026-09-01 同型复发）
@@ -60,7 +64,7 @@
 
 ```bash
 # A. 放宽窗口
-SUPERNOVA_WORKFLOW_TIMEOUT_HOURS=6         # 3h→6h，最该调的一个（TIMED_OUT 不可恢复，宁大勿小）
+SUPERNOVA_SCAN_BUDGET_HOURS=8              # 单扫预算 5h→8h（获槽起算；TIMED_OUT 不可恢复，宁大勿小；2026-09-16 前为 SUPERNOVA_WORKFLOW_TIMEOUT_HOURS=3h 从提交起算，已废弃）
 SUPERNOVA_LLM_PER_CALL_TIMEOUT=360         # 默认 60 太紧，官方 .env.example 推荐 360
 SUPERNOVA_SCAN_LIVENESS_SECONDS=180        # 防容器抖动误杀
 SUPERNOVA_SCAN_LIVENESS_SUBMIT_GRACE_SECONDS=300
@@ -132,7 +136,7 @@ SUPERNOVA_AUTH_VALIDATION_TIMEOUT_SECONDS=600  # 3 次全超时白烧 30min 还�
 | 运行中 | **单 agent 40min（openai 引擎）** | `SUPERNOVA_OPENAI_CALL_TIMEOUT` 默认 2400s，**不可重试** | attempt 1/3 直接死，该 vuln 类整类丢失（外层仍 completed） |
 | 运行中 | agent-browser idle 自愈 | 5min 无命令（扫描内 setdefault 注入） | daemon 存档自杀；下条命令自动重拉 + profile 保认证态 |
 | 运行中 | 单步窗口 | 2min～4h 不等 | 重试最多 3 次，耗尽标 failed 或整场终止 |
-| 运行中 | 隐形消耗 | — | 富化/PoC 等非致命环节各 20-30min×3，失败不报错但吃总闸时长 |
-| 运行中 | **总闸** | **3h** | **TIMED_OUT 硬死，不可恢复** |
+| 运行中 | 隐形消耗 | — | 富化/PoC 等非致命环节各 20-30min×3，失败不报错但吃预算时长 |
+| 运行中 | **扫描预算（获槽起算）** | **5h** | **TIMED_OUT 硬死，不可恢复**（排队不计入；排队不限时） |
 | 取消后 | terminate 保险丝 | 60s | 软停不听就硬杀 |
 | 收尾 | SSE 关流 | 10s + 300s 空闲 | 只影响 live 页面，不停扫描 |

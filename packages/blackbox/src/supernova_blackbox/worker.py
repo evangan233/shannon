@@ -34,7 +34,7 @@ from .pipeline.activities import (
 from .pipeline.workflows import BlackboxScanWorkflow
 from .pipeline.shared import BlackboxPipelineInput, BlackboxPipelineState
 from supernova_core.utils.paths import resolve_workspaces_dir
-from supernova_core.runtime.workflow_timeout import workflow_run_timeout
+from supernova_core.runtime.workflow_timeout import scan_budget
 from supernova_core.services.temporal_infra import generate_task_queue
 from supernova_core.models.metrics import SessionMetadata
 from supernova_core.models.audit import AgentMetricsSummary, WorkflowSummary
@@ -213,7 +213,7 @@ async def run_scan(input: BlackboxPipelineInput, temporal_address: str = "localh
                     input,
                     id=workflow_id,
                     task_queue=task_queue,
-                    run_timeout=workflow_run_timeout(),
+                    run_timeout=scan_budget(),
                 )
                 try:
                     result = await await_workflow_with_shutdown(
