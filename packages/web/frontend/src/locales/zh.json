@@ -329,6 +329,14 @@
     "type": "类型筛选",
     "keyword": "搜索 scan_id 或工作区名…",
     "timeLabel": "时间筛选",
+    "repo": {
+      "label": "仓库筛选",
+      "all": "仓库：全部",
+      "selected": "仓库：{{count}} 个",
+      "searchPlaceholder": "搜索仓库…",
+      "empty": "无匹配仓库",
+      "clearAria": "清除仓库筛选"
+    },
     "time": {
       "all": "全部时间",
       "today": "今天",

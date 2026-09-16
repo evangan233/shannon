@@ -329,6 +329,14 @@
     "type": "Type",
     "keyword": "Search scan_id or workspace…",
     "timeLabel": "Time",
+    "repo": {
+      "label": "Repo filter",
+      "all": "Repo: all",
+      "selected": "Repo: {{count}}",
+      "searchPlaceholder": "Search repos…",
+      "empty": "No matching repos",
+      "clearAria": "Clear repo filter"
+    },
     "time": {
       "all": "All time",
       "today": "Today",

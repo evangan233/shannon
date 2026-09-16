@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useParams, useNavigate, useLocation, useOutletContext, Link } from "react-router-dom";
 import { toast } from "sonner";
-import { Ban, ChevronRight, Crosshair, Eye, Play, RefreshCw, Search, Trash2 } from "lucide-react";
+import { Ban, ChevronRight, Crosshair, Eye, Play, RefreshCw, Search, Trash2, ChevronsUpDown, X } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
+} from "@/components/ui/command";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ErrorState } from "@/components/ErrorState";
 import { Empty } from "@/components/Empty";
@@ -76,8 +80,8 @@ function segOf(s: ScanSummary): Seg | "other" {
  *  否则关联行会漏进「组合」档。MR 增量（spec 2026-09-03）：scan_type="mr" 独立档，
  *  不入白盒/组合（纯白盒语义无黑盒段）。 */
 type TypeFilter = "all" | "whitebox" | "combined" | "correlation" | "mr";
-interface ListFilters { seg: "all" | Seg; type: TypeFilter; keyword: string }
-const DEFAULT_LIST_FILTERS: ListFilters = { seg: "all", type: "all", keyword: "" };
+interface ListFilters { seg: "all" | Seg; type: TypeFilter; repos: string[]; keyword: string }
+const DEFAULT_LIST_FILTERS: ListFilters = { seg: "all", type: "all", repos: [], keyword: "" };
 
 function matchType(s: ScanSummary, type: TypeFilter): boolean {
   if (type === "all") return true;
@@ -163,11 +167,21 @@ export function ScanList() {
   const [bulkActionResult, setBulkActionResult] = useState<ScanBatchResponse | null>(null);
   const [bulkBannerClosed, setBulkBannerClosed] = useState(false);
 
-  // 关键词 + 类型先行过滤（分段计数以此为准，计数不随当前分段变化）；
+  // 仓库筛选（2026-09-16，下拉多选）：选项客户端派生自扫描行 repo（去重升序，不动
+  // 后端契约，对齐 ReposTab 分组筛选先例）。空选 = 全部；repo=null 行（correlation
+  // 主行/旧后端）只在空选时可见——关联行类型档可单独隔离。选中仓在刷新后消失 →
+  // 派生剪除（匹配与触发器计数同口径回落），与 ReposTab「选中组删光回落全部」同语义。
+  const repoSet = new Set<string>();
+  scans.forEach((s) => { if (s.repo) repoSet.add(s.repo); });
+  const repoOptions = Array.from(repoSet).sort((a, b) => a.localeCompare(b));
+  const effectiveRepos = filters.repos.filter((r) => repoSet.has(r));
+
+  // 关键词 + 类型 + 仓库先行过滤（分段计数以此为准，计数不随当前分段变化）；
   // 分段口径见 segOf：other（interrupted 等）只在「全部」出现。
   // 列表量小（单 ws 扫描数）直算即可，避免在 err 早退后引入条件 hook。
   const kwTyped = scans.filter((s) => {
     if (!matchType(s, filters.type)) return false;
+    if (effectiveRepos.length > 0 && !(s.repo && effectiveRepos.includes(s.repo))) return false;
     const q = filters.keyword.trim().toLowerCase();
     if (q) {
       const hay = `${s.workflow_id ?? ""} ${s.scan_id} ${s.repo ?? ""} ${s.repo_url ?? ""}`.toLowerCase();
@@ -371,6 +385,15 @@ export function ScanList() {
             <SelectItem value="mr">{t("workspaces.filter.mr")}</SelectItem>
           </SelectContent>
         </Select>
+        {/* 仓库多选筛选（2026-09-16）：选项从扫描行派生，无 repo 数据不渲染（噪音控制，
+            同 ReposTab 分组筛选「无分组不渲染」） */}
+        {repoOptions.length > 0 && (
+          <RepoMultiSelect
+            options={repoOptions}
+            selected={effectiveRepos}
+            onChange={(repos) => setFilters((f) => ({ ...f, repos }))}
+          />
+        )}
         </div>
       )}
 
@@ -602,6 +625,78 @@ export function ScanList() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+/** 仓库多选筛选（2026-09-16）：Popover + Command(cmdk 原生搜索过滤) + 视觉 Checkbox——
+ *  原语全部复用（RepoCombobox 同款组装；触发器 × 清除同其 onClear 交互）。多选不关
+ *  下拉；CommandItem 是唯一交互元素（Checkbox aria-hidden 防双焦点/误触，勾选态经
+ *  aria-selected 表达）。触发器 footprint 对齐同行类型 Select（h-9 / w-40 / px-3）。 */
+function RepoMultiSelect({ options, selected, onChange }: {
+  options: string[]; selected: string[]; onChange: (next: string[]) => void;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          aria-label={t("scanFilters.repo.label")}
+          className="w-40 justify-between px-3 font-normal"
+        >
+          <span className={`min-w-0 truncate ${selected.length === 0 ? "text-muted-foreground" : ""}`}>
+            {selected.length === 0
+              ? t("scanFilters.repo.all")
+              : t("scanFilters.repo.selected", { count: selected.length })}
+          </span>
+          <span className="flex shrink-0 items-center gap-1">
+            {selected.length > 0 && (
+              <span
+                role="button"
+                tabIndex={0}
+                aria-label={t("scanFilters.repo.clearAria")}
+                data-testid="repo-filter-clear"
+                className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); onChange([]); }}
+              >
+                <X className="size-3.5" aria-hidden />
+              </span>
+            )}
+            <ChevronsUpDown className="size-4 shrink-0 opacity-50" aria-hidden />
+          </span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+        <Command>
+          <CommandInput placeholder={t("scanFilters.repo.searchPlaceholder")} />
+          <CommandList>
+            <CommandEmpty>{t("scanFilters.repo.empty")}</CommandEmpty>
+            <CommandGroup>
+              {options.map((name) => {
+                const checked = selected.includes(name);
+                return (
+                  <CommandItem
+                    key={name}
+                    value={name}
+                    aria-selected={checked}
+                    className="gap-2"
+                    onSelect={() =>
+                      onChange(checked ? selected.filter((n) => n !== name) : [...selected, name])}
+                  >
+                    <Checkbox checked={checked} aria-hidden tabIndex={-1} className="pointer-events-none" />
+                    <span className="min-w-0 truncate font-mono text-xs">{name}</span>
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
 

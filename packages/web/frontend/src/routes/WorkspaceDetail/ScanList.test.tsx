@@ -582,6 +582,82 @@ describe("ScanList 表格设计不变量（重设计 2026-08-15：漏洞数 hero
   });
 });
 
+// 仓库筛选（2026-09-16）：下拉多选，选项客户端派生自扫描行 repo（去重升序，不动
+// 后端契约，对齐 ReposTab 分组筛选先例）。空选=全部；repo=null 行（correlation 主行）
+// 只在空选时可见——类型档可单独隔离关联行。
+describe("ScanList 仓库筛选（下拉多选）", () => {
+  const repoApp = { ...completed, scan_id: "s-app", repo: "app" };
+  const repoAppDup = { ...completed, scan_id: "s-app2", repo: "app" };
+  const repoOrder = { ...completed, scan_id: "s-order", repo: "order" };
+  // correlation 主行无 repo 字段（后端不透传）——空选时可见、选中仓库时隐藏。
+  const corrNoRepo = { ...completed, scan_id: "corr-x", scan_type: "correlation" };
+  const repoScans = [repoOrder, repoApp, repoAppDup, corrNoRepo]; // 打乱序：验证选项升序
+
+  it("下拉选项来自扫描行 repo 去重升序；空选触发器显「仓库：全部」", async () => {
+    server.use(http.get("/api/workspaces/:ws/scans", () => HttpResponse.json(repoScans)));
+    renderList();
+    await waitFor(() => expect(screen.getByText("s-app")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("combobox", { name: "仓库筛选" }));
+    // cmdk item role=option；「order」在 fixture 里先出现，断言渲染序为升序
+    await waitFor(() => {
+      expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["app", "order"]);
+    });
+    expect(screen.getByText("仓库：全部")).toBeInTheDocument();
+  });
+
+  it("勾选仓库过滤行（OR）+ 触发器计数；correlation 行（无 repo）隐藏；取消勾选恢复", async () => {
+    server.use(http.get("/api/workspaces/:ws/scans", () => HttpResponse.json(repoScans)));
+    renderList();
+    await waitFor(() => expect(screen.getByText("corr-x")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("combobox", { name: "仓库筛选" }));
+    fireEvent.click(await screen.findByRole("option", { name: "app" }));
+    expect(screen.getByText("仓库：1 个")).toBeInTheDocument();
+    expect(screen.getByText("s-app")).toBeInTheDocument();
+    expect(screen.getByText("s-app2")).toBeInTheDocument();
+    expect(screen.queryByText("s-order")).not.toBeInTheDocument();
+    expect(screen.queryByText("corr-x")).not.toBeInTheDocument();
+    // 下拉保持展开可继续多选
+    fireEvent.click(screen.getByRole("option", { name: "order" }));
+    expect(screen.getByText("仓库：2 个")).toBeInTheDocument();
+    expect(screen.getByText("s-order")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: "order" }));
+    expect(screen.getByText("仓库：1 个")).toBeInTheDocument();
+    expect(screen.queryByText("s-order")).not.toBeInTheDocument();
+  });
+
+  it("触发器 × 清除筛选：恢复全部行与「仓库：全部」", async () => {
+    server.use(http.get("/api/workspaces/:ws/scans", () => HttpResponse.json(repoScans)));
+    renderList();
+    await waitFor(() => expect(screen.getByText("s-app")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("combobox", { name: "仓库筛选" }));
+    fireEvent.click(await screen.findByRole("option", { name: "app" }));
+    expect(screen.queryByText("corr-x")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("repo-filter-clear"));
+    expect(screen.getByText("仓库：全部")).toBeInTheDocument();
+    expect(screen.getByText("corr-x")).toBeInTheDocument();
+    expect(screen.getByText("s-order")).toBeInTheDocument();
+  });
+
+  it("下拉内搜索收窄选项", async () => {
+    server.use(http.get("/api/workspaces/:ws/scans", () => HttpResponse.json(repoScans)));
+    renderList();
+    await waitFor(() => expect(screen.getByText("s-app")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("combobox", { name: "仓库筛选" }));
+    fireEvent.change(await screen.findByPlaceholderText("搜索仓库…"), { target: { value: "ap" } });
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "app" })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "order" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("全部行都无 repo（纯 correlation ws）-> 不渲染仓库筛选控件", async () => {
+    server.use(http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([corrNoRepo])));
+    renderList();
+    await waitFor(() => expect(screen.getByText("corr-x")).toBeInTheDocument());
+    expect(screen.queryByRole("combobox", { name: "仓库筛选" })).not.toBeInTheDocument();
+  });
+});
+
 // v4（workspace-page-preview-v4.html）：整行可点 + 空工作区收敛。
 describe("ScanList 运行行实时进度（2026-08-27 修复：列表进度不动）", () => {
   // 根因：progress_pct 分子 completed_agents 只在 workflow 结束落盘 session.json，
