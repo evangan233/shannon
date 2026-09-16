@@ -17,6 +17,7 @@ from temporalio import activity
 
 from supernova_core.models.errors import ErrorCode, PentestError
 from supernova_core.utils.paths import intermediate_dir
+from supernova_core.runtime.temporal_heartbeat import with_activity_heartbeat
 from supernova_whitebox.pipeline.shared import ActivityInput
 
 logger = logging.getLogger(__name__)
@@ -228,6 +229,7 @@ def _gitnexus_llm_enabled() -> bool:
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_protection_removal_analysis(input: ActivityInput) -> dict:
     """diff.patch → 删防护 LLM 判定 → removed_protections.json（spec §5.1）。
 

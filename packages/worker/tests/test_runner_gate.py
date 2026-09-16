@@ -30,6 +30,8 @@ class _W:  # 轻量 workflow handle 摘要
 @pytest.mark.asyncio
 async def test_bootstrap_preloads_running_scan_workflows(monkeypatch):
     monkeypatch.setenv("SUPERNOVA_SCAN_GATE_CAPACITY", "5")
+    # 隔离真实部署 env：STATE_FILE 指向生产快照时 restore 会混入真实条目
+    monkeypatch.delenv("SUPERNOVA_SCAN_GATE_STATE_FILE", raising=False)
     from supernova_worker import runner
 
     client = MagicMock()
@@ -95,6 +97,7 @@ async def test_bootstrap_state_file_missing_degrades_to_preload(monkeypatch, tmp
 async def test_bootstrap_falls_back_to_workflow_type_query(monkeypatch):
     """TaskQueue visibility 查询不被支持时退化为 WorkflowType 过滤（spec §6）。"""
     monkeypatch.setenv("SUPERNOVA_SCAN_GATE_CAPACITY", "5")
+    monkeypatch.delenv("SUPERNOVA_SCAN_GATE_STATE_FILE", raising=False)
     from supernova_worker import runner
 
     client = MagicMock()
@@ -112,20 +115,50 @@ async def test_janitor_once_reaps_dead_workflows(monkeypatch):
     monkeypatch.setenv("SUPERNOVA_SCAN_GATE_CAPACITY", "5")
     from supernova_worker import runner
     from temporalio.client import WorkflowExecutionStatus
+    from temporalio.service import RPCError, RPCStatusCode
 
-    gate_mod.preload_gate(["alive", "dead"])
+    gate_mod.preload_gate(["alive", "dead", "ghosted"])
     live_desc = MagicMock()
     live_desc.status = WorkflowExecutionStatus.RUNNING
+    finished_desc = MagicMock()
+    finished_desc.status = WorkflowExecutionStatus.COMPLETED
     ok_handle = MagicMock()
     ok_handle.describe = AsyncMock(return_value=live_desc)
+    # NOT_FOUND = workflow 已终结被回收（确凿死亡）；终态可见（COMPLETED）同摘
     dead_handle = MagicMock()
-    dead_handle.describe = AsyncMock(side_effect=RuntimeError("not found"))
+    dead_handle.describe = AsyncMock(
+        side_effect=RPCError("workflow not found", RPCStatusCode.NOT_FOUND, b""))
+    ghosted_handle = MagicMock()
+    ghosted_handle.describe = AsyncMock(return_value=finished_desc)
 
     client = MagicMock()
-    client.get_workflow_handle = MagicMock(
-        side_effect=lambda wf_id: {"alive": ok_handle, "dead": dead_handle}[wf_id])
+    client.get_workflow_handle = MagicMock(side_effect=lambda wf_id: {
+        "alive": ok_handle, "dead": dead_handle, "ghosted": ghosted_handle}[wf_id])
     await runner._gate_janitor_once(client)
     assert gate_mod.gate_candidate_ids() == ["alive"]
+
+
+@pytest.mark.asyncio
+async def test_janitor_once_survives_query_errors_without_reaping(monkeypatch):
+    """回归锁（2026-09-16）：describe 网络抖动/服务端错误 ≠ 死亡——误摘会把槽
+    放空让排队者超卖获槽（与 bootstrap 抢跑事故同后果的第二口子）。非 NOT_FOUND
+    异常一律跳过本轮，条目保留等下轮再校验。"""
+    monkeypatch.setenv("SUPERNOVA_SCAN_GATE_CAPACITY", "5")
+    from supernova_worker import runner
+    from temporalio.service import RPCError, RPCStatusCode
+
+    gate_mod.preload_gate(["flaky", "server_err"])
+    timeout_handle = MagicMock()
+    timeout_handle.describe = AsyncMock(side_effect=TimeoutError("describe timed out"))
+    rpc_err_handle = MagicMock()
+    rpc_err_handle.describe = AsyncMock(side_effect=RPCError(
+        "unavailable", RPCStatusCode.UNAVAILABLE, b""))
+
+    client = MagicMock()
+    client.get_workflow_handle = MagicMock(side_effect=lambda wf_id: {
+        "flaky": timeout_handle, "server_err": rpc_err_handle}[wf_id])
+    await runner._gate_janitor_once(client)
+    assert set(gate_mod.gate_candidate_ids()) == {"flaky", "server_err"}
 
 
 @pytest.mark.asyncio

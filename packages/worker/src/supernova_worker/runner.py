@@ -179,15 +179,26 @@ async def _gate_janitor_once(client: Client) -> None:
 
     覆盖一切异常释放路径：cancel 保险丝 terminate（不给清理机会）、cancel 时
     cleanup 没跑成、workflow 崩溃。waiting 死 key 同摘——幽灵排队者会挡 FIFO。
+
+    2026-09-16 收紧「查询失败 ≠ 死亡」：旧逻辑 describe 抛任何异常都判死回收，
+    temporal 抖动一轮就把全部 held/waiting 误摘（槽放空 → 排队者超卖获槽，
+    与 bootstrap 抢跑事故同后果的第二口子）。现仅 RPC NOT_FOUND（workflow 已
+    终结被回收，确凿死亡）摘除；其余异常跳过本轮下轮再校验。describe 返回
+    非 RUNNING（终态可见）照旧摘。
     """
     from temporalio.client import WorkflowExecutionStatus
+    from temporalio.service import RPCError, RPCStatusCode
     for wf_id in gate_candidate_ids():
         try:
             desc = await client.get_workflow_handle(wf_id).describe()
-            alive = desc.status == WorkflowExecutionStatus.RUNNING
-        except Exception:
-            alive = False  # 查不到 = 死 key，best-effort 回收
-        if not alive:
+        except RPCError as err:
+            if err.status is not RPCStatusCode.NOT_FOUND:
+                continue  # 网络抖动/服务端错误 ≠ 死亡，本轮跳过
+            reap_ids([wf_id])  # workflow 不存在 = 确凿死 key
+            continue
+        except Exception:  # noqa: BLE001 - 查询失败本轮跳过（下轮再校验）
+            continue
+        if desc.status != WorkflowExecutionStatus.RUNNING:
             reap_ids([wf_id])
 
 

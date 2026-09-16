@@ -35,6 +35,7 @@ from supernova_core.services.host_proxy import (
     stop_host_proxy as stop_host_proxy_func,
     ProxyHandle,
 )
+from supernova_core.runtime.temporal_heartbeat import with_activity_heartbeat
 
 from .shared import BlackboxActivityInput, is_engine_failure
 from supernova_blackbox.services.exploitation_checker import QueueValidationResult
@@ -208,6 +209,7 @@ async def run_blackbox_preflight(input: BlackboxActivityInput) -> None:
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_blackbox_auth_validation(input: BlackboxActivityInput) -> None:
     from supernova_core.audit.session_registry import get_audit_session
     await ensure_audit_session(input)  # worker 重启后可观测恢复(幂等;见 session_recovery.py)
@@ -333,6 +335,7 @@ async def _cleanup_browser_session(
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_exploit_agent(input: BlackboxActivityInput) -> dict:
     from supernova_core.audit.session_registry import get_audit_session
     await ensure_audit_session(input)  # worker 重启后可观测恢复(幂等;见 session_recovery.py)
@@ -427,6 +430,7 @@ async def run_exploit_agent(input: BlackboxActivityInput) -> dict:
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_endpoint_verify(input: BlackboxActivityInput) -> dict:
     """spec 2026-08-03: 端点 live 验证 agent。读白盒端点清单 + auth-state(AgentExecutor
     基层注入),对每端点做 live 验证 + 路由转发前缀探测,产 endpoint_verify.json 到 blackbox/。
@@ -594,6 +598,7 @@ async def validate_exploitation_queue(input: BlackboxActivityInput) -> QueueVali
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_report_agent(input: BlackboxActivityInput) -> dict:
     from supernova_core.audit.session_registry import get_audit_session
     await ensure_audit_session(input)  # worker 重启后可观测恢复(幂等;见 session_recovery.py)
@@ -988,6 +993,7 @@ async def cleanup_auth_state_activity(workspace_path: str) -> None:
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_auth_validation_probe(input: BlackboxActivityInput) -> AuthValidationResult:
     """独立认证验证探针:驱动 validate_authentication 真实登录,失败不抛异常(降级返回)。
 

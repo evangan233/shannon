@@ -29,9 +29,11 @@ with workflow.unsafe.imports_passed_through():
     from supernova_core.topology.store import TopologyAnalysisStore
     from supernova_multi.orchestrator import run_correlation_phase
     from supernova_multi.pipeline.shared import CorrelationPipelineInput, TopologyAnalysisInput
+    from supernova_core.runtime.temporal_heartbeat import with_activity_heartbeat
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_correlation_activity(inp: CorrelationPipelineInput) -> dict:
     # env_overrides 走 per-scan 覆盖层（brief「若既有 helper 则复用」）：复用
     # supernova_core.config.scan_env.set_scan_env——与 whitebox/blackbox 的
@@ -76,6 +78,7 @@ class CorrelationScanWorkflow:
             return await workflow.execute_activity(
                 run_correlation_activity, inp,
                 start_to_close_timeout=timedelta(hours=4),
+                heartbeat_timeout=timedelta(minutes=2),
             )
         finally:
             # 尽力释放：异常时由 runner 的闸门 janitor 兜底回收（spec §6）
@@ -307,5 +310,6 @@ class TopologyAnalysisWorkflow:
             # activity 内部 asyncio.wait_for 先超时（写 timeout 终态后正常返回），
             # 本窗口 = timeout + 60s 兜底（进程卡死等极端场景）。
             start_to_close_timeout=timedelta(seconds=inp.timeout_seconds + 60),
+            heartbeat_timeout=timedelta(minutes=2),
             retry_policy=RetryPolicy(maximum_attempts=1),
         )

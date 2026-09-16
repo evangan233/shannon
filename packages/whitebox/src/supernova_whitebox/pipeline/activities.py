@@ -54,6 +54,7 @@ from supernova_core.audit.session_recovery import (
     build_headless_audit_session,
     ensure_audit_session,
 )
+from supernova_core.runtime.temporal_heartbeat import with_activity_heartbeat
 
 from .shared import ActivityInput
 from .mr_wiring import (
@@ -178,6 +179,7 @@ def _vuln_output_schema(agent_name: AgentName) -> dict | None:
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_agent(input: ActivityInput) -> dict:
     from supernova_whitebox.audit.session_registry import get_audit_session
     await ensure_audit_session(input)  # worker 重启后可观测恢复(幂等;见 session_recovery.py)
@@ -281,6 +283,7 @@ async def run_agent(input: ActivityInput) -> dict:
         raise ApplicationFailure(str(e), type=error_type, non_retryable=not retryable) from e
 
 @activity.defn
+@with_activity_heartbeat
 async def run_vuln_agent(input: ActivityInput) -> dict:
     return await run_agent(input)
 
@@ -411,6 +414,7 @@ def _write_recon_context_digest(
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_recon_context_digest(input: ActivityInput) -> dict:
     """Generate the LLM-track recon context once for all vuln agents.
 
@@ -790,6 +794,7 @@ def _split_authz_safe(gn_vulns, *, stage: str):
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_authz_gitnexus_judge(input: ActivityInput) -> dict:
     """GitNexus track LLM chain-judgement pass for authz (spec §5.7).
 
@@ -1097,6 +1102,7 @@ async def run_credential_check(input: ActivityInput) -> None:
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_code_index(input: ActivityInput) -> dict:
     from supernova_whitebox.audit.session_registry import get_audit_session
     await ensure_audit_session(input)  # worker 重启后可观测恢复(幂等;见 session_recovery.py)
@@ -1676,6 +1682,7 @@ def _apply_gn_enrichment(findings: list, raw: object) -> tuple[int, list[str]]:
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_gn_finding_enrichment(input: ActivityInput) -> dict:
     """GN-only 深度富化（spec 2026-08-26 §6.2；2026-08-26 用户口径：轻量单次
     升级为深度多轮——agent 自己 grep/read 追链，产 dataflow_steps/
@@ -1848,6 +1855,7 @@ def _endpoint_enrich_max_turns() -> int:
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_endpoint_enrichment(input: ActivityInput) -> dict:
     """全卡接口表富化（spec 2026-08-26-report-generation-agent §5.2）。
 
@@ -2519,6 +2527,7 @@ async def inject_gitnexus_track_status(input: ActivityInput) -> None:
 
 
 @activity.defn
+@with_activity_heartbeat
 async def write_agent_poc(input: ActivityInput) -> None:
     """poc-agent 产出写回 queue（spec 2026-08-27-poc-agent-direct-design）。
 
@@ -2724,6 +2733,7 @@ async def _write_agent_pocs(
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_adversarial_review(input: ActivityInput) -> None:
     """对抗性审查（spec 2026-09-10）：merge 后逐卡反驳，refuted 剔卡+归档。
 
@@ -3111,6 +3121,7 @@ _TAINT_CLASSES = ("injection", "xss", "ssrf")
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_report_polish(input: ActivityInput) -> dict:
     """T5（spec 2026-08-26-report-generation-agent §5.4/§5.5）：report_data 终版组装。
 
@@ -4249,6 +4260,7 @@ async def run_route_chain_building(input: ActivityInput) -> dict:
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_attack_chain_llm_agent(input: ActivityInput) -> dict:
     """LLM-track attack chain agent (creative-driven, multi-step inference).
 

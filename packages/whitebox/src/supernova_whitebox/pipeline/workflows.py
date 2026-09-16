@@ -332,6 +332,7 @@ class WhiteboxScanWorkflow:
                             activities.run_agent,
                             ActivityInput(**{**act_input.__dict__, "agent_name": AgentName.PRE_RECON.value}),
                             start_to_close_timeout=timedelta(hours=2),
+                            heartbeat_timeout=timedelta(minutes=2),
                             retry_policy=retry_for("standard"),
                         ),
                     )
@@ -426,6 +427,7 @@ class WhiteboxScanWorkflow:
                         activities.run_agent,
                         ActivityInput(**{**act_input.__dict__, "agent_name": AgentName.RECON.value}),
                         start_to_close_timeout=timedelta(hours=2),
+                        heartbeat_timeout=timedelta(minutes=2),
                         retry_policy=retry_for("standard"),
                     )
                     self._state.completed_agents.append(AgentName.RECON.value)
@@ -448,6 +450,7 @@ class WhiteboxScanWorkflow:
                     await workflow.execute_activity(
                         activities.run_recon_context_digest, act_input,
                         start_to_close_timeout=timedelta(minutes=10),
+                        heartbeat_timeout=timedelta(minutes=2),
                         retry_policy=retry_for("standard"),
                     )
 
@@ -512,6 +515,7 @@ class WhiteboxScanWorkflow:
                                 activities.run_vuln_agent,
                                 ActivityInput(**{**act_input.__dict__, "agent_name": agent_name.value}),
                                 start_to_close_timeout=timedelta(hours=2),
+                                heartbeat_timeout=timedelta(minutes=2),
                                 retry_policy=retry_for("vuln"),
                             )
                             vuln_tasks.append((vt, agent_name, coro))
@@ -529,6 +533,7 @@ class WhiteboxScanWorkflow:
                                 activities.run_vuln_agent,
                                 ActivityInput(**{**act_input.__dict__, "agent_name": agent_name.value}),
                                 start_to_close_timeout=timedelta(hours=2),
+                                heartbeat_timeout=timedelta(minutes=2),
                                 retry_policy=retry_for("vuln"),
                             )
                             vuln_tasks.append((vt, agent_name, coro))
@@ -576,6 +581,7 @@ class WhiteboxScanWorkflow:
                 _authz_gn = await workflow.execute_activity(
                     activities.run_authz_gitnexus_judge, act_input,
                     start_to_close_timeout=timedelta(minutes=30),  # 原 10；多轮 agent 窗口（spec-0）
+                    heartbeat_timeout=timedelta(minutes=2),
                     retry_policy=retry_for("gitnexus-verdict"),  # 原 standard；spec-1a 切（多轮 agent，max 3）
                 )
                 # === GitNexus-track chain verdict: inj/xss/ssrf (spec §5.4-5.6) ===
@@ -641,6 +647,7 @@ class WhiteboxScanWorkflow:
                     await workflow.execute_activity(
                         activities.run_adversarial_review, act_input,
                         start_to_close_timeout=timedelta(minutes=20),
+                        heartbeat_timeout=timedelta(minutes=2),
                         retry_policy=retry_for("standard"),
                     )
                 except Exception as exc:
@@ -671,6 +678,7 @@ class WhiteboxScanWorkflow:
                     await workflow.execute_activity(
                         activities.run_gn_finding_enrichment, act_input,
                         start_to_close_timeout=timedelta(minutes=30),
+                        heartbeat_timeout=timedelta(minutes=2),
                         retry_policy=retry_for("gitnexus-verdict"),
                     )
                 except Exception as exc:
@@ -701,6 +709,7 @@ class WhiteboxScanWorkflow:
                     await workflow.execute_activity(
                         activities.run_endpoint_enrichment, act_input,
                         start_to_close_timeout=timedelta(minutes=30),
+                        heartbeat_timeout=timedelta(minutes=2),
                         retry_policy=retry_for("gitnexus-verdict"),
                     )
                 except Exception as exc:
@@ -768,6 +777,7 @@ class WhiteboxScanWorkflow:
                     await workflow.execute_activity(
                         activities.run_attack_chain_llm_agent, act_input,
                         start_to_close_timeout=timedelta(minutes=30),
+                        heartbeat_timeout=timedelta(minutes=2),
                         retry_policy=retry_for("standard"),
                     )
                 except Exception as exc:
@@ -829,6 +839,7 @@ class WhiteboxScanWorkflow:
                     await workflow.execute_activity(
                         activities.write_agent_poc, act_input,
                         start_to_close_timeout=timedelta(minutes=20),
+                        heartbeat_timeout=timedelta(minutes=2),
                         retry_policy=retry_for("poc"),
                     )
                 except Exception as exc:  # noqa: BLE001 — POC 写回任何失败只降级（取消除外）
@@ -877,6 +888,7 @@ class WhiteboxScanWorkflow:
                     await workflow.execute_activity(
                         activities.run_report_polish, act_input,
                         start_to_close_timeout=timedelta(minutes=20),
+                        heartbeat_timeout=timedelta(minutes=2),
                         retry_policy=retry_for("standard"),
                     )
                 except Exception as exc:  # noqa: BLE001 — rd 初版兜底已落盘（取消除外）
@@ -1160,6 +1172,7 @@ class MrScanWorkflow:
             await workflow.execute_activity(
                 mr_activities.run_protection_removal_analysis, act_input,
                 start_to_close_timeout=timedelta(minutes=10),
+                heartbeat_timeout=timedelta(minutes=2),
                 retry_policy=retry_for("standard"),
             )
 

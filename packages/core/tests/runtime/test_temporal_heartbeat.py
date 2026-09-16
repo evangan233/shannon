@@ -80,6 +80,78 @@ async def test_heartbeat_exception_does_not_leak(monkeypatch):
     assert len(calls) >= 3, "心跳失败后循环应继续"
 
 
+async def test_decorator_pumps_heartbeat_across_whole_body(monkeypatch):
+    """with_activity_heartbeat：activity 上下文内全函数体周期心跳，结果透传。"""
+    from supernova_core.runtime import temporal_heartbeat as th
+
+    calls = []
+    _in_activity(monkeypatch, heartbeat=lambda *a: calls.append(a))
+    monkeypatch.setattr(th, "_DEFAULT_HEARTBEAT_INTERVAL", 0.02)  # 装饰器用默认间隔
+
+    @th.with_activity_heartbeat
+    async def body(x, *, y=None):
+        await asyncio.sleep(0.1)  # 覆盖 ~5 个泵周期
+        return (x, y)
+
+    assert await body(1, y=2) == (1, 2)
+    assert len(calls) >= 3, f"函数体期间心跳次数不足: {len(calls)}"
+
+
+async def test_decorator_noop_outside_activity_context(monkeypatch):
+    """CLI 直调/单测（非 activity 上下文）：装饰器零行为变化（不起泵不心跳）。"""
+    import temporalio.activity as tio_activity
+    from supernova_core.runtime.temporal_heartbeat import with_activity_heartbeat
+
+    def _raise():
+        raise RuntimeError("Not in activity context")
+
+    monkeypatch.setattr(tio_activity, "info", _raise)
+    calls = []
+    monkeypatch.setattr(tio_activity, "heartbeat", lambda *a: calls.append(a))
+
+    @with_activity_heartbeat
+    async def body():
+        return "done"
+
+    assert await body() == "done"
+    assert calls == []
+
+
+def test_decorator_preserves_name_and_signature():
+    """functools.wraps：__name__/签名保留——@activity.defn 命名与 keyword-only
+    校验（inspect.signature 跟随 __wrapped__）不受包装影响。"""
+    import functools
+    import inspect
+
+    from supernova_core.runtime.temporal_heartbeat import with_activity_heartbeat
+
+    @with_activity_heartbeat
+    async def probe(a, b=1, *, c):
+        return a
+
+    assert probe.__name__ == "probe"
+    params = inspect.signature(probe).parameters
+    assert list(params) == ["a", "b", "c"]
+    assert params["c"].kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_decorator_stacks_with_activity_defn():
+    """装饰顺序契约：@activity.defn 在上、@with_activity_heartbeat 在下——
+    defn 拿到 wrapper 且 activity 命名/定义照常（runner 注册靠它）。"""
+    from temporalio import activity as tio_activity
+
+    from supernova_core.runtime.temporal_heartbeat import with_activity_heartbeat
+
+    @tio_activity.defn
+    @with_activity_heartbeat
+    async def wrapped_probe():
+        return 42
+
+    definition = getattr(wrapped_probe, "__temporal_activity_definition")
+    assert definition.name == "wrapped_probe"
+    assert asyncio.iscoroutinefunction(wrapped_probe)
+
+
 def test_is_cancellation_direct_and_chain():
     """is_cancellation：直接 CancelledError / ActivityError(cause=CancelledError) 判真。"""
     assert is_cancellation(TemporalCancelledError())

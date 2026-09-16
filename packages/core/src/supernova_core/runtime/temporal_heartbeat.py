@@ -62,6 +62,30 @@ async def activity_heartbeat(
         task.cancel()
 
 
+def with_activity_heartbeat(fn):
+    """activity 实现装饰器：全函数体套心跳泵（含 LLM 前后的非 LLM 段）。
+
+    背景（2026-09-16 worker 重启事故）：长 activity 配了 ``heartbeat_timeout``
+    后，server 靠心跳判活——worker 重启后 ~2min 即判死重投、activity 入口的
+    ``ensure_audit_session`` 及时恢复心跳文件，web 不再长时间误显「已中断」。
+    但 ``run_claude_prompt`` 内置的泵只盖 LLM 调用段，前置/后置（GitNexus
+    查询、解析、落盘）无心跳，heartbeat_timeout 会误杀——本装饰器把泵扩到
+    全函数体。非 activity 上下文（CLI 直调/单测）泵 no-op，零行为变化。
+
+    须放在 ``@activity.defn`` **之下**（defn 拿到的是 wrapper；functools.wraps
+    保留 ``__name__``/签名，defn 的 keyword-only 校验与 activity 命名不受影响）。
+    与 ``run_claude_prompt`` 内置泵叠加无害（同为 10s 一拍，RPC 由 throttle 合并）。
+    """
+    import functools
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        async with activity_heartbeat():
+            return await fn(*args, **kwargs)
+
+    return wrapper
+
+
 def is_cancellation(exc: BaseException) -> bool:
     """异常（含 ``__cause__`` 链）是否为 Temporal 取消——workflow 吞点放行用。
 

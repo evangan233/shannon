@@ -209,6 +209,7 @@ class BlackboxScanWorkflow:
                     # 即回收 validate-auth 的浏览器 session（agent1），不等扫描级 finally。
                     BlackboxActivityInput(**{**act_input.__dict__, "engine_name": engine_name}),
                     start_to_close_timeout=timedelta(minutes=10),
+                    heartbeat_timeout=timedelta(minutes=2),
                     retry_policy=retry_for("auth-validation"),
                 )
 
@@ -367,6 +368,7 @@ class BlackboxScanWorkflow:
                             BlackboxActivityInput(**{**act_input.__dict__,
                                                      "engine_name": engine_name}),
                             start_to_close_timeout=timedelta(minutes=15),
+                            heartbeat_timeout=timedelta(minutes=2),
                             retry_policy=RetryPolicy(maximum_attempts=1),
                         )
                     # Queue gating: validate queue files before scheduling exploit agents
@@ -422,6 +424,7 @@ class BlackboxScanWorkflow:
                             exploit_tasks.append((vt, agent_name, workflow.execute_activity(
                                 activities.run_exploit_agent, exploit_input,
                                 start_to_close_timeout=timedelta(hours=2),
+                                heartbeat_timeout=timedelta(minutes=2),
                                 retry_policy=retry_policy,
                             )))
 
@@ -534,6 +537,7 @@ class BlackboxScanWorkflow:
                     metrics = await workflow.execute_activity(
                         activities.run_report_agent, act_input,
                         start_to_close_timeout=timedelta(hours=1),
+                        heartbeat_timeout=timedelta(minutes=2),
                         retry_policy=retry_policy,
                     )
                     self._state.completed_agents.append(AgentName.REPORT.value)
@@ -801,6 +805,7 @@ class AuthValidationWorkflow:
                     # 窗口经 input 传入（env 在 sandbox 外解析，默认 600s=原 10min）
                     start_to_close_timeout=timedelta(
                         seconds=input.probe_timeout_seconds or 600),
+                    heartbeat_timeout=timedelta(minutes=2),
                     retry_policy=retry_for("auth-validation"),
                 )
             except Exception as e:
@@ -912,6 +917,7 @@ class BatchAuthValidationWorkflow:
                 result = await workflow.execute_activity(
                     activities.run_auth_validation_probe, act_input,
                     start_to_close_timeout=timedelta(minutes=10),
+                    heartbeat_timeout=timedelta(minutes=2),
                     retry_policy=retry_for("auth-validation"),
                 )
             except Exception as e:
