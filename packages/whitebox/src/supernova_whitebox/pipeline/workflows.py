@@ -326,6 +326,7 @@ class WhiteboxScanWorkflow:
                         workflow.execute_activity(
                             activities.run_code_index, act_input,
                             start_to_close_timeout=CODE_INDEX_ACTIVITY_TIMEOUT,
+                            heartbeat_timeout=timedelta(minutes=2),
                             retry_policy=retry_for("code-index"),
                         ),
                         workflow.execute_activity(
@@ -598,6 +599,7 @@ class WhiteboxScanWorkflow:
                 _gn_verdict = await workflow.execute_activity(
                     activities.run_gitnexus_chain_verdict, act_input,
                     start_to_close_timeout=_gn_timeout,
+                    heartbeat_timeout=timedelta(minutes=2),
                     retry_policy=retry_for("standard"),
                 )
 

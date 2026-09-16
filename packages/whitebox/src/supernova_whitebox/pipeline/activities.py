@@ -3788,6 +3788,7 @@ def _dump_chain_verdicts(
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_gitnexus_chain_verdict(input: ActivityInput) -> dict:
     """GitNexus-track chain verdict for injection/xss/ssrf (spec §5.4-5.6).
 

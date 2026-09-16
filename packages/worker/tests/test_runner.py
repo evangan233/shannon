@@ -14,6 +14,16 @@ from supernova_blackbox.pipeline.workflows import BlackboxScanWorkflow
 from supernova_multi.pipeline.workflows import CorrelationScanWorkflow
 
 
+@pytest.fixture(autouse=True)
+def _skip_gate_bootstrap(monkeypatch):
+    """闸门 bootstrap 重试循环与本文件断言无关：mock client 的 visibility 查询
+    必失败，而 2026-09-16 起 bootstrap 失败语义从 fail-open 改为重试等待
+    （预占不全不放行）——不跳过会让 _gate_bootstrap_until_ready 死循环重试
+    挂住测试。connect 失败用例不受影响（在 bootstrap 前已抛）。"""
+    monkeypatch.setattr("supernova_worker.runner._gate_bootstrap_until_ready",
+                        AsyncMock())
+
+
 @pytest.mark.asyncio
 async def test_run_worker_connects_and_registers_three_workers(monkeypatch):
     """run_worker 连 temporal + 起三个 Worker（白盒/黑盒/跨仓关联固定 queue）+ 并行 run。"""

@@ -92,6 +92,9 @@ _CANCEL_BRIDGE_INTERVAL_SECONDS = 5.0
 # 闸门 janitor 轮询周期（spec 2026-09-08-worker-scan-gate §6）：槽泄漏兜底，
 # 最坏多占一个周期。
 _GATE_JANITOR_INTERVAL_SECONDS = 10.0
+# bootstrap 预占重试间隔（2026-09-16 复盘）：visibility 查询失败期间不消费，
+# 对齐 janitor 周期——恢复后一个周期内补上预占并放行。
+_GATE_BOOTSTRAP_RETRY_SECONDS = 10.0
 # bootstrap 预占的扫描类 workflow 类型（退化查询用；TaskQueue 查询优先）
 _SCAN_WORKFLOW_TYPES = (
     "BlackboxScanWorkflow", "CorrelationScanWorkflow",
@@ -136,7 +139,7 @@ async def _cancel_signal_bridge(client: Client) -> None:
             pass
 
 
-async def _gate_bootstrap(client: Client) -> None:
+async def _gate_bootstrap(client: Client) -> bool:
     """worker 启动闸门恢复 + 预占：spec §6 防重启超卖；2026-09-16 事故修复。
 
     第一步 restore：从 gate_state.json 恢复 held 的**真实 descriptor（带 ws）**
@@ -152,9 +155,12 @@ async def _gate_bootstrap(client: Client) -> None:
     workflow、也排除 bb 队列上 AuthValidation/Topology 等非闸门 workflow——
     预占它们会白白吃闸门容量且永不 release）；不支持该 search attribute 时
     退化为 WorkflowType 过滤（接受 CLI 干扰：保守少槽，无害，spec §11）。
-    两级都失败 fail-open（restore 仍生效 + 空预占 + warning）——bootstrap
-    查询失败不该阻断 worker 启动（闸门/janitor 起来仍工作，代价仅本次预占
-    不全的短暂超卖窗口）。
+
+    返回两级 visibility 预占是否成功。**两级都失败返回 False 而非 fail-open**
+    （2026-09-16 复盘：预占不全还启动消费 = 排队者放行窗口，闸门硬保证优先
+    于可用性；调用方 _gate_bootstrap_until_ready 重试等待，恢复前不消费）。
+    temporal 整体不可用时 Client.connect 已 fail-fast，落到这里的失败只剩
+    visibility 专属故障（如 ES 后端抖动）。
     """
     restore_gate_held_from_file()
     queues = "','".join(
@@ -168,10 +174,28 @@ async def _gate_bootstrap(client: Client) -> None:
         try:
             ids = [w.id async for w in client.list_workflows(
                 query=f"WorkflowType IN ('{types}')")]
-        except Exception:  # noqa: BLE001 - fail-open，见 docstring
+        except Exception:  # noqa: BLE001 - 预占失败（调用方重试），见 docstring
             logging.getLogger(__name__).warning(
-                "gate bootstrap 两级 visibility 查询均失败，跳过预占（可能短暂超卖）")
+                "gate bootstrap 两级 visibility 查询均失败，预占不完整——"
+                "暂缓启动 worker 消费直到恢复")
+            return False
     preload_gate(ids)
+    return True
+
+
+async def _gate_bootstrap_until_ready(
+        client: Client, *, interval: float = _GATE_BOOTSTRAP_RETRY_SECONDS) -> None:
+    """bootstrap 重试循环：visibility 查询成功前不返回（= 不启动 worker 消费，
+    扫描天然暂停——没有 consumer，排队 workflow 的 activity 在 task queue 排队，
+    恢复后立即处理）。「任务没被确认结束前不能释放名额，名额没确认前不补位」
+    的启动侧：确认不了谁占着槽，就不放新任务进来。"""
+    attempt = 0
+    while not await _gate_bootstrap(client):
+        attempt += 1
+        logging.getLogger(__name__).warning(
+            "gate bootstrap 未就绪（第 %d 次重试），暂停 worker 消费 %gs",
+            attempt, interval)
+        await asyncio.sleep(interval)
 
 
 async def _gate_janitor_once(client: Client) -> None:
@@ -300,8 +324,10 @@ async def run_worker(temporal_address: str = "localhost:7233") -> None:
         default_heartbeat_throttle_interval=_HEARTBEAT_THROTTLE,
     )
 
-    # 闸门 bootstrap 预占必须在 worker 消费前（spec §6：防重启超卖）
-    await _gate_bootstrap(client)
+    # 闸门 bootstrap 预占必须在 worker 消费前（spec §6：防重启超卖）；
+    # visibility 查询失败 → 重试等待（暂停消费），预占不全不放新任务进来
+    # （2026-09-16 复盘：fail-open 的放行窗口 = 抢跑事故第三口子）。
+    await _gate_bootstrap_until_ready(client)
 
     # 协作取消桥（方案 B）：把 web cancel ② 轨的 cancel.requested 文件信号转发为
     # temporal cancel（worker 容器路径协作通道的唯一消费者）。worker 全退时一并取消。

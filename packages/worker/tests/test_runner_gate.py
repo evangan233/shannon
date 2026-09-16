@@ -104,10 +104,48 @@ async def test_bootstrap_falls_back_to_workflow_type_query(monkeypatch):
     client.list_workflows = MagicMock(
         side_effect=[RuntimeError("unsupported attribute: TaskQueue"),
                      _flist([_W("c")])])
-    await runner._gate_bootstrap(client)
+    ok = await runner._gate_bootstrap(client)
+    assert ok is True
     assert gate_mod.gate_candidate_ids() == ["c"]
     q2 = client.list_workflows.call_args_list[1].kwargs.get("query", "")
     assert "WorkflowType" in q2
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_returns_false_when_both_queries_fail(monkeypatch):
+    """回归锁（2026-09-16 复盘）：两级 visibility 查询均失败 → 预占不全 = 带着
+    空闸门放行排队者（重启超卖事故的第三口子）。_gate_bootstrap 返回 False，
+    由 until_ready 循环挡住 worker 消费——不再 fail-open。"""
+    monkeypatch.setenv("SUPERNOVA_SCAN_GATE_CAPACITY", "5")
+    monkeypatch.delenv("SUPERNOVA_SCAN_GATE_STATE_FILE", raising=False)
+    from supernova_worker import runner
+
+    client = MagicMock()
+    client.list_workflows = MagicMock(
+        side_effect=RuntimeError("visibility backend down"))
+    ok = await runner._gate_bootstrap(client)
+    assert ok is False
+    assert gate_mod.gate_candidate_ids() == []
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_until_ready_retries_then_starts(monkeypatch):
+    """查询失败 → 重试等待（不启动消费），成功后才返回——「bootstrap 失败就
+    暂停扫描，不能继续放行」。interval=0 防真等。"""
+    monkeypatch.setenv("SUPERNOVA_SCAN_GATE_CAPACITY", "5")
+    monkeypatch.delenv("SUPERNOVA_SCAN_GATE_STATE_FILE", raising=False)
+    from supernova_worker import runner
+
+    booted = []
+    async def fake_bootstrap(_client):
+        booted.append(1)
+        return len(booted) >= 3  # 前两次失败，第三次成功
+
+    client = MagicMock()
+    with patch("supernova_worker.runner._gate_bootstrap",
+               side_effect=fake_bootstrap):
+        await runner._gate_bootstrap_until_ready(client, interval=0)
+    assert len(booted) == 3
 
 
 @pytest.mark.asyncio
@@ -174,7 +212,8 @@ async def test_run_worker_registers_gate_activities_on_all_three_workers():
                AsyncMock(return_value=MagicMock())), \
          patch("supernova_worker.runner.Worker",
                side_effect=[wb, bb, corr]) as mw, \
-         patch("supernova_worker.runner._gate_bootstrap", new=AsyncMock()), \
+         patch("supernova_worker.runner._gate_bootstrap_until_ready",
+               new=AsyncMock()), \
          patch("supernova_worker.runner._gate_janitor", new=AsyncMock()):
         await runner.run_worker("temporal:7233")
     for call in mw.call_args_list:

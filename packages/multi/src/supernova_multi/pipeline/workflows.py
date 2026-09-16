@@ -277,6 +277,7 @@ async def _run_topology_analysis(inp: TopologyAnalysisInput) -> dict:
 
 
 @activity.defn
+@with_activity_heartbeat
 async def run_topology_analysis_activity(inp: TopologyAnalysisInput) -> dict:
     # env_overrides 走 per-scan 覆盖层，与 run_correlation_activity 同一模式（长驻
     # worker 共享 os.environ，直接 update 会串台）。
