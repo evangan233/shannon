@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -34,6 +36,63 @@ def _repair_gate_ws(entries: list[dict]) -> None:
         idx = wf.rfind(marker)
         if idx > 0:
             e["ws"] = wf[:idx]
+
+
+_GATE_ACTIVE_STATUSES = frozenset({"running", "queued"})
+_GATE_TERMINAL_STATUSES = frozenset({
+    "completed", "done", "failed", "interrupted", "cancelled", "killed",
+    "crashed", "skipped", "timeout",
+})
+_BLACKBOX_RUN_ID = re.compile(r"^run-\d+$")
+
+
+def _gate_entry_is_live(entry: dict, store: object) -> bool:
+    """判断闸门快照条目是否仍应展示。
+
+    ``gate_state.json`` 是 worker 的展示快照，worker 停止或 janitor 尚未运行时
+    可能残留已中断任务。这里仅过滤 API 返回，不修改快照，也不参与 worker 的真实
+    并发控制。无法把条目映射回 web scan（例如 CLI 扫描）时保留，避免误隐藏未知
+    来源的有效闸门条目。
+
+    黑盒 workflow 的 descriptor.scan_id 是 ``run-N``，而不是顶层 scan_id，因此
+    需要在对应 workspace 的扫描目录下补一次 run 目录查找。
+    """
+    ws = entry.get("ws")
+    scan_id = entry.get("scan_id")
+    if not isinstance(ws, str) or not isinstance(scan_id, str) or not ws or not scan_id:
+        return True
+
+    from supernova_core.session import SessionManager
+    from supernova_web.components.workspaces_indexer import _compute_status
+
+    scan_dir = store.get_scan_dir(ws, scan_id)  # type: ignore[attr-defined]
+    if scan_dir is not None:
+        mgr = SessionManager(scan_dir.parent)
+        # 与扫描列表使用同一状态计算口径：显式终态和已推断的 interrupted
+        # 都不能继续出现在「占用/排队」展示中。
+        status = _compute_status(scan_dir, mgr.get_status(scan_dir))
+        return status in _GATE_ACTIVE_STATUSES
+
+    if not _BLACKBOX_RUN_ID.fullmatch(scan_id):
+        return True  # CLI/旧数据等无法按顶层 scan 目录解析的条目，保守保留
+
+    # 黑盒 run 只有 run 目录，不会作为顶层 ScanStore scan 列出。
+    for _task_id, task_dir in store._scan_entries(ws):  # type: ignore[attr-defined]
+        run_dir = task_dir / "blackbox-runs" / scan_id
+        if not (run_dir / "session.json").exists():
+            continue
+        task_status = SessionManager(task_dir.parent).get_status(task_dir)
+        status = SessionManager(run_dir.parent).get_status(run_dir)
+        # run 的 pending/running 仍可能尚未写首个 heartbeat；条目既已在闸门
+        # 快照中，不能用心跳反向误删。只按明确终态过滤。
+        return (status not in _GATE_TERMINAL_STATUSES
+                and task_status not in _GATE_TERMINAL_STATUSES)
+    return True
+
+
+def _filter_stale_gate_entries(entries: list[dict], store: object) -> list[dict]:
+    """从展示快照中移除已终态/已中断的 web 扫描条目。"""
+    return [entry for entry in entries if _gate_entry_is_live(entry, store)]
 
 
 @router.post("", response_model=ScanAccepted, status_code=202)
@@ -165,4 +224,10 @@ async def get_scan_gate(request: Request, user: User = Depends(current_user)):
         "capacity": 5, "max_waiting": 500, "held": [], "waiting": []}
     _repair_gate_ws(snap.get("held", []))
     _repair_gate_ws(snap.get("waiting", []))
+    # gate_state.json 不是权威状态，worker 停止/janitor 延迟时可能残留幽灵条目。
+    # 按当前 scan 状态过滤展示结果；不改共享快照，真实闸门仍由 worker 管理。
+    from supernova_web.components.scan_store import ScanStore
+    scan_store = ScanStore(request.app.state.config.workspaces_dir)
+    snap["held"] = _filter_stale_gate_entries(snap.get("held", []), scan_store)
+    snap["waiting"] = _filter_stale_gate_entries(snap.get("waiting", []), scan_store)
     return snap

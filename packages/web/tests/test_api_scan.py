@@ -226,6 +226,46 @@ def test_get_scan_gate_repairs_ws_from_workflow_id(_authed_app):
     assert body["waiting"][0]["ws"] == "dev"
 
 
+def test_get_scan_gate_hides_interrupted_scan_entries(_authed_app):
+    """worker/janitor 尚未回收时，已中断任务不应继续显示为占槽者。"""
+    import json as _json
+    import time
+
+    from supernova_web.components.scan_store import ScanStore
+
+    scan_store = ScanStore(_authed_app.state.config.workspaces_dir)
+    interrupted_id, interrupted_dir = scan_store.create_scan("WSX", "u", "/x")
+    interrupted = _json.loads((interrupted_dir / "session.json").read_text())
+    interrupted.update({"status": "interrupted", "completed_at": time.time()})
+    (interrupted_dir / "session.json").write_text(_json.dumps(interrupted))
+
+    inferred_id, inferred_dir = scan_store.create_scan("WSX", "u", "/x-inferred")
+    inferred = _json.loads((inferred_dir / "session.json").read_text())
+    # 模拟心跳超时但对账尚未把 session.json 改成 interrupted：列表已经按同一
+    # _compute_status 口径显示为 interrupted，闸门面板也必须同步隐藏。
+    inferred.update({"status": "running", "created_at": 1, "submitted_at": 1})
+    (inferred_dir / "session.json").write_text(_json.dumps(inferred))
+
+    live_id, live_dir = scan_store.create_scan("WSX", "u", "/x2")
+    (live_dir / "heartbeat").write_text(f"{time.time()}\n")
+
+    _write_gate_file(_authed_app, {
+        "capacity": 5, "max_waiting": 50,
+        "held": [
+            {"ws": "WSX", "scan_id": interrupted_id, "kind": "whitebox",
+             "label": "interrupted", "since": 1.0},
+            {"ws": "WSX", "scan_id": inferred_id, "kind": "whitebox",
+             "label": "inferred-interrupted", "since": 1.5},
+            {"ws": "WSX", "scan_id": live_id, "kind": "whitebox",
+             "label": "live", "since": 2.0},
+        ],
+        "waiting": [],
+    })
+    body = _authed_client(_authed_app).get("/api/scan/gate").json()
+
+    assert [entry["scan_id"] for entry in body["held"]] == [live_id]
+
+
 def test_get_scan_gate_visible_to_all_users(_authed_app):
     """全局透明（2026-09-09 用户裁定）：非 admin、非成员的普通用户也见完整快照——
     闸门是共享调度器，全员可见全局占用与自己的排队位次，不按 ws 成员过滤。"""
