@@ -68,6 +68,10 @@ def gate_ws_cap_from_overrides(overrides: dict[str, str] | None) -> int | None:
 class _Holder:
     descriptor: dict
     acquired_at: float
+    # bootstrap 未知预占标记（2026-09-16）：visibility 只能回答「RUNNING」，
+    # 分不清「已过闸持有」还是「闸门排队中」（排队 workflow 同样 RUNNING）。
+    # 预占条目首 poll 即摘除走正常准入——无条件幂等放行会把排队者直接放跑。
+    preloaded: bool = False
 
 
 @dataclass
@@ -89,8 +93,20 @@ class ScanGate:
 
     def try_acquire(self, workflow_id: str, descriptor: dict) -> dict:
         r_base = {"max_waiting": self.max_waiting}
-        if workflow_id in self.held:  # 幂等：bootstrap 预占/重试对齐（spec §4）
-            return {**r_base, "granted": True, "queue_full": False, "position": 0}
+        if workflow_id in self.held:
+            holder = self.held[workflow_id]
+            if holder.preloaded:
+                # 未知预占者首 poll = 重启前它在闸门排队（或过闸-重启交叉窗）。
+                # 摘除自身预占、落下方正常准入：无条件幂等放行会让排队者绕过
+                # 全局容量与 ws cap 直接开跑（2026-09-16 现场事故：ws cap 3 下
+                # 排队 2 个突然自动跑了）。真实 holder（授予/快照恢复）不带此
+                # 标记，continue-as-new 交叉窗口的幂等放行语义不变。
+                self.held.pop(workflow_id)
+                self._persist()
+            else:
+                # 幂等：已持有者重试/continue-as-new 新 run 首轮对齐（spec §4）
+                return {**r_base, "granted": True, "queue_full": False,
+                        "position": 0}
         if (workflow_id not in self.waiting
                 and len(self.waiting) >= self.max_waiting):  # 防雪崩第二道门
             return {**r_base, "granted": False, "queue_full": True,
@@ -151,12 +167,42 @@ class ScanGate:
         self._persist()
 
     def preload(self, workflow_ids: list[str]) -> None:
-        """worker 启动预占：RUNNING 扫描类 workflow 一律计槽（保守，防重启超卖）。"""
+        """worker 启动预占：RUNNING 扫描类 workflow 一律计槽（保守，防重启超卖）。
+
+        预占集**含闸门排队者**（排队 workflow 也是 RUNNING，visibility 分不清），
+        故条目带 preloaded 标记：首 poll 摘除走正常准入（见 try_acquire），不会
+        被幂等分支误放行。快照恢复的真实 holder（restore_held）优先于本兜底。
+        """
         for wf in workflow_ids:
             if wf not in self.held:
                 self.held[wf] = _Holder(
                     {"kind": "unknown", "ws": "", "scan_id": "", "label": wf},
-                    time.time())
+                    time.time(), preloaded=True)
+        self._persist()
+
+    def restore_held(self, held_entries: list[dict]) -> None:
+        """worker 重启时从落盘快照恢复 held（真实 descriptor 带 ws）。
+
+        ws cap 的归属计数靠 holder descriptor 的 ws——只从 visibility 预占
+        （ws=""）会让重启窗口 ws cap 失效；快照恢复把真实 ws 带回来，排队者
+        重新轮询时仍被自己的 ws cap 正确挡住。waiting **不恢复**：排队
+        workflow 每 GATE_POLL_SECONDS 轮询自愈重新入列（first_seen 重置可
+        接受）；恢复的幽灵 waiter 会永远挡 FIFO 头（已过闸者不再 poll）。
+        已在 held 的条目不覆盖（bootstrap 时序：restore 先于 preload 兜底，
+        真实 descriptor 优先于未知预占）。幽灵 holder（快照落盘后 workflow
+        才死的）由 janitor 周期回收。
+        """
+        for e in held_entries or []:
+            wf = e.get("workflow_id")
+            if not wf or wf in self.held:
+                continue
+            d = {k: v for k, v in e.items()
+                 if k not in ("workflow_id", "since")}
+            try:
+                since = float(e.get("since") or time.time())
+            except (TypeError, ValueError):
+                since = time.time()
+            self.held[wf] = _Holder(d, since)
         self._persist()
 
     def candidate_ids(self) -> list[str]:
@@ -215,6 +261,21 @@ def reset_gate_for_tests() -> None:
 
 def preload_gate(workflow_ids: list[str]) -> None:
     _gate().preload(workflow_ids)
+
+
+def restore_gate_held_from_file() -> None:
+    """bootstrap 第一步：从 gate_state.json 恢复 held（真实 ws descriptor）。
+
+    state file 在 web/worker 共享的 workspaces 挂载上（compose 约定），重启前
+    最后一次 _persist 的快照就在那里；未设 env（CLI worker）/文件缺失/损坏
+    → 静默跳过，visibility 兜底照常（降级 = 旧行为 + 首 poll 摘除）。
+    """
+    state_file = os.environ.get("SUPERNOVA_SCAN_GATE_STATE_FILE", "")
+    if not state_file:
+        return
+    snap = read_gate_snapshot_file(Path(state_file))
+    if snap:
+        _gate().restore_held(snap.get("held"))
 
 
 def reap_ids(workflow_ids: list[str]) -> None:

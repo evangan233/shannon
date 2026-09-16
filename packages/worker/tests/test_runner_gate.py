@@ -37,6 +37,58 @@ async def test_bootstrap_preloads_running_scan_workflows(monkeypatch):
         return_value=_flist([_W("a"), _W("b")]))
     await runner._gate_bootstrap(client)
     assert set(gate_mod.gate_candidate_ids()) == {"a", "b"}
+    # 主查询双过滤：TaskQueue（排 CLI）AND WorkflowType（排 AuthValidation/
+    # Topology 等非闸门 workflow——预占它们白吃容量且永不 release）
+    q = client.list_workflows.call_args.kwargs.get("query", "")
+    assert "TaskQueue" in q and "WorkflowType" in q
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_restores_held_from_state_file(monkeypatch, tmp_path):
+    """bootstrap 第一步从 gate_state.json 恢复 held（真实 ws descriptor 存活
+    ws cap），visibility 只兜底预占快照外的 RUNNING（2026-09-16 排队者被
+    自动放行事故的修复链路）。"""
+    import json
+    sf = tmp_path / "gate_state.json"
+    sf.write_text(json.dumps({
+        "capacity": 5, "max_waiting": 10,
+        "held": [{"workflow_id": "w0", "kind": "whitebox", "ws": "金融",
+                  "scan_id": "s0", "since": 1.0}],
+        "waiting": [{"workflow_id": "w3", "kind": "whitebox", "ws": "金融",
+                     "scan_id": "s3", "since": 2.0}],
+    }, ensure_ascii=False))
+    monkeypatch.setenv("SUPERNOVA_SCAN_GATE_CAPACITY", "5")
+    monkeypatch.setenv("SUPERNOVA_SCAN_GATE_STATE_FILE", str(sf))
+    from supernova_worker import runner
+
+    client = MagicMock()
+    client.list_workflows = MagicMock(
+        return_value=_flist([_W("w0"), _W("w3"), _W("w9")]))
+    await runner._gate_bootstrap(client)
+    gate = gate_mod._gate()
+    # w0 快照恢复：真实 ws、无 preloaded 标记（幂等放行语义保留给真持有者）
+    assert gate.held["w0"].descriptor["ws"] == "金融"
+    assert gate.held["w0"].preloaded is False
+    # w3/w9 visibility 兜底预占：未知 descriptor + preloaded 标记（首 poll 摘除）
+    assert gate.held["w3"].preloaded is True
+    assert gate.held["w9"].preloaded is True
+    # 快照 waiting 不恢复（排队者轮询自愈）；w3 预占在 held、不在 waiting
+    assert "w3" not in gate.waiting
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_state_file_missing_degrades_to_preload(monkeypatch, tmp_path):
+    """state file 未设/缺失 → restore 静默跳过，visibility 兜底照常（降级 =
+    旧行为 + 首 poll 摘除，不再无条件放行）。"""
+    monkeypatch.setenv("SUPERNOVA_SCAN_GATE_CAPACITY", "5")
+    monkeypatch.delenv("SUPERNOVA_SCAN_GATE_STATE_FILE", raising=False)
+    from supernova_worker import runner
+
+    client = MagicMock()
+    client.list_workflows = MagicMock(
+        return_value=_flist([_W("x")]))
+    await runner._gate_bootstrap(client)  # 不 raise
+    assert gate_mod.gate_candidate_ids() == ["x"]
 
 
 @pytest.mark.asyncio

@@ -76,7 +76,7 @@ from supernova_multi.pipeline.workflows import (
 from supernova_core.runtime.heartbeat import snapshot_heartbeat_workflows
 from supernova_core.services.scan_gate import (
     scan_gate_try_acquire, scan_gate_release,
-    preload_gate, reap_ids, gate_candidate_ids,
+    preload_gate, reap_ids, gate_candidate_ids, restore_gate_held_from_file,
 )
 
 _GRACEFUL_SHUTDOWN = timedelta(seconds=10)
@@ -137,23 +137,33 @@ async def _cancel_signal_bridge(client: Client) -> None:
 
 
 async def _gate_bootstrap(client: Client) -> None:
-    """worker 启动预占：所有 RUNNING 扫描类 workflow 计槽（spec §6 防重启超卖）。
+    """worker 启动闸门恢复 + 预占：spec §6 防重启超卖；2026-09-16 事故修复。
 
-    重启后内存闸门清零，但已过闸的 workflow 重放不会重新 acquire（event-sourced
-    history 恢复 granted 结果直接跳过闸门段）——不预占则新排队者立即拿空闸门超卖。
-    TaskQueue visibility 查询优先（排除 CLI 随机 queue 的同类型 workflow）；
-    当前 temporal 版本不支持该 search attribute 时退化为 WorkflowType 过滤
-    （接受 CLI 干扰：保守少槽，无害，spec §11）。两级都失败 fail-open（空预占 +
-    warning）——bootstrap 查询失败不该阻断 worker 启动（闸门/janitor 起来仍工作，
-    代价仅本次预占不全的短暂超卖窗口）。
+    第一步 restore：从 gate_state.json 恢复 held 的**真实 descriptor（带 ws）**
+    ——ws cap 的归属计数靠它；只靠 visibility 预占（ws="")会让重启窗口 ws cap
+    彻底失效，且预占集含闸门排队者（排队 workflow 也是 RUNNING），旧实现
+    try_acquire 幂等分支会把他们无条件放行（现场：ws cap 3 下排队 2 个突然
+    自动开跑）。waiting 不恢复：排队者 5s 轮询自愈重新入列。
+
+    第二步 visibility 兜底预占：RUNNING 扫描类 workflow 一律计槽（快照丢失/
+    未落盘的过闸者）。已过闸的 workflow 重放不会重新 acquire（event-sourced
+    history 恢复 granted 结果直接跳过闸门段）——不预占则新排队者立即拿空闸门
+    超卖。主查询 TaskQueue+WorkflowType 双过滤（排除 CLI 随机 queue 的同类型
+    workflow、也排除 bb 队列上 AuthValidation/Topology 等非闸门 workflow——
+    预占它们会白白吃闸门容量且永不 release）；不支持该 search attribute 时
+    退化为 WorkflowType 过滤（接受 CLI 干扰：保守少槽，无害，spec §11）。
+    两级都失败 fail-open（restore 仍生效 + 空预占 + warning）——bootstrap
+    查询失败不该阻断 worker 启动（闸门/janitor 起来仍工作，代价仅本次预占
+    不全的短暂超卖窗口）。
     """
+    restore_gate_held_from_file()
     queues = "','".join(
         (WEB_TASK_QUEUE_WHITEBOX, WEB_TASK_QUEUE_BLACKBOX, WEB_TASK_QUEUE_CORRELATION))
     types = "','".join(_SCAN_WORKFLOW_TYPES)
     ids: list[str] = []
     try:
         ids = [w.id async for w in client.list_workflows(
-            query=f"TaskQueue IN ('{queues}')")]
+            query=f"TaskQueue IN ('{queues}') AND WorkflowType IN ('{types}')")]
     except Exception:
         try:
             ids = [w.id async for w in client.list_workflows(
