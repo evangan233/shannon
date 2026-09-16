@@ -9,17 +9,18 @@ from pydantic import BaseModel, field_validator, model_validator
 
 _log = logging.getLogger(__name__)
 
-_BATCH_SCAN_MAX_REPOS_DEFAULT = 50
+_BATCH_SCAN_MAX_REPOS_DEFAULT = 500
 
 
 def _batch_scan_max_repos() -> int:
-    """SUPERNOVA_BATCH_SCAN_MAX_REPOS（默认 50）：单次批量扫描/批量操作的仓数上限。
+    """SUPERNOVA_BATCH_SCAN_MAX_REPOS（默认 500）：单次批量扫描/批量操作的仓数上限。
 
-    2026-09-16 由硬编码 50 改 env 可配（现场需一次提交 >50 仓）。运维参数——
-    全局资源防呆（扫描每仓起一个 workflow，重于 clone），按白名单准入原则
-    走全局 env 直读、不进 SCAN_ENV_KEYS / ws 文本框；真并发由扫描闸门管。
+    2026-09-16 由硬编码 50 改 env 可配 + 默认放宽到 500（对齐批量克隆
+    BATCH_CLONE_MAX_URLS；真并发由扫描闸门 SUPERNOVA_SCAN_GATE_CAPACITY 管，
+    此处仅单次提交防呆）。运维参数——按白名单准入原则走全局 env 直读、
+    不进 SCAN_ENV_KEYS / ws 文本框（需收紧/放宽时在宿主 .env 配）。
 
-    返回 env 值(int>=1)；未设 / 畸形 / <1 回退默认(50)并 warning。
+    返回 env 值(int>=1)；未设 / 畸形 / <1 回退默认(500)并 warning。
     畸形值绝不 crash 请求（对齐 core get_max_concurrent 的容错契约——
     全局 env 手输容错）。"""
     raw = os.environ.get("SUPERNOVA_BATCH_SCAN_MAX_REPOS")
@@ -306,9 +307,9 @@ class BatchScanAccepted(BaseModel):
 class BatchScanRequest(BaseModel):
     """POST /api/scan/batch 请求体（spec §3.1）。
 
-    repos 上限默认 50（SUPERNOVA_BATCH_SCAN_MAX_REPOS 可配；2026-09-15 起
-    不再对齐 BATCH_CLONE_MAX_URLS=500——扫描每仓起一个 workflow，重于 clone，
-    2026-09-16 由硬编码改 env 可配，真并发由扫描闸门管）。
+    repos 上限默认 500（SUPERNOVA_BATCH_SCAN_MAX_REPOS 可配；2026-09-16 由
+    硬编码 50 改 env 可配并放宽到 500，对齐 BATCH_CLONE_MAX_URLS——真并发由
+    扫描闸门管，此处仅单次提交防呆）。
     """
 
     workspace: str

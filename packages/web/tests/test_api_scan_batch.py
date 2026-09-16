@@ -27,22 +27,24 @@ class TestBatchScanRequestValidation:
         req = _base(repos=["a", "a", "b"])
         assert sorted(req.repos) == ["a", "b"]
 
-    def test_repos_over_50_rejected(self):
+    def test_repos_over_500_rejected(self):
         with pytest.raises(ValidationError):
-            _base(repos=[f"r{i}" for i in range(51)])
+            _base(repos=[f"r{i}" for i in range(501)])
 
 
 class TestBatchScanMaxReposEnv:
-    """SUPERNOVA_BATCH_SCAN_MAX_REPOS（2026-09-16 由硬编码 50 改 env 可配）。
+    """SUPERNOVA_BATCH_SCAN_MAX_REPOS（2026-09-16 由硬编码 50 改 env 可配，
+    同日默认 50→500——闸门管真并发，此处仅单次提交防呆）。
 
     运维参数（全局资源防呆），走全局 env 直读——按白名单准入原则不进
     SCAN_ENV_KEYS / ws 文本框。容错对齐 get_max_concurrent：未设/畸形/<1
-    回落默认 50 + warning，绝不 crash 请求。"""
+    回落默认 500 + warning，绝不 crash 请求。"""
 
     def test_env_overrides_limit(self, monkeypatch):
-        monkeypatch.setenv("SUPERNOVA_BATCH_SCAN_MAX_REPOS", "200")
-        req = _base(repos=[f"r{i}" for i in range(51)])
-        assert len(req.repos) == 51
+        # env 调大有区分性：501 超默认 500（若 env 不生效会被拒），600 放行
+        monkeypatch.setenv("SUPERNOVA_BATCH_SCAN_MAX_REPOS", "600")
+        req = _base(repos=[f"r{i}" for i in range(501)])
+        assert len(req.repos) == 501
 
     def test_env_over_limit_rejected_with_effective_value(self, monkeypatch):
         monkeypatch.setenv("SUPERNOVA_BATCH_SCAN_MAX_REPOS", "200")
@@ -51,21 +53,28 @@ class TestBatchScanMaxReposEnv:
         assert "200" in str(ei.value)
         assert "SUPERNOVA_BATCH_SCAN_MAX_REPOS" in str(ei.value)
 
-    def test_env_malformed_falls_back_50(self, monkeypatch):
+    def test_env_malformed_falls_back_500(self, monkeypatch):
         monkeypatch.setenv("SUPERNOVA_BATCH_SCAN_MAX_REPOS", "abc")
         with pytest.raises(ValidationError):
-            _base(repos=[f"r{i}" for i in range(51)])
+            _base(repos=[f"r{i}" for i in range(501)])
 
-    def test_env_nonpositive_falls_back_50(self, monkeypatch):
+    def test_env_nonpositive_falls_back_500(self, monkeypatch):
         monkeypatch.setenv("SUPERNOVA_BATCH_SCAN_MAX_REPOS", "0")
         with pytest.raises(ValidationError):
-            _base(repos=[f"r{i}" for i in range(51)])
+            _base(repos=[f"r{i}" for i in range(501)])
+
+    def test_default_500(self, monkeypatch):
+        monkeypatch.delenv("SUPERNOVA_BATCH_SCAN_MAX_REPOS", raising=False)
+        req = _base(repos=[f"r{i}" for i in range(500)])
+        assert len(req.repos) == 500
 
     def test_scan_ids_batch_follows_env(self, monkeypatch):
-        # 批量取消/续跑同一上限（对齐语义：批量操作逐项起副作用）
+        # 批量取消/续跑同一上限（对齐语义：批量操作逐项起副作用）。
+        # env 调小有区分性：201 超过 env=200（若 scan_ids 不跟随 env，
+        # 201 < 默认 500 会通过）
         monkeypatch.setenv("SUPERNOVA_BATCH_SCAN_MAX_REPOS", "200")
-        req = ScanIdsBatchRequest(scan_ids=[f"s{i}" for i in range(51)])
-        assert len(req.scan_ids) == 51
+        with pytest.raises(ValidationError):
+            ScanIdsBatchRequest(scan_ids=[f"s{i}" for i in range(201)])
 
     def test_combined_url_with_auth_profile_ok(self):
         # 组合模式（带 url）：认证字段合法（profile 子集模式）
