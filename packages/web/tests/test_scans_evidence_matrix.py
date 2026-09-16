@@ -37,7 +37,7 @@ def _ep(method, route):
 def test_evidence_matrix_200_when_cached(authed_client, tmp_workspaces):
     scan_dir = _make_scan(tmp_workspaces, "w1")
     _wb_products(scan_dir)
-    cached = {"schema_version": 1, "scan_id": "s1", "cached": True, "sources": {},
+    cached = {"schema_version": 2, "scan_id": "s1", "cached": True, "sources": {},
               "endpoints": [], "unmatched": {}}
     (scan_dir / "deliverables" / "api_evidence_matrix.json").write_text(
         json.dumps(cached))
@@ -47,13 +47,33 @@ def test_evidence_matrix_200_when_cached(authed_client, tmp_workspaces):
     assert r.json()["cached"] is True
 
 
+def test_evidence_matrix_schema_bump_rebuilds(authed_client, tmp_workspaces):
+    """v1 旧缓存（mtime 比源新，不触发 mtime 陈旧）→ schema 失效重建为 v2。
+
+    证据页 v2（2026-09-16）富化后，已落盘的 v1 产物若只按 mtime 判新鲜
+    将永不重建，金融平台等存量扫描永远看不到新字段。
+    """
+    scan_dir = _make_scan(tmp_workspaces, "w1")
+    _wb_products(scan_dir, entries=[_ep("GET", "/profile")])
+    cached = {"schema_version": 1, "scan_id": "s1", "cached": True, "sources": {},
+              "endpoints": [], "unmatched": {}}
+    out = scan_dir / "deliverables" / "api_evidence_matrix.json"
+    out.write_text(json.dumps(cached))  # mtime 最新 → 只能靠 schema_version 触发
+    r = authed_client.get("/api/workspaces/w1/scans/s1/evidence-matrix")
+    assert r.status_code == 200
+    body = r.json()
+    assert "cached" not in body  # 重建，非直读旧缓存
+    assert body["schema_version"] == 2
+    assert json.loads(out.read_text(encoding="utf-8"))["schema_version"] == 2
+
+
 def test_evidence_matrix_lazy_generates_and_persists(authed_client, tmp_workspaces):
     scan_dir = _make_scan(tmp_workspaces, "w1")
     _wb_products(scan_dir, entries=[_ep("GET", "/profile")])
     r = authed_client.get("/api/workspaces/w1/scans/s1/evidence-matrix")
     assert r.status_code == 200
     body = r.json()
-    assert body["schema_version"] == 1
+    assert body["schema_version"] == 2
     assert body["endpoints"][0]["path"] == "/profile"
     # 落盘缓存（下次直读）
     assert (scan_dir / "deliverables" / "api_evidence_matrix.json").exists()
@@ -126,8 +146,8 @@ def test_evidence_matrix_corrupt_cache_self_heals(authed_client, tmp_workspaces)
     out.write_text("{not valid json")
     r = authed_client.get("/api/workspaces/w1/scans/s1/evidence-matrix")
     assert r.status_code == 200
-    assert r.json()["schema_version"] == 1
-    assert json.loads(out.read_text(encoding="utf-8"))["schema_version"] == 1  # 已重建落盘
+    assert r.json()["schema_version"] == 2
+    assert json.loads(out.read_text(encoding="utf-8"))["schema_version"] == 2  # 已重建落盘
 
 
 def test_evidence_matrix_stale_cache_served_when_report_data_missing(authed_client,

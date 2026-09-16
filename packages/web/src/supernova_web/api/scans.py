@@ -578,7 +578,8 @@ async def scan_evidence_matrix(ws: str, scan_id: str, request: Request,
                                _: User = Depends(workspace_member)) -> dict:
     """api_evidence_matrix.json（spec 2026-09-10 §7）——接口级证据矩阵。
 
-    产物新鲜直读；缺失/陈旧（源产物 mtime 更新，典型 = 黑盒 run 完成后）且
+    产物新鲜且 schema_version 匹配 → 直读；缺失/陈旧（源产物 mtime 更新，
+    典型 = 黑盒 run 完成后）/旧 schema（聚合器升级后存量扫描自动重建）且
     whitebox report_data.json 在 → web 进程内跑 core 纯聚合函数重建（零 agent，
     不违 web 零 agent 执行点铁律）+ 落盘缓存（写失败只返不缓存）。缓存坏 JSON
     按不可用缓存处理（落回重建自愈，不 500）。重建条件不满足但有旧产物 →
@@ -587,7 +588,7 @@ async def scan_evidence_matrix(ws: str, scan_id: str, request: Request,
     import json as _json
 
     from supernova_core.services.api_evidence_matrix import (
-        EVIDENCE_MATRIX_FILENAME, build_api_evidence_matrix)
+        EVIDENCE_MATRIX_FILENAME, SCHEMA_VERSION, build_api_evidence_matrix)
     from supernova_core.utils.atomic_write import atomic_write_json
 
     scan_dir = _scan_dir_or_404(request, ws, scan_id)
@@ -626,8 +627,8 @@ async def scan_evidence_matrix(ws: str, scan_id: str, request: Request,
 
     if matrix_path.exists() and not _stale():
         cached = _read_matrix()
-        if cached is not None:
-            return cached  # 坏 JSON（此处 None）→ 落回下方重建自愈
+        if cached is not None and cached.get("schema_version") == SCHEMA_VERSION:
+            return cached  # 坏 JSON（此处 None）/ 旧 schema → 落回下方重建自愈
     if not wb_rd.exists():
         cached = _read_matrix() if matrix_path.exists() else None
         if cached is not None:

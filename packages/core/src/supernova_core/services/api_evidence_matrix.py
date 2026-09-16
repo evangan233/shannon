@@ -26,7 +26,7 @@ from supernova_core.utils.paths import resolve_intermediate
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 EVIDENCE_MATRIX_FILENAME = "api_evidence_matrix.json"
 VULN_CLASSES = ("injection", "xss", "ssrf", "authz", "auth")
 LIVE_PROBE_MARKERS = ("黑盒实测", "probe-transcript", "实测")
@@ -78,6 +78,22 @@ def match_entry(index: dict[tuple[str, str], list[dict]],
         return bucket[0] if len(bucket) == 1 else None
     hits = [e for (m, s), bucket in index.items() if s == shape for e in bucket]
     return hits[0] if len(hits) == 1 else None
+
+
+def match_entry_reason(index: dict[tuple[str, str], list[dict]],
+                       method: str | None, route: str) -> str | None:
+    """匹配失败原因（v2 unmatched reason 细化）：多命中 "ambiguous"、
+    桶空 "no-match"、命中 None。与 match_entry 同一判定逻辑。"""
+    shape = _shape_key(route)
+    if method is not None:
+        bucket = index.get((str(method).upper(), shape), [])
+        if len(bucket) == 1:
+            return None
+        return "ambiguous" if bucket else "no-match"
+    hits = [e for (m, s), bucket in index.items() if s == shape for e in bucket]
+    if len(hits) == 1:
+        return None
+    return "ambiguous" if hits else "no-match"
 
 
 def extract_endpoint_texts(text: str) -> list[tuple[str | None, str]]:
@@ -137,13 +153,47 @@ def _endpoint_rows(vuln: dict) -> list[dict]:
     return out
 
 
+# v2（2026-09-16）：report_data 卡直取的证据块（_pick 顶层→raw 回退，非空才带）
+_FINDING_REPORT_KEYS = (
+    "narrative", "poc", "problem_points", "dataflow_steps", "evidence",
+    "cross_verification", "cwe_id", "externally_exploitable",
+)
+# raw 回退 per-class 白名单（queue_schemas.py 实测清单；扁平写入 finding 卡）
+_PER_CLASS_RAW_KEYS: dict[str, tuple[str, ...]] = {
+    "auth": ("missing_defense", "exploitation_hypothesis",
+             "suggested_exploit_technique", "vulnerable_code_location",
+             "source_endpoint"),
+    "authz": ("reason", "guard_evidence", "role_context", "side_effect",
+              "minimal_witness", "vulnerable_code_location", "source_track"),
+    # taint 三类共用
+    "injection": ("source", "sink_call", "sink_function",
+                  "sanitization_observed", "render_context",
+                  "encoding_observed", "slot_type", "path",
+                  "vulnerable_parameter", "sanitizer_annotations",
+                  "source_track", "accessible_routes"),
+}
+_PER_CLASS_RAW_KEYS["xss"] = _PER_CLASS_RAW_KEYS["injection"]
+_PER_CLASS_RAW_KEYS["ssrf"] = _PER_CLASS_RAW_KEYS["injection"]
+
+
+def _add_nonempty(out: dict, key: str, val: Any) -> None:
+    """体积护栏：None/空串/空列表/空 dict 不写键（v2 非空才带）。"""
+    if val is None:
+        return
+    if isinstance(val, str) and not val.strip():
+        return
+    if isinstance(val, (list, dict)) and not val:
+        return
+    out[key] = val
+
+
 def _finding_view(vuln: dict) -> dict:
     raw = vuln.get("raw") if isinstance(vuln.get("raw"), dict) else {}
 
     def _pick(key, default=None):
         return vuln.get(key) if vuln.get(key) is not None else raw.get(key, default)
 
-    return {
+    out: dict[str, Any] = {
         "id": vuln.get("id"),
         "vuln_class": vuln.get("type"),
         "severity": vuln.get("severity"),
@@ -156,6 +206,11 @@ def _finding_view(vuln: dict) -> dict:
         "params": _pick("affected_parameters") or [],
         "auth_required": _pick("authentication_required"),
     }
+    for key in _FINDING_REPORT_KEYS:
+        _add_nonempty(out, key, _pick(key))
+    for key in _PER_CLASS_RAW_KEYS.get(str(vuln.get("type") or ""), ()):
+        _add_nonempty(out, key, _pick(key))
+    return out
 
 
 def _safe_view(vec: dict) -> dict:
@@ -169,11 +224,16 @@ def _safe_view(vec: dict) -> dict:
 
 
 def _dismissed_view(d: dict) -> dict:
-    return {
+    out: dict[str, Any] = {
         "ID": d.get("ID"), "vuln_class": d.get("vuln_class"),
         "title": d.get("title"), "dismiss_reason": d.get("dismiss_reason"),
         "dismissed_at_stage": d.get("dismissed_at_stage"),
     }
+    # v2：判否留档的证据定位字段——file:line 证据、置信度、来源轨、
+    # sink 调用、原始 source。非空才带。
+    for key in ("evidence", "confidence", "source_track", "sink_call", "source"):
+        _add_nonempty(out, key, d.get(key))
+    return out
 
 
 def _coerce_step(step: object) -> str:
@@ -200,15 +260,49 @@ def _coerce_step(step: object) -> str:
 
 
 def _verdict_view(v: dict, run_id: str, vuln_class: str) -> dict:
+    """5 态 discriminated union 富透传（schema 见 models/exploit_verdict_schemas）。
+
+    v2（2026-09-16）：此前只有 exploited 形态字段——blocked/potential 卡
+    impact=None 时整卡只剩 status 一个词，「为什么没打通/为什么降级」的
+    current_blocker/what_we_tried/downgrade_reason 全被丢掉。按 status 分支
+    白名单透传；exploitation_steps 恒带（前端 .map 容错，空数组不违体积护栏）。
+    """
     steps = v.get("exploitation_steps")
-    return {
+    coerced = [_coerce_step(s) for s in steps] if isinstance(steps, list) else []
+    out: dict[str, Any] = {
         "vulnerability_id": v.get("vulnerability_id"),
         "vuln_class": vuln_class, "status": v.get("status"),
-        "severity": v.get("severity"), "impact": v.get("impact"),
-        "exploitation_steps": [_coerce_step(s) for s in steps] if isinstance(
-            steps, list) else [],
-        "proof_of_impact": v.get("proof_of_impact"), "run_id": run_id,
+        "exploitation_steps": coerced, "run_id": run_id,
     }
+    status = v.get("status")
+    if status == "exploited":
+        out.update({
+            "severity": v.get("severity"), "impact": v.get("impact"),
+            "proof_of_impact": v.get("proof_of_impact"),
+        })
+    elif status == "blocked_by_security":
+        out.update({
+            "confidence": v.get("confidence"),
+            "current_blocker": v.get("current_blocker"),
+            "what_we_tried": v.get("what_we_tried"),
+            "evidence_of_vulnerability": v.get("evidence_of_vulnerability"),
+            "expected_impact": v.get("expected_impact"),
+        })
+    elif status in ("false_positive", "out_of_scope_internal"):
+        out.update({
+            "reason": v.get("reason"), "evidence": v.get("evidence"),
+        })
+    elif status == "potential":
+        out.update({
+            "severity": v.get("severity"), "confidence": v.get("confidence"),
+            "downgrade_reason": v.get("downgrade_reason"),
+            "evidence_of_vulnerability": v.get("evidence_of_vulnerability"),
+        })
+    for key in ("cwe_id", "cvss", "owasp_category"):
+        val = v.get(key)
+        if val:
+            out[key] = val
+    return out
 
 
 def build_api_evidence_matrix(scan_dir: Path) -> dict:
@@ -262,10 +356,15 @@ def build_api_evidence_matrix(scan_dir: Path) -> dict:
             if not isinstance(vuln, dict) or not vuln.get("id"):
                 continue
             view = _finding_view(vuln)
+            rows = _endpoint_rows(vuln)
             mounted = False
-            for row in _endpoint_rows(vuln):
+            miss_reasons: list[str] = []
+            for row in rows:
                 hit = match_entry(index, row["method"], row["path"])
                 if hit is None:
+                    r = match_entry_reason(index, row["method"], row["path"])
+                    if r:
+                        miss_reasons.append(r)
                     continue
                 f = dict(view)
                 f.update({k: row[k] for k in
@@ -277,11 +376,22 @@ def build_api_evidence_matrix(scan_dir: Path) -> dict:
                 finding_to_entries.setdefault(vuln["id"], []).append(hit)
                 mounted = True
             if not mounted:
-                unmatched_findings.append({
-                    "id": vuln.get("id"), "vuln_class": vuln.get("type"),
-                    "title": vuln.get("title"),
-                    "reason": "ambiguous-or-no-endpoint-match",
-                })
+                # v2：unmatched 一等公民化——完整 finding 卡直出（Go/RPC 项目
+                # 底册无 route 行时全部 finding 落此，黑洞只剩标题不可接受）。
+                if not index:
+                    reason = "no-route-entries"
+                elif not rows:
+                    reason = "no-endpoint-rows"
+                elif "ambiguous" in miss_reasons:
+                    reason = "ambiguous"
+                else:
+                    reason = "no-endpoint-match"
+                entry = {**view, "reason": reason}
+                declared = [{"method": r["method"], "path": r["path"]}
+                            for r in rows]
+                if declared:
+                    entry["declared_endpoints"] = declared
+                unmatched_findings.append(entry)
 
     # ── 白盒安全结论 / 驳回（自由文本）──
     for vc in VULN_CLASSES:
@@ -348,26 +458,30 @@ def build_api_evidence_matrix(scan_dir: Path) -> dict:
                         mounted = True
                         break
             if not mounted:
+                # v2：unmatched verdict 同样富透传（blocked/potential 判定依据不丢）
                 unmatched_verdicts.append({
-                    "vulnerability_id": v.get("vulnerability_id"),
-                    "status": v.get("status"), "run_id": run_id,
+                    **_verdict_view(v, run_id, vc),
                     "reason": "finding-or-endpoint-not-matched"})
         for r in payload.get("rejected") or []:
             if not isinstance(r, dict):
                 continue
             anchored = False
-            for hit in finding_to_entries.get(r.get("vulnerability_id"), []):
+            for hit in finding_to_entries.get(
+                    r.get("vulnerability_id") or r.get("id"), []):
                 hit["blackbox"]["rejected"].append(r)
                 anchored = True
             if not anchored:
                 # 无 finding 锚的 rejected 不静默丢弃 → unmatched 可见
+                # （build_exploit_verdicts_payload 的 rejected 条目键是 id，非
+                # vulnerability_id——旧代码取错键恒 None，v2 一并兼容）
                 unmatched_verdicts.append({
                     "kind": "rejected",
-                    "vulnerability_id": r.get("vulnerability_id"),
+                    "vulnerability_id": r.get("vulnerability_id") or r.get("id"),
+                    "reason": r.get("reason"),
                     "vuln_class": vc,
                     "status": r.get("status"),
                     "run_id": run_id,
-                    "reason": "finding-or-endpoint-not-matched"})
+                    "detail": "finding-or-endpoint-not-matched"})
 
     # ── coverage（spec §4：clean = 白盒/黑盒证据均未命中——黑盒-only 不得标 clean）──
     for e in entries:
@@ -399,4 +513,9 @@ def build_api_evidence_matrix(scan_dir: Path) -> dict:
     if entry_payload is None:
         matrix["note"] = ("entry_points.json 缺失或解析失败（纯黑盒扫描或旧版扫描），"
                           "接口底册为空，证据无处挂载。")
+    elif not entries:
+        # v2：底册存在但无 HTTP route 行（RPC/CLI/进程型入口项目）——此前右侧
+        # 落「选择左侧接口查看证据」误导空态，用户不知证据其实全在未挂载区。
+        matrix["note"] = ("接口底册存在但无 HTTP route 行（RPC/CLI/进程型入口"
+                          "项目），证据无法按接口挂载，完整证据见未挂载区。")
     return matrix

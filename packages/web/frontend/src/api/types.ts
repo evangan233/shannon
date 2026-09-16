@@ -732,6 +732,49 @@ export interface AdversarialReview {
 }
 
 // ── 接口证据矩阵（spec 2026-09-10 §4；core api_evidence_matrix.py 产物）──
+// v2（2026-09-16 证据页详细化）：finding 卡补 narrative/poc/problem_points/
+// dataflow_steps/evidence + raw per-class 证据字段；verdict 5 态富字段；
+// dismissed 补证据定位字段；unmatched findings 收紧为完整卡类型。
+// 全部新字段 optional（旧 v1 兜底产物缺字段自然空白，渲染必须容错）。
+
+export interface EvidenceNarrative {
+  cause?: string | null;
+  impact?: string | null;
+  remediation?: string | null;
+}
+
+export interface EvidenceProblemPoint {
+  location?: string | null;
+  description?: string | null;
+  snippet?: string | null;
+}
+
+export interface EvidenceDataflowStep {
+  label?: string | null;
+  file?: string | null;
+  line?: number | null;
+  protection?: string | null;
+}
+
+export interface EvidencePoc {
+  curl?: string | null;
+  raw_http?: string | null;
+  request?: Record<string, unknown> | null;
+  steps?: unknown[] | null;
+  preconditions?: string | string[] | null;
+  expected_response?: string | null;
+  notes?: string | null;
+  self_check?: string | null;
+}
+
+export interface EvidenceEvidence {
+  verification?: string | null;
+  dynamic_evidence?: string | null;
+  steps?: Array<{ action?: string | null; command?: string | null; result?: string | null }> | null;
+  verdict?: string | null;
+  code_snippet?: string | null;
+  notes?: string | null;
+}
 
 export interface EvidenceFinding {
   id: string | null;
@@ -748,6 +791,38 @@ export interface EvidenceFinding {
   source_location: string | null;
   sink_location: string | null;
   role?: string | null;
+  // ── v2 富证据块（report_data 直取）──
+  narrative?: EvidenceNarrative | null;
+  poc?: EvidencePoc | null;
+  problem_points?: EvidenceProblemPoint[] | null;
+  dataflow_steps?: EvidenceDataflowStep[] | null;
+  evidence?: EvidenceEvidence | null;
+  cross_verification?: string | null;
+  cwe_id?: string | null;
+  externally_exploitable?: boolean | null;
+  // ── v2 raw per-class 证据字段（auth/authz/taint，非空才带）──
+  missing_defense?: string | null;
+  exploitation_hypothesis?: string | null;
+  suggested_exploit_technique?: string | null;
+  vulnerable_code_location?: string | null;
+  source_endpoint?: string | null;
+  reason?: string | null;
+  guard_evidence?: string | null;
+  role_context?: string | null;
+  side_effect?: string | null;
+  minimal_witness?: string | null;
+  source?: string | null;
+  sink_call?: string | null;
+  sink_function?: string | null;
+  sanitization_observed?: string | null;
+  render_context?: string | null;
+  encoding_observed?: string | null;
+  slot_type?: string | null;
+  path?: string | null;
+  vulnerable_parameter?: string | null;
+  sanitizer_annotations?: unknown;
+  source_track?: string | null;
+  accessible_routes?: unknown;
 }
 
 export interface EvidenceSafeVector {
@@ -763,6 +838,12 @@ export interface EvidenceDismissed {
   title: string | null;
   dismiss_reason: string | null;
   dismissed_at_stage: string | null;
+  // v2：判否留档的证据定位字段（非空才带）
+  evidence?: string | null;
+  confidence?: string | null;
+  source_track?: string | null;
+  sink_call?: string | null;
+  source?: string | null;
 }
 
 export interface EvidenceVerdict {
@@ -774,6 +855,18 @@ export interface EvidenceVerdict {
   exploitation_steps: string[];
   proof_of_impact: string | null;
   run_id: string | null;
+  // v2：5 态 discriminated union 富字段（exploit_verdict_schemas.py；非空才带）
+  confidence?: string | null;
+  current_blocker?: string | null;
+  what_we_tried?: string | null;
+  evidence_of_vulnerability?: string | null;
+  expected_impact?: string | null;
+  reason?: string | null;
+  evidence?: string | null;
+  downgrade_reason?: string | null;
+  cwe_id?: string | null;
+  cvss?: string | null;
+  owasp_category?: string | null;
 }
 
 export interface EvidenceEndpoint {
@@ -795,16 +888,26 @@ export interface EvidenceEndpoint {
   coverage: "findings" | "defended" | "clean";
 }
 
+export interface EvidenceUnmatchedFinding extends EvidenceFinding {
+  reason?: string | null;
+  declared_endpoints?: Array<{ method: string | null; path: string }> | null;
+}
+
+export interface EvidenceUnmatchedVerdict extends EvidenceVerdict {
+  reason?: string | null;
+  kind?: string | null;
+}
+
 export interface EvidenceMatrix {
   schema_version: number;
   scan_id: string | null;
   generated_at: string | null;
-  sources: Record<string, unknown>;
+  sources: { entry_points: boolean; report_data: boolean; blackbox_runs: number };
   endpoints: EvidenceEndpoint[];
   unmatched: {
-    findings: Record<string, unknown>[];
-    safe_dismissed: Record<string, unknown>[];
-    verdicts: Record<string, unknown>[];
+    findings: EvidenceUnmatchedFinding[];
+    safe_dismissed: Array<Record<string, unknown> & { kind?: string }> ;
+    verdicts: EvidenceUnmatchedVerdict[];
   };
   note?: string | null;
 }

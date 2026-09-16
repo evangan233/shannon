@@ -3,6 +3,18 @@
 - 日期：2026-09-10
 - 状态：已实现（2026-09-10，plan `plans/2026-09-10-api-evidence-matrix.md` 7 任务 TDD 全绿 + 真实 NodeGoat 扫描抽查通过；实现中发现 plan 代码 glob 前缀笔误 `deliverables/blackbox-runs/`——§3 本表路径为准：`blackbox-runs/` 与 `deliverables/` 平级，已修正）
 
+## 0. v2 变更（2026-09-16，证据页详细化；schema_version 1→2）
+
+用户反馈「不够详细，判断不了为什么有问题/为什么没问题」。实测金融平台-2026h2（Go 微服务 19 扫描）定位三层损耗：①底册对 Go 服务全是 grpc/进程入口（route=null）→ 匹配全灭、全部证据落 unmatched；②unmatched 只留 id/title 黑洞；③`_*_view` 投影砍字段 + 前端零渲染已有字段。v2 改造（用户拍板：不修匹配、unmatched 一等公民化、不动 prompt、只做证据页）：
+
+- **`_finding_view` 扩白名单**（非空才带）：report_data 直取 narrative/poc/problem_points/dataflow_steps/evidence/cross_verification/cwe_id/externally_exploitable + raw per-class 回退（auth 缺失防御/利用假设、authz 理由/防护证据/角色上下文/越权副作用/最小载荷、taint source/sink/净化/编码/槽位等——按 queue_schemas 实测清单）。
+- **`_verdict_view` 按 5 态 discriminated union 富透传**：blocked_by_security（current_blocker/what_we_tried/evidence_of_vulnerability/expected_impact）、false_positive/out_of_scope_internal（reason/evidence/steps 同过 `_coerce_step`）、potential（downgrade_reason 等）；exploitation_steps 恒带（前端 .map 容错）。
+- **unmatched 一等公民化**：findings 出完整卡 + reason 四态细化（`no-route-entries`/`ambiguous`/`no-endpoint-match`/`no-endpoint-rows`，`match_entry_reason` 与 match_entry 同判定逻辑）+ declared_endpoints（finding 声称的接口）；verdicts 走富透传；dismissed 补 evidence/confidence/source_track/sink_call/source。entries==0 且底册存在 → 顶层 note（RPC/CLI/进程型入口项目提示，修右侧误导空态）。
+- **web 缓存 schema 失效**：`_stale()` 纯 mtime 无法感知聚合器升级——直读分支加 `schema_version == SCHEMA_VERSION` 校验，存量 v1 落盘产物自动重建；report_data 缺失时旧文件兜底行为不变。
+- **前端**：`EvidenceFindingCard` 富卡组件（挂载态与 unmatched 同构；narrative 三节/问题点 snippet 高亮/PoC 代码面板/数据流时间线/per-class 字段分组/验证证据子块，复用 CopyableCodePanel + report.* 文案）；黑盒 5 态卡 `EvidenceVerdictCard` + rejected 渲染；接口头部 entry_verdict/entry_evidence；sources 缺失提示条；unmatched 升级为右侧全宽面板（完整卡 + vuln_class 筛选 + reason 徽标）；互链（`../dataflow?tree=` 深链复用 buildFindingTreeMap 同 SWR key、`../report#<id>` 锚点——ReportTab 无 hash 滚动，跳 tab 不定位为已知边界）。
+- 明确不做：route 匹配修复（Go/RPC 底册语义错位，另立项）、报告页 raw 渲染、prompt 加厚。
+- 体积实测：account_svr（22 findings 全 unmatched）32KB→146KB，可控。
+
 ## 1. 背景与需求
 
 用户诉求：扫描完成后，**以 WEB 接口为维度**记录扫描证据——每个接口「为什么有问题、为什么没问题」，且**白盒阶段分析证据与黑盒验证证据独立成两栏**，落 web **独立证据页**（与报告页平级，不是报告页内的一节）。
