@@ -48,6 +48,11 @@ def _mk_posthoc_scan(store, ws="WS", status="completed"):
 
 # ── 投影侧：effective_scan_status / _summarize / progress ────────────────────
 
+def test_reconnecting_is_not_overridden_by_combined_phase():
+    """心跳 stale 的组合扫描仍须等待 Temporal 对账，不能被 pending/running phase 伪装运行中。"""
+    from supernova_web.components.scan_store import effective_scan_status
+    assert effective_scan_status("reconnecting", True, "running") == "reconnecting"
+
 def test_posthoc_run_failure_keeps_task_completed_in_list(tmp_path):
     """加 run 失败不上浮任务级：list 状态仍 completed（表单候选口径依赖）。"""
     from supernova_web.components.scan_store import ScanStore

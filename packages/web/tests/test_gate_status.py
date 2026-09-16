@@ -40,11 +40,11 @@ def test_compute_status_queued_beats_submit_grace(tmp_path):
     assert _compute_status(scan_dir, None) == "queued"
 
 
-def test_compute_status_interrupted_when_gate_miss(tmp_path):
+def test_compute_status_reconnecting_when_gate_miss(tmp_path):
     scan_dir = _mk_scan(tmp_path)
     _write_gate(tmp_path, [{"ws": "prod", "scan_id": "other-scan",
                             "kind": "whitebox", "label": "x", "since": 1.0}])
-    assert _compute_status(scan_dir, None) == "interrupted"
+    assert _compute_status(scan_dir, None) == "reconnecting"
 
 
 def test_compute_status_terminal_still_wins(tmp_path):

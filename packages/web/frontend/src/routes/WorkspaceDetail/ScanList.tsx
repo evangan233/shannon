@@ -46,27 +46,26 @@ const TERMINAL = new Set(["completed", "done", "failed", "killed", "crashed", "c
 
 // 运行中判定（分段过滤用）；轮询节奏由 useScans 的 SWR refreshInterval 管理。
 const isRun = (s: ScanSummary) => s.is_running || s.status === "running";
+const isActiveRow = (s: ScanSummary) => isRun(s)
+  || s.status === "queued" || s.status === "reconnecting";
 
-// 可取消判定（2026-09-15 批量取消 + 单行补缺共用）：running + queued（排队任务
-// 此前单行无取消入口——后端本就支持，handle.cancel 排队中 workflow + gate janitor
-// 回收 waiting 槽）。终态/interrupted 不可取消（标 cancelled 无意义，两者皆可续跑）。
-const cancelableRow = (s: ScanSummary) => isRun(s) || s.status === "queued";
+// 可取消判定：running / queued / reconnecting 均可能仍被 Temporal 管理。reconnecting
+// 不是断点，只是 worker 心跳暂时缺失；允许取消但不允许 resume/delete。
+const cancelableRow = (s: ScanSummary) => isActiveRow(s);
 
-// 可续跑判定（单行按钮与批量预筛同口径）：非 running ∧ 非 queued（排队不是断点）
-// ∧ 非 completed/done ∧ 白盒行（含组合；correlation/mr 无入口）。
-const canResumeRow = (s: ScanSummary) => !isRun(s)
-  && s.status !== "queued"
+// 可续跑判定：所有活跃/确认中的状态均排除；仅确认终态可作为断点。
+const canResumeRow = (s: ScanSummary) => !isActiveRow(s)
   && !["completed", "done"].includes(s.status)
   && s.scan_type === "whitebox";
 
 // 可删除判定（2026-09-15 批量删除）：七个终态（TERMINAL 不含 interrupted，补上）；
-// running/queued 拦（queued 真删会留孤儿 workflow——服务端终态门同口径兜底）。
+// running/queued/reconnecting 拦（后者仍可能有 Temporal workflow）。
 const deletableRow = (s: ScanSummary) => TERMINAL.has(s.status) || s.status === "interrupted";
 
 /** 状态分段（filter 分段控件口径）：running/completed/failed + other（interrupted 等，仅「全部」可见）。 */
 type Seg = "running" | "completed" | "failed";
 function segOf(s: ScanSummary): Seg | "other" {
-  if (isRun(s)) return "running";
+  if (isActiveRow(s)) return "running";
   if (s.status === "completed" || s.status === "done") return "completed";
   if (["failed", "killed", "crashed"].includes(s.status)) return "failed";
   return "other";
@@ -997,7 +996,7 @@ function ScanRow({ ws, scan, scansById, onChanged, checked, onToggleSelect }: {
             <span className="whitespace-nowrap font-mono text-xs text-muted-foreground">
               100%{dur && ` · ${t("workspaceDetail.scans.duration", { dur })}`}
             </span>
-          ) : scan.status === "queued" ? (
+          ) : scan.status === "queued" || scan.status === "reconnecting" ? (
             /* 排队中无进度可言（progress_pct 恒 0，直显会成误导性的「停在 0%」）——
                状态徽标已表达排队，进度列静默占位。 */
             <span className="text-xs text-muted-foreground">—</span>

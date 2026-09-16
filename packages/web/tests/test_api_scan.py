@@ -226,8 +226,8 @@ def test_get_scan_gate_repairs_ws_from_workflow_id(_authed_app):
     assert body["waiting"][0]["ws"] == "dev"
 
 
-def test_get_scan_gate_hides_interrupted_scan_entries(_authed_app):
-    """worker/janitor 尚未回收时，已中断任务不应继续显示为占槽者。"""
+def test_get_scan_gate_keeps_worker_gate_entries(_authed_app):
+    """gate 是 worker 实际占用快照，不能按 web 心跳/业务状态提前过滤。"""
     import json as _json
     import time
 
@@ -241,8 +241,8 @@ def test_get_scan_gate_hides_interrupted_scan_entries(_authed_app):
 
     inferred_id, inferred_dir = scan_store.create_scan("WSX", "u", "/x-inferred")
     inferred = _json.loads((inferred_dir / "session.json").read_text())
-    # 模拟心跳超时但对账尚未把 session.json 改成 interrupted：列表已经按同一
-    # _compute_status 口径显示为 interrupted，闸门面板也必须同步隐藏。
+    # heartbeat stale 仅意味着 reconnecting；Temporal workflow 可能仍在 retry，
+    # held 必须继续展示，直到 worker janitor 按 Temporal 终态回收。
     inferred.update({"status": "running", "created_at": 1, "submitted_at": 1})
     (inferred_dir / "session.json").write_text(_json.dumps(inferred))
 
@@ -263,7 +263,8 @@ def test_get_scan_gate_hides_interrupted_scan_entries(_authed_app):
     })
     body = _authed_client(_authed_app).get("/api/scan/gate").json()
 
-    assert [entry["scan_id"] for entry in body["held"]] == [live_id]
+    assert [entry["scan_id"] for entry in body["held"]] == [
+        interrupted_id, inferred_id, live_id]
 
 
 def test_get_scan_gate_visible_to_all_users(_authed_app):

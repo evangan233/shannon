@@ -145,7 +145,7 @@ def test_all_heartbeats_stale_not_active(tmp_path, monkeypatch):
 
 def test_compute_status_running_via_run_heartbeat(tmp_path, monkeypatch):
     """集成：任务级 status=running（run 阶段）+ run heartbeat fresh → _compute_status
-    running；heartbeat 全 stale → interrupted（web 崩溃后正确翻转，resume 可续）。"""
+    running；heartbeat 全 stale → reconnecting（等待 Temporal 对账，不可直接续跑）。"""
     monkeypatch.delenv("SUPERNOVA_SCAN_LIVENESS_SUBMIT_GRACE_SECONDS", raising=False)
     (tmp_path / "session.json").write_text(json.dumps({
         "status": "running", "submitted_at": time.time() - 3600}))
@@ -156,4 +156,4 @@ def test_compute_status_running_via_run_heartbeat(tmp_path, monkeypatch):
     assert _compute_status(tmp_path, "running") == "running"
     old = time.time() - 3600
     os.utime(run_hb, (old, old))
-    assert _compute_status(tmp_path, "running") == "interrupted"
+    assert _compute_status(tmp_path, "running") == "reconnecting"

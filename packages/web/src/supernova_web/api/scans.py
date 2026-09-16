@@ -77,15 +77,8 @@ async def _scan_detail(request: Request, ws: str, scan_id: str, scan_dir) -> dic
     data = mgr.get_session_data(scan_dir)
     idx = request.app.state.indexer
     raw_status = idx._status_of(scan_dir, mgr.get_status(scan_dir))
-    # 判活盲区二次确认（2026-09-11 NodeGoat-20260910-193720 事故）：activity 在
-    # Temporal 重试等待期（backoff ~5min ×3）不执行 → 心跳停更 → interrupted 误判，
-    # 但 workflow 仍 RUNNING。detail 是用户决策入口（「已中断」+ 续跑按钮据此出现，
-    # 引导用户 terminate 掉实际在推进的扫描）——describe 确认 RUNNING 则维持
-    # running。仅 interrupted 才查（正常/终态短路），误判窗口短暂罕见，不设缓存。
-    if raw_status == "interrupted":
-        from supernova_web.components.orphan_reconciler import _workflow_still_running
-        if await _workflow_still_running(scan_dir):
-            raw_status = "running"
+    # 列表与详情共用同步状态计算。heartbeat stale 显 reconnecting；终态仅由
+    # orphan reconciler 的 Temporal probe 确认后落盘，不能在详情页单独覆写成 running。
     combined = data.get("combined")
     # 版本化 run（spec §5.2/§5.3）：bb_phase/bb_reason 合并 latest run（与 list 同视图）——
     # 任务级 phase 停在 precheck/pending，前端时间线/进度概览的 eventsUrl 切换都按 run
@@ -765,7 +758,7 @@ async def batch_cancel_scans(ws: str, req: ScanIdsBatchRequest, request: Request
                              _: User = Depends(workspace_member)):
     """批量取消扫描任务（2026-09-15 批量取消/续跑）。
 
-    端点层状态门（running/queued 才调 sm.cancel）+ 逐项循环调既有单点——scan_manager
+    端点层状态门（running/queued/reconnecting 才调 sm.cancel）+ 逐项循环调既有单点——scan_manager
     其余零改动。状态门是硬要求：cancel 自身无状态门，对 completed 等终态裸调也会
     _mark_cancelled 覆写成 cancelled（单行按钮靠 UI 条件挡，批量必须服务端挡
     「勾选到确认之间任务自己跑完」的漂移）；被拦项记 skipped 未触副作用。
@@ -779,7 +772,7 @@ async def batch_cancel_scans(ws: str, req: ScanIdsBatchRequest, request: Request
         if status is None:
             results.append(ScanBatchResultItem(scan_id=scan_id, ok=False, error="scan 不存在"))
             continue
-        if status not in ("running", "queued"):
+        if status not in ("running", "queued", "reconnecting"):
             results.append(ScanBatchResultItem(
                 scan_id=scan_id, ok=False, skipped=True,
                 error=f"状态为 {status}，已结束，无需取消"))
@@ -804,8 +797,8 @@ async def batch_resume_scans(ws: str, req: ScanIdsBatchRequest, request: Request
                              _: User = Depends(workspace_member)):
     """批量续跑扫描任务（2026-09-15 批量取消/续跑）。
 
-    逐项循环调既有单点 sm.resume——resume 自带状态门（_RESUMABLE_STATUSES + 心跳
-    判活），ValueError/TemporalUnavailable 逐项转 error 不阻断整批（cancelled 收尾
+    逐项循环调既有单点 sm.resume——resume 自带状态门（_RESUMABLE_STATUSES + Temporal
+    对账前的 reconnecting 拒绝），ValueError/TemporalUnavailable 逐项转 error 不阻断整批（cancelled 收尾
     transient 窗口的 422 同路回显）。有任何成功 → 202；全失败 → 422。
     """
     from supernova_web.components.scan_manager import TemporalUnavailable

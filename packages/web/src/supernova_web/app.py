@@ -15,6 +15,11 @@ from .config import get_config
 from supernova_core.config.env_loader import load_env
 
 
+# 对账只在后台低频运行；单轮按 scan 串行 probe，避免工作区多时并发打满 Temporal。
+# 这也是 reconnecting scan 的最短重试间隔，列表轮询本身不会触发 describe。
+_ORPHAN_RECONCILE_INTERVAL_SECONDS = 60
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 启动时加载 profile 凭证（对齐 worker runner.main / CLI blackbox·combined main.py
@@ -70,7 +75,20 @@ async def lifespan(app: FastAPI):
     from .components.workspace_provisioner import ensure_all_user_workspaces
     ensure_all_user_workspaces(app.state.config.workspaces_dir, app.state.auth_store)
     _reconcile_repo_meta(app)
-    await _reconcile_orphaned_scans(app)  # 重启后给孤儿 scan 补 scan_end，让 live 不再卡 running
+    await _reconcile_orphaned_scans(app)  # 重启后确认可收尾的孤儿 scan
+
+    async def _orphan_reconcile_loop():
+        """低频收敛 reconnecting scan；Temporal 不可用时由 probe fail-open 留待下轮。"""
+        while True:
+            await asyncio.sleep(_ORPHAN_RECONCILE_INTERVAL_SECONDS)
+            try:
+                await _reconcile_orphaned_scans(app)
+            except Exception:
+                import logging
+                logging.getLogger("supernova_web").exception(
+                    "background scan reconciliation failed; retrying next interval")
+
+    app.state._scan_reconcile_task = asyncio.create_task(_orphan_reconcile_loop())
     # 扫完即删（2026-09-10）启动兜底 sweep：孤儿对账收口终态后，补删「带标志且
     # 已完毕」的仓库（_watch 随上次 web 进程退出丢失的窗口）。best-effort 不阻断启动。
     try:
@@ -112,13 +130,15 @@ async def lifespan(app: FastAPI):
     app.state.scan_manager.reap_stale_probes()
     yield
     app.state._purge_task.cancel()
+    app.state._scan_reconcile_task.cancel()
     # shutdown（任务 9 接入 ScanManager 取消在途扫描后填充）
 
 
 async def _reconcile_orphaned_scans(app: FastAPI) -> None:
     """启动时遍历每个 ws 的所有 scan（ScanStore 双源：新 scans/<id>/ + legacy 根），
-    对孤儿 scan（session running 但 worker 已不存活、且无 scan_end）补写 scan_end
-    (interrupted) + 失败原因。
+    对无 heartbeat 的 scan 进行低频 Temporal 对账；只有明确关闭/不存在且无法归类业务结
+    果的 execution 才补写 ``scan_end=interrupted``。Temporal 查询失败时 fail-open，保留
+    reconnecting 到下一轮。
 
     T5: 改遍历 ScanStore._scan_entries（per-scan），而非 ws 根目录 -- 1:N 后 scan 在
     scans/<id>/（ScanStore 双源兼容历史 ws 根形态）。容器重启会杀掉 scan_manager._watch 协程，
@@ -129,8 +149,8 @@ async def _reconcile_orphaned_scans(app: FastAPI) -> None:
     from .components.scan_store import ScanStore
     cfg = app.state.config
     indexer = app.state.indexer
-    # 启动时 scan_manager._procs 为空，active_pids()={} -> is_running 对所有 ws=False，
-    # 故所有 session running 的 scan 都会被判孤儿并补 scan_end（这正是重启后的真实情况）。
+    # 启动时 scan_manager._procs 为空，active_pids()={}；reconcile_orphaned 会再以
+    # heartbeat、gate 与 Temporal execution 交叉确认，不能仅凭没有本机 pid 收尾。
     indexer.sync_active(app.state.scan_manager.active_pids())
     if not cfg.workspaces_dir.is_dir():
         return

@@ -77,12 +77,12 @@ async def delete_workspace(ws: str, request: Request, _: User = Depends(workspac
     idx = request.app.state.indexer
     # 活跃判定：1 ws : N scans 后改为「任意 scan 在跑」-> 409 先 cancel。
     # ScanStore.list_scans 双源（新 scans/<id>/ + legacy ws 根 session.json），
-    # _compute_status 终态优先 + heartbeat 判活。cancel 标 cancelled(终态)后非 running
-    # -> 立即可删；heartbeat fresh(在跑) -> running -> 409。不再依赖 pid 表（C1 容器
-    # 非 host PID namespace 看不到 host pid）。
+    # _compute_status 终态优先 + heartbeat 判活。heartbeat stale 但尚未 Temporal 对账的
+    # reconnecting 仍可能在 retry/接管，和 running/queued 一样禁止删工作区。
     from supernova_web.components.scan_store import ScanStore
     store = ScanStore(request.app.state.config.workspaces_dir)
-    if any(s.status == "running" for s in store.list_scans(ws)):
+    if any(s.status in {"running", "queued", "reconnecting"}
+           for s in store.list_scans(ws)):
         raise HTTPException(status_code=409, detail="workspace running, cancel scan first")
     shutil.rmtree(p)
     idx.set_active_pid(ws, None)

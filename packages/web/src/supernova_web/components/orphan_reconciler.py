@@ -12,11 +12,14 @@ import json
 import logging
 import os
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 
 import aiofiles
 from temporalio.client import Client, WorkflowExecutionStatus
+from temporalio.service import RPCError, RPCStatusCode
 
 from supernova_core.session import SessionManager
 
@@ -26,6 +29,27 @@ _log = logging.getLogger(__name__)
 
 # activity_failures.log 尾部截断长度（与 scan_manager.stderr_tail 对齐）
 _TAIL_BYTES = 2048
+
+
+class WorkflowProbe(str, Enum):
+    """Temporal execution 对账结果。
+
+    UNKNOWN 不是「已死」：网络抖动、超时和权限/服务端错误都必须保守保留 scan。
+    UNTRACKED 仅用于 legacy/CLI 扫描：它们没有可反推的 Temporal workflow id，沿用
+    已有 heartbeat 孤儿收尾路径，避免改变非 Temporal 扫描语义。
+    """
+
+    RUNNING = "running"
+    CLOSED = "closed"
+    ABSENT = "absent"
+    UNKNOWN = "unknown"
+    UNTRACKED = "untracked"
+
+
+@dataclass(frozen=True)
+class WorkflowProbeResult:
+    kind: WorkflowProbe
+    temporal_status: WorkflowExecutionStatus | None = None
 
 
 def _now_iso() -> str:
@@ -102,8 +126,8 @@ def _temporal_query_timeout() -> float:
     return float(os.environ.get("SUPERNOVA_RECONCILE_TEMPORAL_TIMEOUT_SECONDS", "5"))
 
 
-async def _workflow_still_running(scan_dir: Path) -> bool:
-    """scan 对应 temporal workflow 是否仍 RUNNING。
+async def _probe_workflow(scan_dir: Path) -> WorkflowProbeResult:
+    """返回 scan 的 Temporal 生命周期探测结果（含 legacy/CLI 的 UNTRACKED）。
 
     RUNNING = workflow 已提交、尚未终态，**含 worker 还未 poll 到 task 的排队阶段**——这正是
     「并发排队超 120s 提交宽限」的合法存活态，绝非孤儿。查到 RUNNING 即不干预（对症幽灵 scan）。
@@ -111,27 +135,93 @@ async def _workflow_still_running(scan_dir: Path) -> bool:
     整个查询(connect + describe)经 asyncio.wait_for 限时（见 _temporal_query_timeout）：Client.connect
     无内置超时，而 reconcile 在 /events 每次 poll 同步 await，temporal 抖动时卡死会阻塞 live 页 SSE。
 
-    降级：无法反推 workflow_id / 查询超时 / temporal 不可达 / workflow 不存在（host CLI scan 无 temporal
-    workflow、或 workflow 已被回收）→ 一律返 False，回退上层 heartbeat 判活（保持原行为：既不
-    误杀活 scan，也不放任真死 scan）。temporal 查询 best-effort，异常绝不阻塞 reconcile。
+    关键不变量：查询失败与 workflow 已关闭不同。只有服务明确返回 NOT_FOUND 才是
+    ABSENT；超时、断连和任何其他 RPC 错误都是 UNKNOWN，调用方不得写 interrupted。
     """
     workflow_id = _workflow_id_from_scan_dir(scan_dir)
     if workflow_id is None:
-        return False
+        return WorkflowProbeResult(WorkflowProbe.UNTRACKED)
 
-    async def _probe() -> bool:
+    async def _describe() -> WorkflowProbeResult:
         client = await Client.connect(_temporal_address())
         desc = await client.get_workflow_handle(workflow_id).describe()
-        return desc.status == WorkflowExecutionStatus.RUNNING
+        # continue-as-new 的旧 run 已关闭，但同一 workflow chain 仍在推进；对账无法
+        # 在这里可靠分辨最新 run 时宁可 fail-open，不能把它写成 interrupted。
+        live_statuses = {
+            WorkflowExecutionStatus.RUNNING,
+            WorkflowExecutionStatus.CONTINUED_AS_NEW,
+        }
+        return WorkflowProbeResult(
+            WorkflowProbe.RUNNING if desc.status in live_statuses else WorkflowProbe.CLOSED,
+            desc.status)
 
     try:
-        return await asyncio.wait_for(_probe(), timeout=_temporal_query_timeout())
+        return await asyncio.wait_for(_describe(), timeout=_temporal_query_timeout())
+    except RPCError as err:
+        if err.status is RPCStatusCode.NOT_FOUND:
+            return WorkflowProbeResult(WorkflowProbe.ABSENT)
+        _log.debug("reconcile workflow probe unknown (wf=%s): %r", workflow_id, err)
+        return WorkflowProbeResult(WorkflowProbe.UNKNOWN)
     except Exception as e:
-        # 超时 / 断连 / workflow 不存在 -> 保守回退，不据「查不到」误判。
-        # L3：此前静默吞，致惰性 reconcile 失效无从排查（2026-08-06 hk-user-view 卡 running
-        # 疑点即此）。补 debug 日志：记 workflow_id + 异常类型，让 reconcile 决策链可观测。
-        _log.debug("reconcile _workflow_still_running fallback (wf=%s): %r", workflow_id, e)
-        return False
+        _log.debug("reconcile workflow probe unknown (wf=%s): %r", workflow_id, e)
+        return WorkflowProbeResult(WorkflowProbe.UNKNOWN)
+
+
+async def _workflow_still_running(scan_dir: Path) -> bool:
+    """兼容旧调用方的 bool 包装；新对账必须直接消费 ``_probe_workflow``。"""
+    return (await _probe_workflow(scan_dir)).kind is WorkflowProbe.RUNNING
+
+
+def _closed_business_status(temporal_status: WorkflowExecutionStatus | None) -> str:
+    """仅凭 Temporal 关闭事件可安全归类的业务终态。
+
+    COMPLETED 不能直接等同 completed：本项目 workflow 可以正常 return 一个
+    ``status=failed`` 的业务结果；对账正是在 session/scan_end 缺失时运行。因此
+    仅知 COMPLETED 时保守记录为 interrupted。
+    """
+    if temporal_status in {WorkflowExecutionStatus.FAILED, WorkflowExecutionStatus.TIMED_OUT}:
+        return "failed"
+    if temporal_status is WorkflowExecutionStatus.CANCELED:
+        return "cancelled"
+    if temporal_status is WorkflowExecutionStatus.TERMINATED:
+        return "killed"
+    return "interrupted"
+
+
+async def _closed_workflow_result_status(scan_dir: Path) -> str | None:
+    """读取已关闭 workflow 的业务结果，补足 Temporal COMPLETED 的语义盲区。"""
+    workflow_id = _workflow_id_from_scan_dir(scan_dir)
+    if workflow_id is None:
+        return None
+
+    async def _result() -> str | None:
+        client = await Client.connect(_temporal_address())
+        value = await client.get_workflow_handle(workflow_id).result()
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            status = value.get("status")
+        else:
+            status = getattr(value, "status", None)
+        return status if isinstance(status, str) else None
+
+    try:
+        return await asyncio.wait_for(_result(), timeout=_temporal_query_timeout())
+    except Exception as exc:  # closed result is best-effort; never turn a query failure into success
+        _log.debug("reconcile workflow result unavailable (scan=%s): %r", scan_dir.name, exc)
+        return None
+
+
+async def _reconciled_closed_status(scan_dir: Path,
+                                    temporal_status: WorkflowExecutionStatus | None) -> str:
+    """结合 Temporal close status 与 workflow 返回的业务 status 生成最终状态。"""
+    fallback = _closed_business_status(temporal_status)
+    if temporal_status is not WorkflowExecutionStatus.COMPLETED:
+        return fallback
+    result_status = await _closed_workflow_result_status(scan_dir)
+    if result_status in {"completed", "failed", "cancelled", "killed", "crashed", "interrupted"}:
+        return result_status
+    return fallback
 
 
 async def reconcile_orphaned(ws_dir: Path, is_running: bool,
@@ -167,22 +257,21 @@ async def reconcile_orphaned(ws_dir: Path, is_running: bool,
         if _is_queued_in_gate(ws_dir):
             return False
 
-        # temporal workflow 仍 RUNNING（含 worker 队列排队等执行的阶段）→ scan 绝非孤儿，
-        # 不写 scan_end。对症并发排队超提交宽限被误判 interrupted（2026-08-04 幽灵 scan）：
-        # 第二个白盒 scan 被第一个占着 worker，排队 >120s 期间无 heartbeat，旧逻辑据 heartbeat
-        # stale 误判；workflow RUNNING 是比 heartbeat 更可靠的「已提交存活」信号——heartbeat 仅
-        # 反映 worker 是否已开始执行，不反映「已提交、排队中」的合法存活态。
-        if await _workflow_still_running(ws_dir):
-            return False
-
         mgr = SessionManager(ws_dir.parent)
         status = mgr.get_status(ws_dir)
-        if status in ("completed", "failed"):
-            return False  # 已结案
+        if status in {"completed", "failed", "cancelled", "killed", "crashed", "interrupted"}:
+            return False  # 已有业务终态，绝不由存活探测改写
 
         event_file = ws_dir / "events.ndjson"
         if _has_scan_end(event_file):
             return False  # 幂等：已有 scan_end（_watch 或 StructuredEventRenderer 已收尾）
+
+        # RUNNING（含任务队列等待/retry backoff）和 UNKNOWN 都不能收尾：前者明确
+        # 活着，后者没有足够证据。此前把查询失败折叠为 False 会在 Temporal 抖动时
+        # 写入不可逆 interrupted + scan_end，造成列表/详情/SSE 三方口径分裂。
+        probe = await _probe_workflow(ws_dir)
+        if probe.kind in (WorkflowProbe.RUNNING, WorkflowProbe.UNKNOWN):
+            return False
 
         # 组合扫描委托（spec §7.5，Task 5）：combined=true + 传了 scan_manager → 交给
         # _reconcile_combined_scan 按 bb_phase 恢复（补接力/补报告/补 scan_end），不在此写
@@ -203,22 +292,25 @@ async def reconcile_orphaned(ws_dir: Path, is_running: bool,
                 _log.info("reconcile_orphaned kicked combined recovery: %s", ws_dir.name)
                 return True
 
+        final_status = (await _reconciled_closed_status(ws_dir, probe.temporal_status)
+                        if probe.kind is WorkflowProbe.CLOSED else "interrupted")
         reason = ("扫描未检测到 worker 心跳——worker 容器可能未启动或已退出"
                   "（worker 应在扫描提交后数秒内写首个 heartbeat；持续无心跳请检查"
                   " worker 容器是否运行，如 ./scripts/up.sh 是否已带起 worker）")
         tail = _failure_tail(ws_dir)
         if tail:
             reason = reason + "；activity 失败日志尾部：\n" + tail
-        await _write_scan_end(event_file, "interrupted", -1, reason)
+        await _write_scan_end(event_file, final_status, -1, reason)
 
-        # session.json 标完成时间，让列表/概览不再显永卡 running；status 设 interrupted
-        # （_status_of 对非 completed/failed + 不存活一律归 interrupted，设不设都归此；
-        #  设上是为了 completed_at + 显式语义，方便排查）。
+        # session.json 标完成时间，让列表/概览不再显永卡 running。Temporal 明确的
+        # FAILED/TIMED_OUT/CANCELED/TERMINATED 按对应业务终态收尾；无业务结果的
+        # COMPLETED/ABSENT/legacy 才使用 interrupted。
         mgr.update_session(ws_dir, {
             "completed_at": time.time(),
-            "status": "interrupted",
+            "status": final_status,
         })
-        _log.info("reconcile_orphaned reaped orphan scan: %s (wrote scan_end=interrupted)", ws_dir.name)
+        _log.info("reconcile_orphaned reaped orphan scan: %s (wrote scan_end=%s)",
+                  ws_dir.name, final_status)
         return True
     except Exception:
         # 对账是兜底增强，绝不因单 ws 异常拖垮启动或请求。

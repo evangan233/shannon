@@ -140,6 +140,35 @@ async def test_resume_completed_raises(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_resume_reconnecting_raises_without_terminating_workflow(tmp_path):
+    """心跳 stale 尚待 Temporal 对账的 reconnecting 不是断点，禁止 resume。"""
+    mgr = ScanManager(tmp_path, tmp_path / "r", None)
+    scan_dir = _make_scan_dir(tmp_path, "WS", scan_id="s1", status="running")
+    stale = time.time() - 3600
+    data = json.loads((scan_dir / "session.json").read_text())
+    data["created_at"] = stale
+    data["submitted_at"] = stale
+    (scan_dir / "session.json").write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="reconnecting"):
+        await mgr.resume("WS", "s1")
+
+
+@pytest.mark.asyncio
+async def test_delete_reconnecting_raises(tmp_path):
+    """状态尚待 Temporal 对账时不得删除工作目录。"""
+    mgr = ScanManager(tmp_path, tmp_path / "r", None)
+    scan_dir = _make_scan_dir(tmp_path, "WS", scan_id="s1", status="running")
+    stale = time.time() - 3600
+    data = json.loads((scan_dir / "session.json").read_text())
+    data["created_at"] = stale
+    data["submitted_at"] = stale
+    (scan_dir / "session.json").write_text(json.dumps(data))
+    from supernova_web.components.scan_manager import ScanRunning
+    with pytest.raises(ScanRunning):
+        await mgr.delete("WS", "s1")
+
+
+@pytest.mark.asyncio
 async def test_resume_failed_allowed(tmp_path, monkeypatch):
     """failed scan 可 resume（spec 2026-08-27 §4.1 扩集：最常见中断出口，Temporal
     已 FAILED 终态无并发风险；80dd1968 起提交前还 terminate 在途 execution 兜底）。

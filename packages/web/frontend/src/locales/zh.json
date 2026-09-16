@@ -259,6 +259,7 @@
     "status": {
       "running": "运行中",
       "in-progress": "进行中",
+      "reconnecting": "重连中",
       "interrupted": "已中断",
       "queued": "排队中",
       "completed": "已完成",

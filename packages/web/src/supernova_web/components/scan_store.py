@@ -139,6 +139,10 @@ def effective_scan_status(status: str, combined: bool | None,
     """
     if combined is not True:
         return status
+    # 无心跳且尚未 Temporal 对账的状态不能被组合阶段残留覆盖为 running；否则组合
+    # 扫描会重新出现列表/详情口径分裂，并重新开放不安全的续跑入口。
+    if status == "reconnecting":
+        return status
     # 显式取消/失败是更强的终态信号，不能被残留的 pending/running phase 覆盖。
     if status in {"failed", "cancelled", "killed", "crashed", "skipped"}:
         return status

@@ -118,7 +118,7 @@ export type NdjsonEvent =
 
 // === API 响应类型（对齐 backend-design.md）===
 export type WorkspaceStatus =
-  | "running" | "in-progress" | "interrupted" | "queued"
+  | "running" | "in-progress" | "reconnecting" | "interrupted" | "queued"
   | "completed" | "failed" | "killed" | "crashed";
 
 export interface Workspace {

@@ -174,7 +174,8 @@ async def test_reconcile_not_found_run_marked_failed(mgr, tmp_path):
 
 # ── orphan_reconciler 接入：reconcile_orphaned → kick 组合恢复 ──────────────
 async def test_reconcile_orphaned_delegates_combined_to_scan_manager(tmp_path):
-    from supernova_web.components.orphan_reconciler import reconcile_orphaned
+    from supernova_web.components.orphan_reconciler import (
+        WorkflowProbe, WorkflowProbeResult, reconcile_orphaned)
     scan_dir = tmp_path / "ws" / "scans" / "scan-1"
     scan_dir.mkdir(parents=True)
     (scan_dir / "session.json").write_text(json.dumps({
@@ -182,14 +183,15 @@ async def test_reconcile_orphaned_delegates_combined_to_scan_manager(tmp_path):
     (scan_dir / "events.ndjson").write_text('{"type":"PhaseEvent"}\n')
     fake_mgr = MagicMock()
     with patch("supernova_web.components.orphan_reconciler.is_scan_alive", return_value=False), \
-         patch("supernova_web.components.orphan_reconciler._workflow_still_running",
-               new=AsyncMock(return_value=False)):
+         patch("supernova_web.components.orphan_reconciler._probe_workflow",
+               new=AsyncMock(return_value=WorkflowProbeResult(WorkflowProbe.CLOSED))):
         await reconcile_orphaned(scan_dir, False, scan_manager=fake_mgr)
         fake_mgr._kick_combined_reconcile.assert_called_once_with(scan_dir)
 
 
 async def test_reconcile_orphaned_non_combined_writes_scan_end_as_before(tmp_path):
-    from supernova_web.components.orphan_reconciler import reconcile_orphaned, _has_scan_end
+    from supernova_web.components.orphan_reconciler import (
+        WorkflowProbe, WorkflowProbeResult, reconcile_orphaned, _has_scan_end)
     scan_dir = tmp_path / "ws" / "scans" / "scan-1"
     scan_dir.mkdir(parents=True)
     (scan_dir / "session.json").write_text(json.dumps({
@@ -197,8 +199,8 @@ async def test_reconcile_orphaned_non_combined_writes_scan_end_as_before(tmp_pat
     (scan_dir / "events.ndjson").write_text('{"type":"PhaseEvent"}\n')
     fake_mgr = MagicMock()
     with patch("supernova_web.components.orphan_reconciler.is_scan_alive", return_value=False), \
-         patch("supernova_web.components.orphan_reconciler._workflow_still_running",
-               new=AsyncMock(return_value=False)):
+         patch("supernova_web.components.orphan_reconciler._probe_workflow",
+               new=AsyncMock(return_value=WorkflowProbeResult(WorkflowProbe.CLOSED))):
         result = await reconcile_orphaned(scan_dir, False, scan_manager=fake_mgr)
         assert result is True
         assert _has_scan_end(scan_dir / "events.ndjson")

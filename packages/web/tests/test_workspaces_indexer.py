@@ -37,21 +37,21 @@ def test_nested_legacy_session_format(tmp_workspaces):
     assert rows[0]["scan_type"] == "whitebox"
 
 
-def test_interrupted_when_pid_alive_but_no_heartbeat(tmp_workspaces):
-    """pid 表不再参与判活(spec §4.3):注入 alive pid 但无 heartbeat → interrupted。
+def test_reconnecting_when_pid_alive_but_no_heartbeat(tmp_workspaces):
+    """pid 表不再参与判活：注入 alive pid 但无 heartbeat → reconnecting。
     pid 表只服务 cancel(web 自起 SIGINT),不服务判活——避免「容器非 host PID namespace
     看不到 host pid 就判死」的误判(回归铁律:判活统一靠 heartbeat)。"""
     _make_ws(tmp_workspaces, "Run_z", status=None)
     idx = WorkspacesIndexer(tmp_workspaces)
     idx.set_active_pid("Run_z", os.getpid())  # alive pid,但不参与判活
-    assert idx.list_workspaces()[0]["status"] == "interrupted"
+    assert idx.list_workspaces()[0]["status"] == "reconnecting"
 
 
-def test_interrupted_when_no_pid_no_status(tmp_workspaces):
+def test_reconnecting_when_no_pid_no_status(tmp_workspaces):
     _make_ws(tmp_workspaces, "Dead_w", status=None)
-    # 无 heartbeat(死掉的孤儿,scan 早已停写)→ interrupted
+    # 无 heartbeat 时还未经 Temporal 对账 → reconnecting
     idx = WorkspacesIndexer(tmp_workspaces)
-    assert idx.list_workspaces()[0]["status"] == "interrupted"
+    assert idx.list_workspaces()[0]["status"] == "reconnecting"
 
 
 def test_running_when_heartbeat_fresh(tmp_workspaces):

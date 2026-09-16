@@ -19,6 +19,7 @@ const TINT = "rounded-full px-2 font-medium";
 const MAP: Record<string, { Icon: LucideIcon; cls: string }> = {
   running:      { Icon: LoaderCircle,  cls: "border-cyan/25 bg-cyan/10 text-cyan status-breathe" },
   "in-progress":{ Icon: LoaderCircle,  cls: "border-cyan/25 bg-cyan/10 text-cyan" },
+  reconnecting: { Icon: Clock,           cls: "border-blue/25 bg-blue/10 text-blue" },
   interrupted:  { Icon: CirclePause,   cls: "border-yellow/25 bg-yellow/10 text-yellow" },
   queued:       { Icon: Clock,         cls: "border-yellow/25 bg-yellow/10 text-yellow" },
   completed:    { Icon: CircleCheck,   cls: "border-green/25 bg-green/10 text-green" },

@@ -87,6 +87,11 @@ describe("StatusBadge i18n", () => {
     expect(screen.getByText("排队中")).toBeInTheDocument();
   });
 
+  it("reconnecting → 中性等待态，不伪装成已中断", () => {
+    render(<StatusBadge status="reconnecting" />);
+    expect(screen.getByText("重连中")).toBeInTheDocument();
+  });
+
   it("未知状态 fallback 原值不空白", () => {
     render(<StatusBadge status="some-new-state" />);
     expect(screen.getByText("some-new-state")).toBeInTheDocument();

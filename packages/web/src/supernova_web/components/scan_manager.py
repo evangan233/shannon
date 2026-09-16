@@ -89,10 +89,9 @@ class AuthValidationPending(Exception):
 _RESUMABLE_STATUSES = frozenset(
     {"interrupted", "crashed", "failed", "cancelled", "killed"})
 
-# 扫完即删（2026-09-10）sweep 判「扫描仍在用仓库」的状态集：running（心跳/提交
-# 宽限判活）与 queued（worker 闸门排队中）保护仓库；其余状态（completed/failed/
-# cancelled/crashed/killed/interrupted/…）均视为「已完毕」（用户裁定任何终态都删）。
-_SWEEP_ACTIVE_STATUSES = frozenset({"running", "queued"})
+# 扫完即删状态门：running / queued 与 heartbeat stale 但尚未确认关闭的 reconnecting
+# 都可能仍被 Temporal worker 使用仓库；只有明确业务终态才允许 sweep。
+_SWEEP_ACTIVE_STATUSES = frozenset({"running", "queued", "reconnecting"})
 
 
 def _now_iso() -> str:
@@ -2363,7 +2362,8 @@ class ScanManager:
         if scan_dir is None:
             return None
         mgr = SessionManager(scan_dir.parent)
-        if _compute_status(scan_dir, mgr.get_status(scan_dir)) == "running":
+        if _compute_status(scan_dir, mgr.get_status(scan_dir)) in {
+                "running", "queued", "reconnecting"}:
             raise ScanRunning(scan_id)
         # bb_runs 非终态（手动加的黑盒 run 在跑/待跑）同样拒删：任务级 running 门通常已拦
         # （_add_blackbox_run 会把任务级标 running），此门防 race 与 legacy 状态（run 在跑
@@ -4019,4 +4019,3 @@ class ScanManager:
                 self._reconcile_tasks.pop(scan_key, None)
 
         self._reconcile_tasks[scan_key] = asyncio.create_task(_run())
-

@@ -259,6 +259,7 @@
     "status": {
       "running": "Running",
       "in-progress": "In Progress",
+      "reconnecting": "Reconnecting",
       "interrupted": "Interrupted",
       "queued": "Queued",
       "completed": "Completed",

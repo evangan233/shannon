@@ -36,7 +36,7 @@ _TERMINAL_STATUSES = frozenset(
 
 
 def _compute_status(path: Path, session_status: str | None) -> str:
-    """scan 状态计算（scan_dir/ws_dir 通用）：终态优先 + heartbeat 判活 + 兜底 interrupted。
+    """scan 状态计算：终态优先 + queued + heartbeat 判活 + 兜底 reconnecting。
 
     抽成模块级函数供 ScanStore 与 WorkspacesIndexer 共用（1 ws : N scans 后两者都
     需在 scan_dir 维度算状态），避免判活逻辑重复。
@@ -62,8 +62,10 @@ def _compute_status(path: Path, session_status: str | None) -> str:
     # hr_1784014329(提交后 1s 误杀)即缺提交宽限门。
     if is_scan_alive(path):
         return "running"
-    # 无终态 + 无 fresh heartbeat = 未正常结束(死掉的孤儿/容器重启后子进程同死)。
-    return "interrupted"
+    # heartbeat 只是 worker 正在执行的弱信号。Temporal workflow 可能在 activity
+    # retry backoff、任务队列或等待新 worker 接管时仍 RUNNING；不可据此写入或展示
+    # 不可逆的 interrupted。异步 orphan reconciler 会用 Temporal 三态 probe 统一收尾。
+    return "reconnecting"
 
 
 def _gate_state_file_for(p: Path) -> Path | None:
