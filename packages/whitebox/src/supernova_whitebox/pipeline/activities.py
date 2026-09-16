@@ -753,6 +753,42 @@ def _parse_gitnexus_verdict_output(raw, id_prefix):
     return list(parsed.queue.vulnerabilities), parsed.warnings
 
 
+def _split_authz_safe(gn_vulns, *, stage: str):
+    """authz GitNexus 轨判非漏洞分流（taint 三类 split_dismissed 的 authz 同款）。
+
+    verdict="safe"（复核为已防护/无跨用户访问，judge 与 explore prompt 契约
+    值域）→ dismissed entry 留档（append_dismissed 人工分析），不进
+    authz_gitnexus_queue.json（不进 SSOT/报告/黑盒——回归 risk_margin
+    20260910：两条 AUTHZ-GN-EXPLORE 标题明写「复核为已防护」仍以 high 进报告，
+    因 authz 判词契约无 verdict 字段、判 safe 无出口只能写进标题文本）。
+    verdict 缺失 / vulnerable / needs_review 保守进 queue（「没判成 ≠ 非漏洞」）。
+    merge 侧防线（dual_track_merger GN-only safe drop）与报告侧终末防线
+    （report_data_builder skip safe/not_vulnerable）不变，此处是写入侧主修复。
+
+    duck-typing 读模型字段（parse_lenient 产物）；返回 (kept, dismissed_entries)。
+    """
+    kept, dismissed = [], []
+    for v in gn_vulns:
+        if str(getattr(v, "verdict", None) or "").strip().lower() == "safe":
+            dismissed.append({
+                "ID": getattr(v, "ID", ""),
+                "source_track": "gitnexus",
+                "vuln_class": "authz",
+                "title": getattr(v, "title", None),
+                "dismiss_reason": (getattr(v, "guard_evidence", None)
+                                   or getattr(v, "reason", None)
+                                   or "judged safe by authz gitnexus verdict"),
+                "evidence": getattr(v, "evidence_chain", None),
+                "confidence": getattr(v, "confidence", None),
+                "source": getattr(v, "endpoint", None),
+                "sink_call": getattr(v, "vulnerable_code_location", None),
+                "dismissed_at_stage": stage,
+            })
+        else:
+            kept.append(v)
+    return kept, dismissed
+
+
 @activity.defn
 async def run_authz_gitnexus_judge(input: ActivityInput) -> dict:
     """GitNexus track LLM chain-judgement pass for authz (spec §5.7).
@@ -775,10 +811,12 @@ async def run_authz_gitnexus_judge(input: ActivityInput) -> dict:
     await ensure_audit_session(input)  # worker 重启后可观测恢复(幂等;见 session_recovery.py)
     from supernova_core.code_index.authz_gitnexus_track import build_authz_gitnexus_track
     from supernova_core.models.queue_schemas import VulnerabilityQueue
+    from supernova_core.services.dismissed_archive import append_dismissed
 
     try:
         failed = False
         fail_reason: str | None = None
+        safe_dismissed = 0
         async with get_audit_session().track_step(
             "vulnerability-analysis", "authz-gitnexus-judge",
             intent=intent_for("authz-gitnexus-judge"),
@@ -869,6 +907,23 @@ async def run_authz_gitnexus_judge(input: ActivityInput) -> dict:
                             raw = result.text
                         gn_vulns, gn_warnings = _parse_gitnexus_verdict_output(
                             raw, "AUTHZ-GN-")
+                        gn_vulns, gn_dismissed = _split_authz_safe(
+                            gn_vulns, stage="authz-gitnexus-judge")
+                        if gn_dismissed:
+                            append_dismissed(
+                                intermediate_path(deliverables,
+                                                  "dismissed_findings.json"),
+                                gn_dismissed)
+                            safe_dismissed += len(gn_dismissed)
+                            try:
+                                await get_audit_session().log_info(
+                                    f"authz GitNexus 轨：{len(gn_dismissed)} 条复核为"
+                                    f"已防护（verdict=safe）→ dismissed_findings.json"
+                                    f" 留档（不进报告）。",
+                                    "info",
+                                )
+                            except Exception:
+                                pass
                         for v in gn_vulns:
                             data = v.model_dump()
                             data["source_track"] = "gitnexus"
@@ -932,6 +987,23 @@ async def run_authz_gitnexus_judge(input: ActivityInput) -> dict:
                             raw = result.text
                         gn_vulns, gn_warnings = _parse_gitnexus_verdict_output(
                             raw, "AUTHZ-GN-EXPLORE-")
+                        gn_vulns, gn_dismissed = _split_authz_safe(
+                            gn_vulns, stage="authz-gitnexus-explore")
+                        if gn_dismissed:
+                            append_dismissed(
+                                intermediate_path(deliverables,
+                                                  "dismissed_findings.json"),
+                                gn_dismissed)
+                            safe_dismissed += len(gn_dismissed)
+                            try:
+                                await get_audit_session().log_info(
+                                    f"authz GitNexus 轨（探索）：{len(gn_dismissed)} 条"
+                                    f"复核为已防护（verdict=safe）→ "
+                                    f"dismissed_findings.json 留档（不进报告）。",
+                                    "info",
+                                )
+                            except Exception:
+                                pass
                         for v in gn_vulns:
                             data = v.model_dump()
                             data["source_track"] = "gitnexus"
@@ -969,6 +1041,7 @@ async def run_authz_gitnexus_judge(input: ActivityInput) -> dict:
                 "verdict_count": len(vulnerabilities),
                 "dominance_candidates": len(dom_cands),
                 "framework_candidates": len(fw_cands),
+                "safe_dismissed": safe_dismissed,
                 "failed": failed,
                 "fail_reason": fail_reason,
             }
@@ -1734,6 +1807,9 @@ def _authz_output_schema() -> dict:
     props = {
         "ID": {"type": "string"},
         "title": {"type": "string"},
+        # 值域 "vulnerable"|"safe"（prompt <output_format> 契约）；safe 卡在
+        # 写入侧分流 dismissed_findings.json（_split_authz_safe），不进 queue。
+        "verdict": {"type": "string"},
         "vulnerability_type": {"type": "string"},
         "externally_exploitable": {"type": "boolean"},
         "endpoint": {"type": "string"},
@@ -1841,16 +1917,32 @@ async def run_endpoint_enrichment(input: ActivityInput) -> dict:
         raw = result.structured_output
         if raw is None and result.text:
             raw = result.text
-        enriched, warnings = _apply_endpoint_enrichment(findings, raw)
+        enriched, warnings, flipped = _apply_endpoint_enrichment(
+            findings, raw, vuln_class=vuln_class)
         for w in warnings:
             logger.warning("%s (%s)", w, vuln_class)
+        # 复核翻案分流：verdict=safe 卡出 SSOT（不进报告/黑盒/adv-review），
+        # 进 dismissed_findings.json 留档（同 authz _split_authz_safe 模式）。
+        kept = findings
+        if flipped:
+            from supernova_core.services.dismissed_archive import append_dismissed
+            append_dismissed(
+                intermediate_path(deliverables, "dismissed_findings.json"),
+                flipped)
+            flipped_ids = {e["ID"] for e in flipped}
+            kept = [f for f in findings if f.ID not in flipped_ids]
+            logger.info(
+                "endpoint-enrichment: %s %d card(s) flipped to safe by "
+                "re-check, archived to dismissed_findings.json",
+                vuln_class, len(flipped))
         atomic_write_json(
             queue_path,
-            {"vulnerabilities": [f.model_dump() for f in findings]},
+            {"vulnerabilities": [f.model_dump() for f in kept]},
         )
         logger.info("endpoint-enrichment: %s %d/%d cards enriched",
                     vuln_class, enriched, len(findings))
-        return {"candidates": len(findings), "enriched": enriched}
+        return {"candidates": len(findings), "enriched": enriched,
+                "safe_flipped": len(flipped)}
 
     enriched_classes: dict[str, dict] = {}
     total_enriched = 0
@@ -1917,7 +2009,9 @@ def _render_endpoint_candidates(findings: list) -> str:
     return "\n".join(lines) or "(none)"
 
 
-def _apply_endpoint_enrichment(findings: list, raw: object) -> tuple[int, list[str]]:
+def _apply_endpoint_enrichment(
+    findings: list, raw: object, vuln_class: str = "",
+) -> tuple[int, list[str], list[dict]]:
     """接口富化 agent 输出按 ID 回填 report_endpoints / report_problem_points（原地）。
 
     宽松解析：structured_output dict / JSON 文本皆可；id/ID 均认；条目 path
@@ -1925,7 +2019,13 @@ def _apply_endpoint_enrichment(findings: list, raw: object) -> tuple[int, list[s
     2026-08-26-vuln-card-seven-sections）：problem_points 逐项校验（非 dict /
     location 空白 / snippet 空白丢弃），与 report_endpoints 独立判断、独立
     写回；enriched 计数按卡去重（任一字段写回即算 1）。
-    返回 (回填条数, warnings)。
+
+    复核翻案（2026-09-16 残面修复）：可选 verdict 字段，**单向闸门只认
+    "safe"**——agent 深读代码确认卡实际有防护/无危害时翻案（进 dismissed
+    留档、出 SSOT/报告）；"vulnerable"/其他值/缺失一律忽略（卡本来就是
+    vulnerable 进来的，agent 说 vulnerable 无增量信息；保守宁过报）。翻案卡
+    由调用方从 SSOT 写回列表排除（flipped entries 已构造好）。
+    返回 (回填条数, warnings, flipped_dismissed_entries)。
     """
     import json as _json
     warnings: list[str] = []
@@ -1934,14 +2034,15 @@ def _apply_endpoint_enrichment(findings: list, raw: object) -> tuple[int, list[s
         try:
             data = _json.loads(data)
         except (ValueError, TypeError):
-            return 0, ["endpoint-enrichment: unparseable output"]
+            return 0, ["endpoint-enrichment: unparseable output"], []
     if not isinstance(data, dict):
-        return 0, ["endpoint-enrichment: output not a JSON object"]
+        return 0, ["endpoint-enrichment: output not a JSON object"], []
     entries = data.get("vulnerabilities")
     if not isinstance(entries, list):
-        return 0, ["endpoint-enrichment: no vulnerabilities array"]
+        return 0, ["endpoint-enrichment: no vulnerabilities array"], []
     by_id = {f.ID: f for f in findings}
     enriched = 0
+    flipped: list[dict] = []
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -1950,6 +2051,28 @@ def _apply_endpoint_enrichment(findings: list, raw: object) -> tuple[int, list[s
         if target is None:
             warnings.append(f"endpoint-enrichment: unknown ID {eid!r} skipped")
             continue
+        # 复核翻案（单向 safe 闸门）：模型缺 verdict 字段时跳过（守 pydantic
+        # setattr ValueError），赋值安全由 model_fields 判定。
+        raw_verdict = str(entry.get("verdict") or "").strip().lower()
+        if raw_verdict == "safe" and "verdict" in type(target).model_fields:
+            reason = (str(entry.get("verdict_reason") or "").strip()
+                      or "judged safe by endpoint enrichment re-check")
+            target.verdict = "safe"
+            flipped.append({
+                "ID": target.ID,
+                "source_track": getattr(target, "source_track", None) or "llm",
+                "vuln_class": vuln_class,
+                "title": getattr(target, "title", None),
+                "dismiss_reason": reason,
+                "evidence": getattr(target, "evidence_chain", None),
+                "confidence": getattr(target, "confidence", None),
+                "source": getattr(target, "source", None)
+                or getattr(target, "endpoint", None),
+                "sink_call": getattr(target, "sink_call", None)
+                or getattr(target, "vulnerable_code_location", None),
+                "dismissed_at_stage": "endpoint-enrichment",
+            })
+            continue  # 翻案卡不再富化（不进报告，接口表无意义）
         card_touched = False
         raw_eps = entry.get("endpoints")
         if isinstance(raw_eps, list):
@@ -1993,7 +2116,7 @@ def _apply_endpoint_enrichment(findings: list, raw: object) -> tuple[int, list[s
                 card_touched = True
         if card_touched:
             enriched += 1
-    return enriched, warnings
+    return enriched, warnings, flipped
 
 
 @activity.defn
@@ -2704,7 +2827,7 @@ async def _run_adversarial_review_for_classes(
             return [], [], []
         targets = [e for e in entries
                    if isinstance(e, dict)
-                   and e.get("verdict") != "not_vulnerable"
+                   and e.get("verdict") not in ("not_vulnerable", "safe")
                    and (vuln_class, str(e.get("ID", ""))) not in prior_records]
         shards = _group_poc_targets(targets, shard_max)
 
@@ -3364,17 +3487,30 @@ async def _rework_missing_endpoints(
         raw = result.structured_output
         if raw is None and result.text:
             raw = result.text
-        enriched, warnings = _apply_endpoint_enrichment(findings, raw)
+        enriched, warnings, flipped = _apply_endpoint_enrichment(
+            findings, raw, vuln_class=vuln_class)
         for w in warnings:
             logger.warning("%s (rework %s)", w, vuln_class)
-        if enriched:
+        # 复核翻案分流（同 run_endpoint_enrichment 主路径）：safe 卡出 SSOT 留档。
+        if flipped:
+            from supernova_core.services.dismissed_archive import append_dismissed
+            append_dismissed(
+                intermediate_path(deliverables, "dismissed_findings.json"),
+                flipped)
+            flipped_ids = {e["ID"] for e in flipped}
+            findings = [f for f in findings if f.ID not in flipped_ids]
+            logger.info(
+                "endpoint-enrichment rework: %s %d card(s) flipped to safe, "
+                "archived to dismissed_findings.json", vuln_class, len(flipped))
+        if enriched or flipped:
             atomic_write_json(
                 queue_path,
                 {"vulnerabilities": [f.model_dump() for f in findings]},
             )
             reworked_ids = {f.ID for f in targets
-                            if (getattr(f, "report_endpoints", None)
-                                or getattr(f, "report_problem_points", None))}
+                            if f.ID not in {e["ID"] for e in flipped}
+                            and (getattr(f, "report_endpoints", None)
+                                 or getattr(f, "report_problem_points", None))}
             reworked.extend(sorted(reworked_ids))
     return reworked
 

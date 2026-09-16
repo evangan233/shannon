@@ -208,6 +208,33 @@ async def test_build_report_data_stats_aggregation(tmp_path):
     assert "high" in rd.stats.by_severity
 
 
+async def test_build_report_data_skips_safe_verdict_cards(tmp_path):
+    """终末防线（spec 2026-08-27 §4）：verdict=safe（authz GN judge/explore 判
+    非漏洞现行契约值）/ not_vulnerable（旧枚举）卡不进报告；needs_review /
+    verdict 缺失保守保留。写入侧分流（split_dismissed / _split_authz_safe）
+    是主修复，此处兜 SSOT 已带的 safe 卡（如旧 session 重跑报告）。"""
+    from supernova_core.services.report_data_builder import build_report_data
+    from supernova_core.models.report_data import ScanMeta
+
+    d = tmp_path / "deliverables"
+    await _write_queue(d, "authz_exploitation_queue.json", [
+        {"ID": "AUTHZ-GN-EXPLORE-01", "vulnerability_type": "Horizontal",
+         "externally_exploitable": True, "confidence": "needs_review",
+         "merge_source": "gitnexus-only", "severity": "high",
+         "verdict": "safe"},
+        {"ID": "AUTHZ-GN-EXPLORE-02", "vulnerability_type": "Horizontal",
+         "externally_exploitable": True, "confidence": "needs_review",
+         "merge_source": "gitnexus-only", "severity": "high",
+         "verdict": "not_vulnerable"},
+        {"ID": "AUTHZ-VULN-01", "vulnerability_type": "Horizontal",
+         "externally_exploitable": True, "confidence": "needs_review",
+         "merge_source": "llm-only", "severity": "medium"},
+    ])
+    rd = await build_report_data(d, ScanMeta(id="s1", track="whitebox"))
+    ids = [v.id for v in rd.vulnerabilities]
+    assert ids == ["AUTHZ-VULN-01"]
+
+
 async def test_build_report_data_quick_reference(tmp_path):
     """quick_reference（spec 单源化 §5）：builder 确定性产行——口径复用
     report_assembler 速查表单元格函数；行序=类序（CLASS_CONFIG）+类内

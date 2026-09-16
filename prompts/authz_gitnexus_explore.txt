@@ -47,10 +47,24 @@ the final turns to emit JSON. Never spend the last turn on another tool call.
 
 <output>
 Output JSON only:
-{"vulnerabilities": [{"endpoint": "...", "vulnerability_type": "Horizontal",
+{"vulnerabilities": [{"endpoint": "...", "verdict": "vulnerable | safe",
+"vulnerability_type": "Horizontal",
 "externally_exploitable": true, "vulnerable_code_location": "file:line",
 "reason": "...", "minimal_witness": "...", "confidence": "low",
 "notes": "explore-discovered, needs review"}]}
+
+`verdict` semantics:
+- "vulnerable" = no ownership/role guard + externally-controlled object
+  reference reaches another user's data (IDOR candidate).
+- "safe" = you read the handler/call chain and confirmed it is protected or
+  cannot reach another user's data (ownership guard present, uid taken from
+  the session rather than the request, or the parameter only selects
+  public/config data). Safe entries are archived for human review, NOT shown
+  as vulnerabilities — emit them rather than silently dropping what you
+  reviewed, so the review is auditable.
+NEVER encode the verdict in `externally_exploitable`: it is a network
+reachability tag (public-internet vs internal), fully independent of
+vulnerable/safe.
 </output>
 
 <externally_exploitable_semantics>

@@ -380,3 +380,55 @@ async def test_authz_exploit_identity_context_respects_playwright_engine(mock_re
         "playwright 引擎下 identity 恢复命令应为 state-load 形态"
     assert "state load" not in ctx, \
         "不应出现 agent-browser 的 state load 形态（硬编码引擎根因）"
+
+
+# ── 判非漏洞卡不进黑盒（2026-09-16 残面修复）──────────────────────────────────
+
+
+def test_filter_non_vulnerable_drops_safe_cards():
+    from supernova_blackbox.agents.exploit_executor import _filter_non_vulnerable
+    content = json.dumps({"vulnerabilities": [
+        {"ID": "A", "verdict": "safe"},
+        {"ID": "B", "verdict": "vulnerable"},
+        {"ID": "C", "verdict": "not_vulnerable"},
+        {"ID": "D"},
+    ]}, ensure_ascii=False)
+    out = json.loads(_filter_non_vulnerable(content))
+    assert [v["ID"] for v in out["vulnerabilities"]] == ["B", "D"]
+
+
+def test_filter_non_vulnerable_lenient_passthrough():
+    from supernova_blackbox.agents.exploit_executor import _filter_non_vulnerable
+    # 坏 JSON / 结构不合 → 原文返回（不让 agent 失明）
+    assert _filter_non_vulnerable("not json") == "not json"
+    assert _filter_non_vulnerable('{"other": 1}') == '{"other": 1}'
+    # 无 safe 卡 → 原文透传（byte-identical）
+    content = json.dumps({"vulnerabilities": [{"ID": "B", "verdict": "vulnerable"}]})
+    assert _filter_non_vulnerable(content) == content
+
+
+@pytest.mark.asyncio
+async def test_exploit_executor_injects_queue_without_safe_cards(mock_repo):
+    """SSOT 残留 verdict=safe 卡（both 配对罕见残留）不进 exploit prompt。"""
+    repo, deliverables = mock_repo
+    queue_data = {"vulnerabilities": [
+        {"ID": "INJ-SAFE-01", "verdict": "safe", "confidence": "needs_review"},
+        {"ID": "INJ-001", "verdict": "vulnerable", "confidence": "high"},
+    ]}
+    (deliverables / "injection_exploitation_queue.json").write_text(
+        json.dumps(queue_data))
+    (deliverables / "injection_exploitation_evidence.md").write_text("# Evidence")
+
+    mock_executor = AsyncMock()
+    mock_executor.execute.return_value = AgentMetrics(duration_ms=1, cost_usd=0.0, num_turns=1)
+    ex = ExploitExecutor(mock_executor)
+    await ex.execute(
+        agent_name=AgentName.INJECTION_EXPLOIT,
+        vuln_type="injection",
+        workspace_path=repo,
+        deliverables_path=deliverables,
+        web_url="https://example.com",
+    )
+    pv = mock_executor.execute.call_args.kwargs["prompt_variables"]
+    assert "INJ-001" in pv["vulnerability_entries"]
+    assert "INJ-SAFE-01" not in pv["vulnerability_entries"]

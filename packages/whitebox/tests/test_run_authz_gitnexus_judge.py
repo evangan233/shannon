@@ -571,3 +571,95 @@ async def test_failed_run_does_not_write_marker(tmp_path):
 
     assert result["failed"] is True
     assert not _marker(deliverables).exists()
+
+
+# ── 判非漏洞分流（spec 2026-08-27 §4 authz 补位）───────────────────────────────
+#
+# 回归 risk_margin-20260910-041235：两条 AUTHZ-GN-EXPLORE 标题明写「复核为已防护」、
+# narrative 写「无实际越权影响」，仍以 high 进报告——authz 判词契约无 verdict 字段，
+# 判 safe 无出口（只能写进标题文本），写入侧也无分流。现在 prompt 契约带
+# verdict（vulnerable|safe），activity 写入侧 _split_authz_safe 分流留档。
+
+
+def test_split_authz_safe_helper_ducks_typing():
+    """verdict="safe" → dismissed entry（vuln_class=authz + stage 透传）；
+    verdict 缺失/vulnerable 保守进 queue。"""
+    from types import SimpleNamespace
+    safe = SimpleNamespace(ID="AUTHZ-GN-EXPLORE-01", verdict="safe", title="t",
+                           guard_evidence=None, reason="仅选择公开配置",
+                           evidence_chain="e", confidence="low",
+                           endpoint="GET /api/x", vulnerable_code_location="c.js:1")
+    vuln = SimpleNamespace(ID="AUTHZ-GN-EXPLORE-02", verdict="vulnerable",
+                           title=None, guard_evidence="no check", reason="r",
+                           evidence_chain=None, confidence="low",
+                           endpoint="GET /api/y", vulnerable_code_location="c.js:9")
+    missing = SimpleNamespace(ID="AUTHZ-GN-EXPLORE-03", verdict=None)
+    kept, dismissed = activities._split_authz_safe(
+        [safe, vuln, missing], stage="authz-gitnexus-explore")
+    assert [v.ID for v in kept] == ["AUTHZ-GN-EXPLORE-02", "AUTHZ-GN-EXPLORE-03"]
+    assert len(dismissed) == 1
+    entry = dismissed[0]
+    assert entry["ID"] == "AUTHZ-GN-EXPLORE-01"
+    assert entry["vuln_class"] == "authz"
+    assert entry["source_track"] == "gitnexus"
+    assert entry["dismissed_at_stage"] == "authz-gitnexus-explore"
+    # guard_evidence 缺 → reason 兜底（留档可判读）
+    assert entry["dismiss_reason"] == "仅选择公开配置"
+
+
+@pytest.mark.asyncio
+async def test_judge_explore_splits_safe_verdicts_to_dismissed(tmp_path):
+    """explore 输出混 verdict=safe/vulnerable → queue 只留 vulnerable，
+    safe 卡进 dismissed_findings.json 留档（不进 queue/报告）。"""
+    deliverables = tmp_path / "whitebox"
+    inter = deliverables / "intermediate"
+    inter.mkdir(parents=True, exist_ok=True)
+    # 完整空索引（{} 过不了 build_authz_gitnexus_track 的 pydantic 校验）
+    (inter / "code_index.json").write_text(json.dumps({
+        "repository": "r", "language": "typescript", "total_blocks": 0,
+        "total_entry_points": 0, "total_chains": 0, "blocks": [], "edges": [],
+        "entry_points": [], "chains": [],
+    }))
+    (inter / "framework_analysis.json").write_text("{}")
+
+    async def fake_run(prompt, **kwargs):
+        return type("R", (), {
+            "success": True,
+            "structured_output": {"vulnerabilities": [
+                {"ID": "AUTHZ-GN-EXPLORE-01", "vulnerability_type": "Horizontal",
+                 "externally_exploitable": True, "endpoint": "GET /api/a",
+                 "verdict": "safe", "confidence": "low",
+                 "reason": "仅选择公开行情配置", "notes": "explore-discovered"},
+                {"ID": "AUTHZ-GN-EXPLORE-02", "vulnerability_type": "Horizontal",
+                 "externally_exploitable": True, "endpoint": "GET /api/b",
+                 "verdict": "vulnerable", "confidence": "low",
+                 "reason": "no ownership check", "notes": "explore-discovered"},
+            ]},
+            "text": "",
+        })()
+
+    with patch.object(activities, "_get_paths", return_value=(tmp_path, deliverables, tmp_path)):
+        with patch("supernova_whitebox.pipeline.activities.run_gitnexus_verdict_agent", new=fake_run):
+            with patch("supernova_whitebox.audit.session_registry.get_audit_session") as gs:
+                inst = gs.return_value
+                inst.track_step = _noop_cm_factory()
+                inst.log_info = AsyncMock()
+                result = await activities.run_authz_gitnexus_judge(_FakeInput(tmp_path))
+
+    queue = json.loads(
+        (deliverables / "intermediate" / "authz_gitnexus_queue.json").read_text())
+    assert [v["ID"] for v in queue["vulnerabilities"]] == ["AUTHZ-GN-EXPLORE-02"]
+    assert queue["vulnerabilities"][0]["needs_review"] is True
+
+    dismissed = json.loads(
+        (deliverables / "intermediate" / "dismissed_findings.json").read_text())
+    entries = [e for e in dismissed["dismissed"]
+               if e["ID"] == "AUTHZ-GN-EXPLORE-01"]
+    assert len(entries) == 1
+    assert entries[0]["vuln_class"] == "authz"
+    assert entries[0]["dismissed_at_stage"] == "authz-gitnexus-explore"
+    assert entries[0]["dismiss_reason"] == "仅选择公开行情配置"
+
+    assert result["verdict_count"] == 1
+    assert result["safe_dismissed"] == 1
+    assert result["failed"] is False

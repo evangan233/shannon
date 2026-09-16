@@ -267,3 +267,31 @@ async def test_checkpoint_scoped_per_class(env, monkeypatch):
                        .read_text())["vulnerabilities"]
     assert inj_q == [] and len(xss_q) == 1
 
+
+
+async def test_safe_verdict_cards_not_sent_for_review(env, monkeypatch):
+    """verdict=safe 卡（merge 侧罕见残留，如 both 配对双轨全 safe）不送审——
+    送审预算只花在漏洞卡上（not_vulnerable 既有过滤 + safe 残面修复）。"""
+    import json as _json
+    (env["intermediate"] / "injection_exploitation_queue.json").write_text(
+        _json.dumps({"vulnerabilities": [
+            {"ID": "INJ-SAFE-01", "title": "s", "verdict": "safe",
+             "source_track": "gitnexus", "confidence": "needs_review",
+             "sink_call": "eval() — app.js:32"},
+            {"ID": "INJ-01", "title": "t", "verdict": "vulnerable",
+             "source_track": "llm", "confidence": "high",
+             "sink_call": "eval() — app.js:32"},
+        ]}), encoding="utf-8")
+
+    captured = {}
+
+    async def fake_agent(**kw):
+        captured["prompt"] = kw.get("prompt", "")
+        return _agent_result(None, text="")  # 全 unreviewed，只看送审素材面
+
+    monkeypatch.setattr(activities, "run_gitnexus_verdict_agent", fake_agent)
+    await activities._run_adversarial_review_for_classes(
+        deliverables=env["deliverables"], repo_path=str(env["repo"]),
+        provider_config=None)
+    assert "INJ-SAFE-01" not in captured["prompt"]
+    assert "INJ-01" in captured["prompt"]

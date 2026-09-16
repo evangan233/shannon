@@ -29,6 +29,7 @@ Respond with a JSON object of exactly this shape (no prose outside JSON):
     {
       "ID": "AUTHZ-GN-NN",
       "title": "one-line descriptive name encoding the IDOR flaw + endpoint (e.g., 'IDOR: DELETE /api/Feedbacks/:id without ownership check'). NOT a bare label.",
+      "verdict": "vulnerable | safe",
       "vulnerability_type": "Horizontal",
       "externally_exploitable": true,
       "endpoint": "DELETE /api/Feedbacks/:id",
@@ -45,8 +46,17 @@ Respond with a JSON object of exactly this shape (no prose outside JSON):
 }
 
 Rules:
-- Emit ONE entry per candidate. Rejected candidates: set externally_exploitable=false
-  and explain in reason (e.g. "ownership guard dominates sink via middleware X").
+- Emit ONE entry per candidate, each with an explicit `verdict`:
+  - "vulnerable" = confirmed missing/misplaced ownership or role guard (the
+    request-controlled object reference reaches the data access unbound).
+  - "safe" = re-verified as protected / no cross-user access. Rejected
+    candidates: set verdict="safe" and explain in `reason` (e.g. "ownership
+    guard dominates sink via middleware X", or the parameter only selects
+    public/config data and cannot reach another user's data). Safe verdicts
+    are archived for human review, not silently dropped.
+- NEVER use `externally_exploitable` to encode the verdict. It is a network
+  reachability tag (public-internet vs internal), fully independent of
+  vulnerable/safe — see the semantics below and keep it truthful either way.
 - Set `notes` to the candidate source ("dominance" or "framework").
 - If there are zero candidates, emit {"vulnerabilities": []}.
 </output_format>

@@ -360,3 +360,78 @@ async def test_endpoint_enrichment_disabled_by_env(tmp_path, monkeypatch):
         result = await activities.run_endpoint_enrichment(_FakeInput(tmp_path))
     assert result["skipped"] == "disabled"
     mock_agent.assert_not_called()
+
+
+# ── 复核翻案（2026-09-16 残面修复）─────────────────────────────────────────────
+#
+# endpoint-enrichment agent 深读代码富化接口表时，可能确认卡实际有防护/无危害
+# （risk_margin-20260910-041235 实证：复核结论只能写进标题文本，卡仍以 high
+# 进报告）。翻案出口：verdict="safe"（单向闸门）→ 卡出 SSOT、dismissed 留档。
+
+
+async def test_endpoint_enrichment_flips_safe_card_out_of_queue(tmp_path, monkeypatch):
+    """agent 输出 verdict=safe + verdict_reason → 卡出 SSOT、dismissed 留档、
+    计数进 safe_flipped；正常富化卡照旧写回。"""
+    d = _wb(tmp_path)
+    _write_queue(d, [
+        _XSS_VULN,
+        {"ID": "XSS-GN-01", "vulnerability_type": "Reflected",
+         "externally_exploitable": True, "confidence": "needs_review",
+         "merge_source": "gitnexus-only", "title": "可疑卡", "severity": "high",
+         "source_track": "gitnexus"},
+    ])
+    _write_entry_points(d, [_EP])
+    monkeypatch.setattr(activities, "_get_paths",
+                        lambda inp: (tmp_path, d, tmp_path))
+    payload = {"vulnerabilities": [
+        {"id": "XSS-VULN-01",
+         "endpoints": [{"method": "POST", "path": "/memos"}]},
+        {"id": "XSS-GN-01", "verdict": "safe",
+         "verdict_reason": "输出经 DOMPurify 净化 (views/memos.html:31)"},
+    ]}
+    with patch.object(activities, "run_gitnexus_verdict_agent",
+                      return_value=_agent_result(payload)), \
+         patch("supernova_core.config.concurrency.ws_getenv",
+               lambda k, d=None: {"SUPERNOVA_ENDPOINT_ENRICH_ENABLED": "1"}.get(k, d)):
+        result = await activities.run_endpoint_enrichment(_FakeInput(tmp_path))
+
+    queue = json.loads(d.joinpath("intermediate", "xss_exploitation_queue.json")
+                       .read_text(encoding="utf-8"))
+    assert [v["ID"] for v in queue["vulnerabilities"]] == ["XSS-VULN-01"]
+    assert queue["vulnerabilities"][0]["report_endpoints"]  # 正常富化不受影响
+
+    dismissed = json.loads(d.joinpath("intermediate", "dismissed_findings.json")
+                           .read_text(encoding="utf-8"))
+    entry = [e for e in dismissed["dismissed"] if e["ID"] == "XSS-GN-01"]
+    assert len(entry) == 1
+    assert entry[0]["vuln_class"] == "xss"
+    assert entry[0]["dismissed_at_stage"] == "endpoint-enrichment"
+    assert "DOMPurify" in entry[0]["dismiss_reason"]
+
+    assert result["enriched_classes"]["xss"]["safe_flipped"] == 1
+
+
+async def test_endpoint_enrichment_verdict_is_one_way_gate(tmp_path, monkeypatch):
+    """单向闸门：agent 输出 verdict="vulnerable" / 垃圾值 → 忽略，卡保持原状
+    留在 SSOT（富化 agent 无权把卡翻成漏洞，也无权用垃圾值扰动判定）。"""
+    d = _wb(tmp_path)
+    _write_queue(d, [_XSS_VULN])
+    _write_entry_points(d, [_EP])
+    monkeypatch.setattr(activities, "_get_paths",
+                        lambda inp: (tmp_path, d, tmp_path))
+    payload = {"vulnerabilities": [
+        {"id": "XSS-VULN-01", "verdict": "VULNERABLE",
+         "endpoints": [{"method": "POST", "path": "/memos"}]},
+    ]}
+    with patch.object(activities, "run_gitnexus_verdict_agent",
+                      return_value=_agent_result(payload)), \
+         patch("supernova_core.config.concurrency.ws_getenv",
+               lambda k, d=None: {"SUPERNOVA_ENDPOINT_ENRICH_ENABLED": "1"}.get(k, d)):
+        result = await activities.run_endpoint_enrichment(_FakeInput(tmp_path))
+
+    queue = json.loads(d.joinpath("intermediate", "xss_exploitation_queue.json")
+                       .read_text(encoding="utf-8"))
+    assert len(queue["vulnerabilities"]) == 1
+    assert queue["vulnerabilities"][0]["verdict"] is None  # 未被写
+    assert result["enriched_classes"]["xss"]["safe_flipped"] == 0
+    assert not d.joinpath("intermediate", "dismissed_findings.json").exists()

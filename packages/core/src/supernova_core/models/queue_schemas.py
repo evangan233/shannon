@@ -123,6 +123,9 @@ class AuthVulnerability(BaseVulnerability):
     missing_defense: str | None = None
     exploitation_hypothesis: str | None = None
     suggested_exploit_technique: str | None = None
+    # 判词值域对齐其余子模型（inj/xss/ssrf/authz 均有）；auth 无 GN 轨，此字段
+    # 由 endpoint-enrichment 复核翻案写（"safe"，单向），报告终末防线 skip。
+    verdict: str | None = None
 
 class SsrfVulnerability(BaseVulnerability):
     source_endpoint: str | None = None
@@ -153,6 +156,12 @@ class AuthzVulnerability(BaseVulnerability):
     side_effect: str | None = None
     reason: str | None = None
     minimal_witness: str | None = None
+    # 判词值域 "vulnerable"|"safe"（authz_gitnexus_judge/explore prompt 契约，
+    # 对齐 inj/xss/ssrf 子模型的 verdict 字段）。不落模型的话 pydantic 会静默
+    # 丢弃 agent 输出的 verdict → 判 safe 无出口、_split_authz_safe 分流失效
+    # （同 2026-08-27 authentication_required 静默丢弃教训）。safe 卡由
+    # activities._split_authz_safe 分流 dismissed_findings.json（不进报告）。
+    verdict: str | None = None
 
 Vulnerability = Union[InjectionVulnerability, XssVulnerability, AuthVulnerability, SsrfVulnerability, AuthzVulnerability, BaseVulnerability]
 

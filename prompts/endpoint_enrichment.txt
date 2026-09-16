@@ -65,8 +65,24 @@ Respond with a JSON object of exactly this shape (no prose outside JSON):
           "description": "一句话：此处为何危险（如：用户输入未净化直接进入模板渲染）",
           "snippet": "≤15 行 repo 里真实读到的源码原文（禁止杜撰/改写；无把握则整个省略 problem_points 字段）"
         }
-      ]
+      ],
+      "verdict": "safe | omit (see <verdict_overturn> below)",
+      "verdict_reason": "1-2 行翻案证据（含 file:line），仅 verdict=safe 时必给"
     }
   ]
 }
 </output_format>
+
+<verdict_overturn>
+`verdict` is an OPTIONAL over-report correction channel. While reading the code
+for the endpoint table, if you CONFIRM a card is actually protected / causes no
+real impact (ownership guard dominates the sink, input is strictly
+sanitized/converted, or the parameter only selects public data), set
+verdict="safe" with verdict_reason (evidence + file:line). The card is then
+archived for human review and removed from the report.
+- Evidence-grounded only: quote what you actually read. Uncertain → omit the
+  verdict field entirely (conservative over-report policy; do NOT guess safe).
+- One-way: never emit verdict to argue a card is vulnerable — every card here
+  is already a reported vulnerability; "safe" is the only value that carries
+  new information.
+</verdict_overturn>

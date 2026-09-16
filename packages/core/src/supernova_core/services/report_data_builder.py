@@ -721,14 +721,16 @@ async def build_report_data(
         report_vulns = []
         kept_vulns = []
         for vuln in parsed.queue.vulnerabilities:
-            # 防线（spec 2026-08-27 §4）：verdict=not_vulnerable 卡不进报告。
-            # 主修复在 GN queue 写入侧分流（activity 层 split_dismissed）；
-            # 此处终末防线兜旧 session 产物 / schema 回归——非漏洞卡已留档
+            # 防线（spec 2026-08-27 §4）：verdict=not_vulnerable / safe 卡不进
+            # 报告。主修复在 GN queue 写入侧分流（activity 层 split_dismissed；
+            # authz GN judge/explore 走 _split_authz_safe 同款）；此处终末防线兜
+            # 旧 session 产物 / schema 回归——非漏洞卡已留档
             # dismissed_findings.json，报告只承载漏洞与待复核（needs_review /
-            # unadjudicated 保守保留：「没判成 ≠ 非漏洞」）。
-            if getattr(vuln, "verdict", None) == "not_vulnerable":
+            # unadjudicated 保守保留：「没判成 ≠ 非漏洞」）。值域双态：
+            # not_vulnerable（旧枚举）/ safe（chain_verdict 与 authz 判词现行契约）。
+            if getattr(vuln, "verdict", None) in ("not_vulnerable", "safe"):
                 logger.info(
-                    "report_data: skip not_vulnerable card %s (%s, "
+                    "report_data: skip non-vulnerable card %s (%s, "
                     "dismissed archive has it)", vuln.ID, vuln_class)
                 continue
             raw = vuln.model_dump(exclude_none=True)
