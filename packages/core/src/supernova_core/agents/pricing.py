@@ -50,6 +50,8 @@ BUILTIN_PRICING_CNY: dict[str, dict[str, float]] = {
     # glm-5.3-flash（2026-08-28 官网核对；normalize_model 不剥 -flash，键即查询形态）
     "glm-5.3-flash": {"input": 0.8, "output": 2.8, "cache_read": 0.23, "cache_creation": 0.0},
     "glm-4.5-air": {"input": 0.8, "output": 6.0, "cache_read": 0.16, "cache_creation": 0.0},
+    # deepseek-v4.1-flash 2/8/0.04/0（2026-09-17 用户核对；推理输出与普通输出同价 8）
+    "deepseek-v4.1-flash": {"input": 2.0, "output": 8.0, "cache_read": 0.04, "cache_creation": 0.0},
     # deepseek-v4-pro 24/48/2/0（2026-08-31 用户核对更新，原 profile JSON 旧价 3/6/0.025；
     # 与 .env.profiles.example/deepseek.pricing.json 一致）
     "deepseek-v4-pro": {"input": 24.0, "output": 48.0, "cache_read": 2.0, "cache_creation": 0.0},
