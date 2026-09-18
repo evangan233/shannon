@@ -18,6 +18,7 @@ from supernova_core.models.queue_schemas import (
 )
 from supernova_core.services.code_snippet import annotate_direct, extract_snippet
 from supernova_core.services.severity_rules import SEVERITY_ZH, effective_severity
+from supernova_core.services.vulnerability_cause import vulnerability_cause
 from supernova_core.utils.file_io import async_path_exists, async_read_file, async_write_file
 from supernova_core.utils.paths import resolve_intermediate, resolve_track_deliverable
 
@@ -327,12 +328,14 @@ def _gn_description(cls_name: str, colon: str, param, sink, loc_part: str) -> st
 
 
 def _description_lines(vuln, gn_only: bool, cls_name: str, colon: str,
-                       param, sink, loc_part: str) -> list[str]:
-    """漏洞成因（研判依据）：LLM 卡走 notes 叙述；GN-only/无 notes 走确定性描述。
+                       param, sink, loc_part: str,
+                       vuln_class: str | None = None) -> list[str]:
+    """漏洞成因（研判依据）：成立依据优先，notes 只作末级回退。
     title 已在卡片标题行（F9a）。链 dump（source→path）与接口行不混排本节——
     链在漏洞细节区 vulnerable_location，接口在受影响入口节。"""
-    if not gn_only and vuln.notes:
-        return [vuln.notes]
+    cause = vulnerability_cause(vuln, vuln_class)
+    if not gn_only and cause:
+        return [cause]
     return [_gn_description(cls_name, colon, param, sink, loc_part)]
 
 
@@ -748,9 +751,10 @@ def render_vuln_card(vuln, vuln_class: str, snippet: str | None = None) -> str:
     lines.append(_M.get("meta_sep").join(meta_parts))
     lines.append("")
 
-    # 漏洞成因（研判依据）：notes 叙述 / 确定性描述；链 dump 与接口行不混排
+    # 漏洞成因（研判依据）：语义化成立依据 / 确定性描述；链 dump 与接口行不混排
     lines.append(_M.get("sec_description"))
-    lines.extend(_description_lines(vuln, gn_only, cls_name, colon, param, sink_name, loc_part))
+    lines.extend(_description_lines(
+        vuln, gn_only, cls_name, colon, param, sink_name, loc_part, vuln_class))
     lines.append("")
 
     # 危害（§3 节 2）：impact（并行任务加的字段，此刻可能不存在）→ notes →

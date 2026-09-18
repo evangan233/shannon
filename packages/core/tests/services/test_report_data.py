@@ -125,6 +125,26 @@ async def test_build_report_data_maps_queue_fields(tmp_path):
     assert v.raw is not None and v.raw["ID"] == "XSS-VULN-01"
 
 
+async def test_build_report_data_uses_security_argument_not_notes(tmp_path):
+    """Scope/uncertainty notes must not replace the argument for a finding."""
+    from supernova_core.services.report_data_builder import build_report_data
+    from supernova_core.models.report_data import ScanMeta
+
+    d = tmp_path / "deliverables"
+    await _write_queue(d, "authz_exploitation_queue.json", [{
+        "ID": "AUTHZ-VULN-01", "vulnerability_type": "Horizontal",
+        "externally_exploitable": True, "confidence": "medium",
+        "title": "申请记录 IDOR", "severity": "high",
+        "notes": "下游服务是否还有兜底校验尚不可见。",
+        "reason": "applicationId 由客户端控制，查询路径没有将其与当前用户归属绑定。",
+        "guard_evidence": "仅校验请求中的 accountId，没有校验申请记录归属。",
+    }])
+
+    rd = await build_report_data(d, ScanMeta(id="s1", track="whitebox"))
+    assert rd.vulnerabilities[0].narrative.cause == (
+        "applicationId 由客户端控制，查询路径没有将其与当前用户归属绑定。")
+
+
 async def test_build_report_data_problem_points_passthrough(tmp_path):
     """report_problem_points（问题点富化写回）→ problem_points 透传；畸形条目丢弃。"""
     from supernova_core.services.report_data_builder import build_report_data

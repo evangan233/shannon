@@ -35,6 +35,7 @@ from supernova_core.models.report_data import (
 )
 from supernova_core.models.queue_schemas import VulnerabilityQueue
 from supernova_core.services.findings_renderer import CLASS_CONFIG
+from supernova_core.services.vulnerability_cause import vulnerability_cause
 # 速查表行口径复用 report_assembler 单元格函数（勿抄逻辑——与 md 现速查表
 # 同源，spec 2026-08-26-report-single-source-rendering §5「渲染层纯渲染」）
 from supernova_core.services.report_assembler import (
@@ -174,8 +175,9 @@ def _poc_block(vuln) -> PocBlock | None:
     return None
 
 
-def _narrative(vuln) -> VulnNarrative | None:
-    cause = getattr(vuln, "notes", None)
+def _narrative(vuln, vuln_class: str | None = None) -> VulnNarrative | None:
+    """Use the recorded security argument; notes are only a final fallback."""
+    cause = vulnerability_cause(vuln, vuln_class)
     impact = getattr(vuln, "impact", None)
     remediation = getattr(vuln, "remediation", None)
     if cause or impact or remediation:
@@ -476,7 +478,7 @@ def _report_vulnerability(vuln, vuln_class: str, raw_entry: dict,
         merge_source=getattr(vuln, "merge_source", None),
         merged_from=list(getattr(vuln, "merged_from", None) or []),
         trigger_source=trigger_source,
-        narrative=_narrative(vuln),
+        narrative=_narrative(vuln, vuln_class),
         problem_points=_problem_points(vuln, vuln_class),
         endpoints=_endpoint_entries(vuln),
         affected_entries=list(getattr(vuln, "affected_entries", None) or []),
