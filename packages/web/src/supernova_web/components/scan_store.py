@@ -760,6 +760,13 @@ class ScanStore:
         # completed_agents) + latest run completed_agents，bb_phase/bb_reason 取自 latest
         # run（与 api/scans._scan_detail 同一视图，list/detail 口径一致）。
         bb_phase, bb_reason, progress_data = merge_latest_run_view(scan_dir, data)
+        # repo 标签优先 session.source_repo（2026-09-18 修跨仓复用候选失配）：
+        # source_repo 是提交时的完整仓库名（分组仓带前缀 backend/<repo>，与 repo
+        # 列表名一致——前端跨仓复用候选/智能默认按 scan.repo === 卡片仓库名精确
+        # 匹配，basename 标签对分组仓永不相等）；存量缺失回落 _repo_label basename
+        # （口径对齐 api/scans._scan_detail 的 source_repo 兜底）。
+        sr = data.get("source_repo") if isinstance(data, dict) else None
+        rp = data.get("repo_path") if isinstance(data, dict) else None
         status = effective_scan_status(
             raw_status, combined, bb_phase,
             post_hoc_runs=is_post_hoc_runs_task(data))
@@ -792,7 +799,7 @@ class ScanStore:
             progress_pct=progress_pct,
             bb_runs=bb_runs,
             latest_bb_run=latest_bb_run,
-            repo=(_repo_label(rp) or None) if (rp := (data.get("repo_path") if isinstance(data, dict) else None)) else None,
+            repo=sr or ((_repo_label(rp) or None) if rp else None),
             repo_url=mgr.get_web_url(scan_dir),
             # 分支快照（spec 2026-08-21 §4）：存量报告/黑盒无快照 → None
             **_repo_snapshot_fields(scan_dir),

@@ -133,6 +133,32 @@ def test_list_scans_multiple_new_scans_sorted_desc(tmp_path):
     assert scans[2].created_at == createds[0]
 
 
+def test_list_scans_repo_prefers_source_repo(tmp_path):
+    """repo 标签优先 session.source_repo（2026-09-18 修跨仓复用候选失配）。
+
+    分组仓（repos/backend/<repo>）的 repo 列表名带前缀（repo_manager 返回
+    "backend/asset_transfer"），跨仓复用候选按 scan.repo === 卡片仓库名精确
+    匹配——basename 标签（"asset_transfer"）永不相等 → 候选恒空。source_repo
+    是提交时的完整仓库名（含前缀），须原样透出。
+    """
+    store = ScanStore(tmp_path)
+    _, d = store.create_scan("WS", "u", "/ws/WS/repos/backend/asset_transfer")
+    sess = json.loads((d / "session.json").read_text())
+    sess["source_repo"] = "backend/asset_transfer"
+    (d / "session.json").write_text(json.dumps(sess))
+    (scans,) = store.list_scans("WS")
+    assert scans.repo == "backend/asset_transfer"
+
+
+def test_list_scans_repo_falls_back_to_basename(tmp_path):
+    """存量 session 无 source_repo → 回落 _repo_label basename（口径对齐
+    api/scans._scan_detail 的 source_repo 兜底），行为不变。"""
+    store = ScanStore(tmp_path)
+    store.create_scan("WS", "u", "/code/NodeGoat")
+    (scans,) = store.list_scans("WS")
+    assert scans.repo == "NodeGoat"
+
+
 # ── get_scan_dir（路径校验 + 双源定位）────────────────────────────────────────
 
 def test_get_scan_dir_new_scan(tmp_path):
