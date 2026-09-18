@@ -153,6 +153,18 @@ def test_validate_normalizes_mixed_steps_list():
     assert res.accepted[0]["steps"] == ["plain", "from text key"]
 
 
+def test_validate_removes_list_markers_from_poc_step_text():
+    """列表编号由报告渲染器生成，agent 文本不能再内嵌一份。"""
+    res = validate_pocs([{
+        "vulnerability_id": "INJ-1",
+        "steps": ["1. 登录测试账号", "2) 提交 payload", "3、观察响应", "1.2.3 版本号保留"],
+        "self_check": "pass",
+    }], valid_ids={"INJ-1"})
+    assert res.accepted[0]["steps"] == [
+        "登录测试账号", "提交 payload", "观察响应", "1.2.3 版本号保留",
+    ]
+
+
 # ---------- extract_pocs_payload（2026-08-28 打捞兜底） ----------
 
 from supernova_core.collectors.poc import extract_pocs_payload

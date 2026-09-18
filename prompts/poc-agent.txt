@@ -127,7 +127,7 @@ Respond with a JSON object (no prose outside JSON):
       "vulnerability_id": "<original ID from the queue, unchanged>",
       "curl": "full copy-paste reproducible curl with auth placeholders; omit for browser-only delivery",
       "raw_http": "Burp Repeater raw request for the SAME request as curl; omit if no curl",
-      "steps": ["ordered delivery steps (plant → trigger / browser navigation with login state)"],
+      "steps": ["ordered delivery steps (one plain step per array item; do not prefix with 1., 2., etc.)"],
       "preconditions": "auth/role/plant prerequisites, incl. external-plant caveats",
       "expected_response": "what response/observation proves it worked",
       "self_check": "pass | fail",

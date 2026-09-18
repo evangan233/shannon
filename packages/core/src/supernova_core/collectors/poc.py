@@ -19,6 +19,7 @@ spec 2026-08-27-poc-agent-direct-design：白盒 PoC 去 templated 化——curl
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 
 from supernova_core.collectors.base import CollectorBase, SectionSchema
@@ -132,6 +133,19 @@ _STR_FIELDS = ("curl", "raw_http", "preconditions", "expected_response", "notes"
 # steps dict 元素的说明字段同义表（agent 不严格守 schema 的字段名，同
 # collectors/exploit._STEP_ACTION_KEYS 的宽容哲学）
 _STEP_TEXT_KEYS = ("step", "description", "action", "text", "title", "summary")
+_ORDERED_STEP_PREFIX_RE = re.compile(r"^\s*\d+(?:[.)]\s+|、\s*)")
+
+
+def _strip_ordered_step_prefix(text: str) -> str:
+    """Keep the ordinal in the collection, not in each ``steps`` value.
+
+    ``steps`` is rendered by both the web card and Markdown exporter as an
+    ordered list. Agents sometimes return Markdown-formatted items (``1. do
+    this``), which otherwise renders as ``1. 1. do this``. Only a leading
+    decimal list marker (including Chinese ``、`` notation) is presentation
+    syntax; values such as ``1.2.3`` are intentionally unchanged.
+    """
+    return _ORDERED_STEP_PREFIX_RE.sub("", text)
 
 
 @dataclass
@@ -157,12 +171,12 @@ def _normalize_steps(raw: object) -> list[str] | None:
     for it in items:
         if isinstance(it, str):
             if it.strip():
-                out.append(it)
+                out.append(_strip_ordered_step_prefix(it))
         elif isinstance(it, dict):
             text = next((it[k] for k in _STEP_TEXT_KEYS
                          if isinstance(it.get(k), str) and it[k].strip()), None)
             if text is not None:
-                out.append(text)
+                out.append(_strip_ordered_step_prefix(text))
             else:
                 out.append(json.dumps(it, ensure_ascii=False))
     return out or None

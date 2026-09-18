@@ -170,6 +170,25 @@ describe("ReportView（JSON 纯渲染集成）", () => {
     });
   });
 
+  it("POC 步骤由有序列表统一编号，兼容旧报告中 agent 自带的步骤前缀", () => {
+    render(
+      <VulnerabilityCard
+        v={{
+          ...vuln,
+          poc: {
+            ...vuln.poc!,
+            steps: ["1. 使用测试账号登录", "2) 提交 PoC payload", "3、观察响应", "1.2.3 版本说明不应被截断"],
+          },
+        }}
+      />,
+    );
+
+    const items = within(screen.getByTestId("poc-steps"))
+      .getAllByRole("listitem")
+      .map((item) => item.textContent);
+    expect(items).toEqual(["使用测试账号登录", "提交 PoC payload", "观察响应", "1.2.3 版本说明不应被截断"]);
+  });
+
   it("目录（ReportToc）：条目镜像区块，点击精准定位（scrollTo smooth）+ 目标卡描边闪烁", () => {
     const scrollTo = vi.fn();
     window.scrollTo = scrollTo as unknown as typeof window.scrollTo;
