@@ -635,6 +635,99 @@ async def scan_evidence_matrix(ws: str, scan_id: str, request: Request,
     return matrix
 
 
+_DISMISSED_PER_CHILD_CAP = 200
+_ADJ_TAIL_BYTES = 262144  # events.ndjson 尾读窗口（含 LlmTurnEvent 全文，按字节不按行）
+
+_ADJ_SESSION_TERMINAL = {"completed", "failed", "cancelled", "killed", "interrupted"}
+
+
+def _collect_dismissed_children(scan_dir: Path, corr_children: list) -> list[dict]:
+    """汇总各子仓 dismissed_findings.json（2026-09-18 成立/消掉视图）。
+
+    子仓目录与 correlation scan 同级（先例 merged_event_tailer._discover_child_sources）；
+    scan_id 经 PurePath.name 守卫拒路径穿越。条目做字段投影——丢弃 evidence
+    （= evidence_chain 嵌套大对象，响应膨胀源）；文件缺失/坏 JSON/结构意外
+    静默跳过该子仓（对齐本文件 _read_json 容错立场），其余子仓照读。
+    """
+    import json
+    from pathlib import PurePath
+
+    from supernova_core.utils.paths import WHITEBOX_SUBDIR, resolve_track_deliverable
+
+    out: list[dict] = []
+    _FIELDS = ("ID", "vuln_class", "title", "dismiss_reason", "confidence",
+               "source_track", "dismissed_at_stage", "source", "sink_call")
+    for child in corr_children:
+        if not isinstance(child, dict):
+            continue
+        service = child.get("service")
+        sid = str(child.get("scan_id") or "")
+        if not service or not sid or PurePath(sid).name != sid:
+            continue
+        dlv = scan_dir.parent / sid / "deliverables"
+        try:
+            raw = json.loads(
+                resolve_track_deliverable(dlv, WHITEBOX_SUBDIR,
+                                          "dismissed_findings.json").read_text(
+                                              encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        entries = raw.get("dismissed") if isinstance(raw, dict) else None
+        if not isinstance(entries, list):
+            continue
+        for e in entries[:_DISMISSED_PER_CHILD_CAP]:
+            if isinstance(e, dict):
+                out.append({"service": service,
+                            **{k: e.get(k) for k in _FIELDS}})
+    return out
+
+
+def _adjudication_status_from_events(events_path: Path) -> str | None:
+    """events.ndjson 字节尾窗找最后一条 adjudication phase 事件。
+
+    不做全量读（adjudication 期间 LlmTurnEvent 单行可达 MB 级）；completed/failed
+    恒写在文件物理末尾附近（其后至多 scan_end 一行），256KB 窗口必命中。
+    """
+    import json
+
+    try:
+        with events_path.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - _ADJ_TAIL_BYTES))
+            chunk = fh.read(_ADJ_TAIL_BYTES)
+    except OSError:
+        return None
+    lines = chunk.split(b"\n")
+    if size > _ADJ_TAIL_BYTES and lines:
+        lines = lines[1:]  # 窗口首行大概率被截断，丢弃
+    last = None
+    for ln in lines:
+        try:
+            ev = json.loads(ln)
+        except ValueError:
+            continue
+        if (isinstance(ev, dict) and ev.get("type") == "correlation_progress"
+                and ev.get("node") == "phase" and ev.get("name") == "adjudication"):
+            last = ev.get("status")
+    return {"started": "running", "failed": "failed",
+            "completed": "completed"}.get(last)
+
+
+def _adjudication_status(scan_dir: Path, adjudication, session: dict) -> str | None:
+    """裁决阶段状态推导：log 权威终态 → events 尾读 → 终态加固 → None（从未跑）。
+
+    加固：events 说 running 但 session 已终态（被取消/中断的旧扫描）→ failed，
+    防前端「裁决进行中」横幅永挂（SWR 常驻轮询）。
+    """
+    if isinstance(adjudication, dict):
+        return "failed" if adjudication.get("error") else "completed"
+    status = _adjudication_status_from_events(scan_dir / "events.ndjson")
+    if status == "running" and session.get("status") in _ADJ_SESSION_TERMINAL:
+        return "failed"
+    return status
+
+
 def assemble_correlation_detail(scan_dir: Path) -> dict:
     """C5: 组装 correlation scan 详情（纯函数，只读 scan_dir 便于单测）。
 
@@ -644,6 +737,11 @@ def assemble_correlation_detail(scan_dir: Path) -> dict:
     boundaries/flows → []、{vc}_exploitation_queue.json 缺 → merged_vulns 键缺席
     （不用空数组冒充「该类无漏洞」）。drift_warnings 首版保守返回 []（不解析
     correlation-report.md；事件/report 提取留给后续版本）。
+
+    dismissed / adjudication_status（2026-09-18 成立/消掉视图）：前者汇总各子仓
+    dismissed_findings.json 投影（单仓判非漏洞留档，裁决可翻案），后者推导裁决
+    阶段状态（running/failed/completed/null），见 _collect_dismissed_children /
+    _adjudication_status。
     """
     import json
     from supernova_core.session import SessionManager
@@ -679,6 +777,7 @@ def assemble_correlation_detail(scan_dir: Path) -> dict:
         flows, multi_hop_chains = flows_raw, None
     adjudication = _read_json("adjudication-log.json")
     session = SessionManager(scan_dir.parent).get_session_data(scan_dir)
+    corr_children = session.get("corr_children") or []
     return {
         "topology": _read_json("cross-service-topology.json"),
         "boundaries": boundaries if isinstance(boundaries, list) else [],
@@ -687,7 +786,9 @@ def assemble_correlation_detail(scan_dir: Path) -> dict:
         "adjudication": adjudication if isinstance(adjudication, dict) else None,
         "merged_vulns": merged_vulns,
         "drift_warnings": [],
-        "corr_children": session.get("corr_children") or [],
+        "corr_children": corr_children,
+        "dismissed": _collect_dismissed_children(scan_dir, corr_children),
+        "adjudication_status": _adjudication_status(scan_dir, adjudication, session),
         "report_md": _read_text("correlation-report.md"),
     }
 

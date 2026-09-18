@@ -19,7 +19,7 @@ describe("getCorrelationDetail", () => {
     expect(fetchMock.mock.calls[0][1]?.method).toBeUndefined();
   });
 
-  it("透传 assemble_correlation_detail 全 7 键 payload", async () => {
+  it("透传 assemble_correlation_detail 全 11 键 payload", async () => {
     const payload = {
       topology: {
         services: [{ name: "frontend", role: "entrypoint", repo: "fe" }],
@@ -44,9 +44,13 @@ describe("getCorrelationDetail", () => {
         vuln_refs: [{ service: "order", title: "SQLi", severity: "high", location: "b.ts:1" }],
         confidence: "low", evidence: "e",
       }],
+      multi_hop_chains: [],
+      adjudication: null,
       merged_vulns: { order: [{ title: "SQLi", severity: "high" }] },
       drift_warnings: [],
       corr_children: [{ service: "order", scan_id: "s-2", reused: false }],
+      dismissed: [],
+      adjudication_status: null,
       report_md: "# corr",
     };
     const fetchMock = vi.mocked(fetch);
@@ -54,8 +58,9 @@ describe("getCorrelationDetail", () => {
     const r = await getCorrelationDetail("ws1", "scan-1");
     expect(r).toEqual(payload);
     expect(Object.keys(r).sort()).toEqual([
-      "boundaries", "corr_children", "drift_warnings", "flows",
-      "merged_vulns", "report_md", "topology",
+      "adjudication", "adjudication_status", "boundaries", "corr_children",
+      "dismissed", "drift_warnings", "flows",
+      "merged_vulns", "multi_hop_chains", "report_md", "topology",
     ]);
   });
 });

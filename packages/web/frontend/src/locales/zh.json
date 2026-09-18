@@ -634,6 +634,12 @@
       "adjProcess": "分析过程",
       "adjEvidence": "验证证据",
       "adjReasoning": "论证",
+      "adjRunning": "跨仓裁决进行中——裁决卡生成后自动呈现（页面每 15 秒刷新）",
+      "dismissedTitle": "单仓已否决（跨仓重审）",
+      "dismissedIntro": "各子仓判非漏洞的留档发现；跨仓裁决重审后给出翻案/维持结论，见行内徽标",
+      "colVulnClass": "类型",
+      "colDismissReason": "否决理由",
+      "colDismissStage": "否决阶段",
       "analysis": {
         "panel": "自动关联分析",
         "start": "自动关联分析",

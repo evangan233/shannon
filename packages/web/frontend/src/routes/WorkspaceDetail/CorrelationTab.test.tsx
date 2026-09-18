@@ -1,8 +1,9 @@
 // D5：CorrelationTab 结果视图集成测试——区块顺序（漂移警告 → 拓扑 → 攻击链 →
-// 按服务分组漏洞 → 信任边界 → 报告 md）、pending 占位、空 flows 降级、service 徽标。
+// 裁决 → 单仓已否决 → 按服务分组漏洞 → 信任边界 → 报告 md）、pending 占位、
+// 空 flows 降级、service 徽标、severity/PoC/成立-消掉视图（2026-09-18）。
 // 风格对齐 DataFlowTab.test：msw + MemoryRouter + SWRConfig 独立 cache + i18n zh。
 import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from "vitest";
-import { render, screen, within, waitFor } from "@testing-library/react";
+import { render, screen, within, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { setupServer } from "msw/node";
 import { http, HttpResponse } from "msw";
@@ -93,8 +94,22 @@ const detail: CorrelationDetail = {
         vulnerability_type: "sql_injection",
         externally_exploitable: true,
         title: "订单查询 SQL 注入",
+        severity: "critical",
         service: "order-svc",
         location: "order/db.py:10",
+        endpoint: "POST /orders",
+        report_endpoints: [
+          { method: "POST", path: "/orders", params: ["q"], role: "write",
+            auth: "public", route_registered_at: "api/orders.py:12" },
+        ],
+        report_problem_points: [
+          { location: "order/db.py:10", description: "拼接 SQL", snippet: "query(sql)" },
+        ],
+        report_poc: {
+          curl: "curl -X POST 'http://TARGET/orders' -d '{\"q\":\"1 OR 1=1\"}'",
+          raw_http: "POST /orders HTTP/1.1\nHost: TARGET\n\n{\"q\":\"1 OR 1=1\"}",
+          steps: ["1. 构造注入参数", "2. 观察返回行数异常"],
+        },
       },
       {
         ID: "INJ-VULN-02",
@@ -121,6 +136,20 @@ const detail: CorrelationDetail = {
     { service: "frontend", scan_id: "20260824-000001", reused: false },
     { service: "order-svc", scan_id: "20260824-000002", reused: true },
   ],
+  // 成立/消掉视图（2026-09-18）：子仓 dismissed 明单 + 裁决阶段状态
+  dismissed: [
+    {
+      service: "order-svc",
+      ID: "INJ-09",
+      vuln_class: "injection",
+      title: "内部同步任务 SQL 拼接",
+      dismiss_reason: "internal 不可达",
+      confidence: "high",
+      source_track: "gitnexus",
+      dismissed_at_stage: "chain-verdict",
+    },
+  ],
+  adjudication_status: "completed",
   report_md: "# 跨仓关联报告\n\n总结：入口参数透传至后端未过滤。",
 };
 
@@ -165,7 +194,8 @@ describe("CorrelationTab", () => {
 
   it("渲染攻击链三段（entry / method / vuln title）", async () => {
     await renderWithDetail();
-    expect(screen.getByText("POST /orders")).toBeInTheDocument();
+    // entry 同时出现在攻击链与漏洞卡卡头接口小字——圈定攻击链区块
+    expect(within(screen.getByTestId("corr-flows")).getByText("POST /orders")).toBeInTheDocument();
     // method 同时出现在攻击链与信任边界表——圈定攻击链区块
     expect(within(screen.getByTestId("corr-flows")).getByText("order.CreateOrder")).toBeInTheDocument();
     expect(screen.getByText("SQL 注入")).toBeInTheDocument();
@@ -177,17 +207,26 @@ describe("CorrelationTab", () => {
     expect(screen.getByText("暂无候选攻击链")).toBeInTheDocument();
   });
 
-  it("按服务分组漏洞 + service 徽标（VulnCard 出现）", async () => {
+  it("按服务分组漏洞 + service 徽标（CorrVulnCard 出现，severity/PoC 可见）", async () => {
     await renderWithDetail();
     const vulns = screen.getByTestId("corr-vulns");
-    // VulnCard 渲染两条（ID 可见）
+    // CorrVulnCard 渲染两条（ID 在收起态卡头可见）
     expect(within(vulns).getByText("INJ-VULN-01")).toBeInTheDocument();
     expect(within(vulns).getByText("INJ-VULN-02")).toBeInTheDocument();
+    // severity 药丸（critical → 严重）
+    expect(within(vulns).getByTestId("corr-vuln-sev")).toHaveTextContent("严重");
     // 分组徽标：frontend / order-svc 各一组（组序随拓扑服务序——入口在前）
     const groups = within(vulns).getAllByTestId("corr-vuln-group");
     expect(groups.length).toBe(2);
     expect(within(groups[0]).getByText("frontend")).toBeInTheDocument();
     expect(within(groups[1]).getByText("order-svc")).toBeInTheDocument();
+    // 展开卡头 → 接口/PoC 可见（默认收起，卡头是唯一 button）
+    await fireEvent.click(within(groups[1]).getByRole("button"));
+    const card = within(groups[1]).getByTestId("corr-vuln-card");
+    expect(within(card).getByTestId("corr-vuln-endpoints")).toHaveTextContent("POST /orders");
+    expect(within(card).getByTestId("corr-poc-curl")).toHaveTextContent("1 OR 1=1");
+    expect(within(card).getAllByTestId("corr-poc-steps").length).toBeGreaterThan(0);
+    expect(within(card).getByTestId("corr-problem-point-location")).toHaveTextContent("db.py:10");
   });
 
   it("信任边界表（service / method / exposure / reachable_from / reason）", async () => {
@@ -207,9 +246,10 @@ describe("CorrelationTab", () => {
     expect(screen.getByText(/入口参数透传至后端未过滤/)).toBeInTheDocument();
   });
 
-  it("区块顺序：拓扑 → 攻击链 → 分组漏洞 → 信任边界 → 报告", async () => {
+  it("区块顺序：拓扑 → 攻击链 → 裁决 → 单仓已否决 → 分组漏洞 → 信任边界 → 报告", async () => {
     await renderWithDetail();
-    const order = ["corr-topology", "corr-flows", "corr-vulns", "corr-boundaries", "corr-report"];
+    const order = ["corr-topology", "corr-flows", "corr-adjudication", "corr-dismissed",
+      "corr-vulns", "corr-boundaries", "corr-report"];
     const els = order.map((id) => screen.getByTestId(id));
     for (let i = 1; i < els.length; i++) {
       expect(
@@ -253,14 +293,49 @@ describe("CorrelationTab", () => {
     ).toBeInTheDocument();
   });
 
-  it("adjudication 为 null 时不渲染裁决区(multihop 空态提示保留)", async () => {
+  it("adjudication 与状态均 null 时不渲染裁决区(multihop 空态提示保留)", async () => {
     await renderWithDetail(
-      { ...detail, adjudication: null, multi_hop_chains: [] },
+      { ...detail, adjudication: null, adjudication_status: null, multi_hop_chains: [] },
       "corr-topology",
     );
     expect(screen.queryByTestId("corr-adjudication")).not.toBeInTheDocument();
     // multihop 区无条件渲染(同 flows 区),空时显示空态提示
     expect(screen.getByTestId("corr-multihop")).toBeInTheDocument();
+  });
+
+  it("裁决进行中:无 log 也渲染横幅(corr-adj-running),不显示无裁决卡占位", async () => {
+    await renderWithDetail(
+      { ...detail, adjudication: null, adjudication_status: "running" },
+      "corr-adjudication",
+    );
+    expect(screen.getByTestId("corr-adj-running")).toHaveTextContent("跨仓裁决进行中");
+    expect(screen.queryByText("无裁决卡")).not.toBeInTheDocument();
+    // 无卡 → 无聚合徽标行
+    expect(screen.queryByTestId("corr-adj-summary")).not.toBeInTheDocument();
+  });
+
+  it("裁决 direction 聚合徽标行(翻案候选 × 1 等)", async () => {
+    await renderWithDetail(detail, "corr-adjudication");
+    const summary = screen.getByTestId("corr-adj-summary");
+    expect(summary).toHaveTextContent("翻案候选 × 1");
+    expect(summary).toHaveTextContent("确认 × 1");
+    expect(summary).toHaveTextContent("裁决失败 × 1");
+  });
+
+  it("单仓已否决表:dismissed 明单 + 命中裁决行内徽标(翻案候选)", async () => {
+    await renderWithDetail(detail, "corr-dismissed");
+    const section = screen.getByTestId("corr-dismissed");
+    expect(within(section).getByText("INJ-09")).toBeInTheDocument();
+    expect(within(section).getByText("internal 不可达")).toBeInTheDocument();
+    expect(within(section).getByText("chain-verdict")).toBeInTheDocument();
+    // service+vuln_id 命中 upgrade 卡 → 行内 direction 徽标
+    expect(within(section).getByTestId("corr-dismissed-verdict")).toHaveTextContent("翻案候选");
+  });
+
+  it("dismissed 为空 → 整节不渲染", async () => {
+    cleanup();
+    await renderWithDetail({ ...detail, dismissed: [] }, "corr-topology");
+    expect(screen.queryByTestId("corr-dismissed")).not.toBeInTheDocument();
   });
 
   it("加载中显示 Skeleton 占位", async () => {

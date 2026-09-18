@@ -1,13 +1,13 @@
 import useSWR from "swr";
 import { useTranslation } from "react-i18next";
 import { ApiError, getCorrelationDetail } from "@/api/client";
-import type { AdjudicationCard, CorrVuln, Vulnerability } from "@/api/types";
+import type { AdjudicationCard, CorrDismissed, CorrVuln } from "@/api/types";
 import { Empty } from "@/components/Empty";
 import { ErrorState } from "@/components/ErrorState";
 import { MarkdownView } from "@/components/MarkdownView";
-import { VulnCard } from "@/components/VulnCard";
 import { TopologyGraph } from "@/components/correlation/TopologyGraph";
 import { AttackChainCard } from "@/components/correlation/AttackChainCard";
+import { CorrVulnCard, toCorrVulnView } from "@/components/correlation/CorrVulnCard";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -17,7 +17,8 @@ import {
 /**
  * 跨仓关联结果 tab（D5，spec 2026-08-24）：专属结果视图——
  * 漂移警告横幅（首版后端恒空，渲染条件保留）→ 服务拓扑图 → 跨服务攻击链 →
- * 按服务分组漏洞（VulnCard + service 徽标）→ 信任边界表 → 报告 md。
+ * 裁决区（状态横幅 + direction 聚合 + 裁决卡）→ 单仓已否决（跨仓重审）→
+ * 按服务分组漏洞（CorrVulnCard + service 徽标）→ 信任边界表 → 报告 md。
  *
  * SWR 15s 轮询（关联运行中持续刷新）；topology === null → 阶段占位
  * （「关联阶段进行中/未开始」+ corr_children 子仓状态）。props 收 ws/scanId
@@ -72,6 +73,23 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
 
   const serviceOrder = data.topology.services.map((s) => s.name);
   const groups = groupByService(data.merged_vulns, serviceOrder);
+  // 裁决 direction 聚合（五向计数，徽标行扫视「成立/翻案/证伪」分布）——
+  // 卡量数百级，直接算（hooks 不能放早退 return 之后）
+  const adjCards = data.adjudication?.cards ?? [];
+  const dirCountMap = new Map<string, number>();
+  for (const card of adjCards) {
+    dirCountMap.set(card.direction, (dirCountMap.get(card.direction) ?? 0) + 1);
+  }
+  const directionCounts = [...DIRECTION_ORDER]
+    .map((dir) => ({ dir, count: dirCountMap.get(dir) ?? 0 }))
+    .filter(({ count }) => count > 0);
+  // dismissed ↔ 裁决卡匹配（service+vuln_id 复合键防跨服务同 ID 碰撞；只认 origin="dismissed"）
+  const dismissedVerdicts = new Map<string, AdjudicationCard>();
+  for (const card of adjCards) {
+    if (card.finding_ref?.origin === "dismissed") {
+      dismissedVerdicts.set(`${card.finding_ref.service}|${card.finding_ref.vuln_id}`, card);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -130,27 +148,100 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
           )}
         </div>
       </section>
-      {data.adjudication && (
+      {(data.adjudication || data.adjudication_status === "running") && (
         <section data-testid="corr-adjudication">
           <h3 className="font-medium">{t("scan.correlation.adjudicationTitle")}</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {t("scan.correlation.adjudicationIntro")}
           </p>
-          {data.adjudication.error ? (
+          {/* 裁决进行中横幅（log 未落盘时的唯一进行中信号，amber 对齐 drift 横幅） */}
+          {data.adjudication_status === "running" && (
+            <div
+              data-testid="corr-adj-running"
+              className="mt-2 rounded-md border border-amber/40 bg-amber/10 p-3 text-sm text-amber"
+            >
+              {t("scan.correlation.adjRunning")}
+            </div>
+          )}
+          {data.adjudication?.error ? (
             <p data-testid="corr-adjudication-error" className="mt-2 text-sm text-destructive">
               {data.adjudication.error}
             </p>
-          ) : (data.adjudication.cards ?? []).length === 0 ? (
-            <p className="mt-2 text-sm text-muted-foreground">
-              {t("scan.correlation.adjudicationEmpty")}
-            </p>
+          ) : (data.adjudication?.cards ?? []).length === 0 ? (
+            // 仅 running 横幅（log 未落盘）时不显示「无裁决卡」占位
+            !data.adjudication ? null : (
+              <p className="mt-2 text-sm text-muted-foreground">
+                {t("scan.correlation.adjudicationEmpty")}
+              </p>
+            )
           ) : (
-            <div className="mt-2 space-y-2">
-              {(data.adjudication.cards ?? []).map((c, i) => (
-                <AdjudicationCardView key={i} card={c} />
-              ))}
-            </div>
+            <>
+              {directionCounts.length > 0 && (
+                <div data-testid="corr-adj-summary" className="mt-2 flex flex-wrap items-center gap-1.5">
+                  {directionCounts.map(({ dir, count }) => (
+                    <Badge key={dir} variant="outline" className="font-mono text-[10px]">
+                      {t(ADJ_DIRECTION_KEY[dir] ?? dir)} × {count}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+              <div className="mt-2 space-y-2">
+                {(data.adjudication?.cards ?? []).map((c, i) => (
+                  <AdjudicationCardView key={i} card={c} />
+                ))}
+              </div>
+            </>
           )}
+        </section>
+      )}
+      {/* 单仓已否决（跨仓重审）：dismissed 明单 + 命中裁决的行内 direction 徽标 */}
+      {data.dismissed.length > 0 && (
+        <section data-testid="corr-dismissed">
+          <h3 className="font-medium">{t("scan.correlation.dismissedTitle")}</h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {t("scan.correlation.dismissedIntro")}
+          </p>
+          <Table className="mt-2">
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t("scan.correlation.colService")}</TableHead>
+                <TableHead>{t("scan.correlation.colVulnClass")}</TableHead>
+                <TableHead>ID</TableHead>
+                <TableHead className="w-[28%]">{t("scan.correlation.colDismissReason")}</TableHead>
+                <TableHead>{t("scan.correlation.colDismissStage")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.dismissed.map((d: CorrDismissed, i: number) => {
+                const verdict = dismissedVerdicts.get(`${d.service}|${d.ID}`);
+                return (
+                  <TableRow key={`${d.service}:${d.ID}:${i}`} data-testid="corr-dismissed-row">
+                    <TableCell className="font-mono text-xs">{d.service}</TableCell>
+                    <TableCell className="font-mono text-xs">{d.vuln_class ?? "—"}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {d.ID}
+                      {verdict && (
+                        <Badge
+                          data-testid="corr-dismissed-verdict"
+                          variant="outline"
+                          className="ml-1.5 font-sans text-[10px]"
+                        >
+                          {t(ADJ_DIRECTION_KEY[verdict.direction] ?? verdict.direction)}
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      <span className="line-clamp-2">{d.title || d.dismiss_reason || "—"}</span>
+                      {d.title && d.dismiss_reason && (
+                        <span className="mt-0.5 block line-clamp-2">{d.dismiss_reason}</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{d.dismissed_at_stage ?? "—"}</TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
         </section>
       )}
       <section data-testid="corr-vulns">
@@ -167,7 +258,7 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
                 {g.service || t("scan.correlation.serviceUnknown")}
               </Badge>
               {g.vulns.map((v, i) => (
-                <VulnCard key={`${g.service}-${i}`} v={toVulnerability(v)} />
+                <CorrVulnCard key={`${g.service}-${i}`} view={toCorrVulnView(v)} />
               ))}
             </div>
           ))}
@@ -232,24 +323,9 @@ function CorrLoading() {
   );
 }
 
-/** CorrVuln（宽松 dict）→ VulnCard 的 Vulnerability：已知字段防御性拾取，
- *  缺字段给安全缺省（ID 缺 → 占位、externally_exploitable 缺 → false）。 */
-export function toVulnerability(v: CorrVuln): Vulnerability {
-  const str = (x: unknown) => (typeof x === "string" ? x : undefined);
-  return {
-    ID: str(v.ID) ?? "CORR-VULN-?",
-    vulnerability_type: str(v.vulnerability_type) ?? "unknown",
-    externally_exploitable: v.externally_exploitable === true,
-    title: str(v.title),
-    confidence: str(v.confidence),
-    source_endpoint: str(v.source_endpoint),
-    vulnerable_code_location: str(v.vulnerable_code_location) ?? str(v.location),
-    missing_defense: str(v.missing_defense),
-    exploitation_hypothesis: str(v.exploitation_hypothesis),
-    suggested_exploit_technique: str(v.suggested_exploit_technique),
-    notes: str(v.notes),
-  };
-}
+/** CorrVuln（宽松 dict）→ CorrVulnCard 视图：归一逻辑收敛在
+ *  components/correlation/CorrVulnCard.tsx 的 toCorrVulnView（防御拾取 + 位置
+ *  兜底链 + report_endpoints/poc 结构化，导出便于单测）。 */
 
 /** merged_vulns（键 = vuln class）拍平后按条目 service 字段分组。
  *  组序：serviceOrder（拓扑服务序，入口在前）优先，未列出的服务按字典序垫底；
@@ -285,6 +361,8 @@ const ADJ_DIRECTION_KEY: Record<string, string> = {
   maintain: "scan.correlation.adjMaintain",
   error: "scan.correlation.adjError",
 };
+/** direction 聚合徽标行展示顺序（正反结论同构，error 垫底）。 */
+const DIRECTION_ORDER = ["upgrade", "downgrade", "confirm", "maintain", "error"] as const;
 
 /** 单张裁决卡（spec 2026-08-27 §9）：正反结论同构——direction/conclusion 徽标 +
  *  跨仓上下文 + 分析过程（有序列表）+ 验证证据（file:line）+ 论证。 */

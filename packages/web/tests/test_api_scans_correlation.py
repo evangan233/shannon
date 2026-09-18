@@ -20,6 +20,15 @@ def _make_scan(tmp_workspaces, ws, scan_id, scan_type="correlation", status="com
     return scan_dir
 
 
+def _make_child_scan(tmp_workspaces, ws, scan_id, dismissed=None, bad_json=False):
+    """建子仓 scan 目录（c1 的兄弟），可选落 dismissed_findings.json。"""
+    child_dlv = tmp_workspaces / ws / "scans" / scan_id / "deliverables"
+    (child_dlv / "whitebox" / "intermediate").mkdir(parents=True, exist_ok=True)
+    if dismissed is not None or bad_json:
+        text = "{not-json" if bad_json else json.dumps({"dismissed": dismissed})
+        (child_dlv / "whitebox" / "intermediate" / "dismissed_findings.json").write_text(text)
+
+
 def test_correlation_endpoint_assembles(authed_client, tmp_workspaces):
     """完整组装：四产物原文 + corr_children 透传 + drift_warnings 保守 []。"""
     _make_scan(tmp_workspaces, "WS", scan_id="c1", corr_children=[
@@ -28,6 +37,11 @@ def test_correlation_endpoint_assembles(authed_client, tmp_workspaces):
     ])
     dlv = tmp_workspaces / "WS" / "scans" / "c1" / "deliverables"
     dlv.mkdir(parents=True)
+    _make_child_scan(tmp_workspaces, "WS", "gw-1", dismissed=[
+        {"ID": "INJ-LLM-SAFE-01", "vuln_class": "injection", "title": "误报链",
+         "dismiss_reason": "sink 不可达", "evidence": {"chain": ["a", "b"]},
+         "confidence": "high", "source_track": "llm",
+         "dismissed_at_stage": "llm-exploration", "source": "s", "sink_call": "k()"}])
     (dlv / "cross-service-topology.json").write_text(json.dumps({
         "services": [{"name": "gateway", "role": "frontend", "repo": "/code/gateway"}],
         "edges": [{"from": "gateway", "to": "orders", "protocol": "grpc",
@@ -80,6 +94,15 @@ def test_correlation_endpoint_assembles(authed_client, tmp_workspaces):
         {"service": "gateway", "scan_id": "gw-1", "reused": False},
         {"service": "orders", "scan_id": "ord-1", "reused": True}]
     assert d["drift_warnings"] == []
+    # 成立/消掉视图（2026-09-18）：子仓 dismissed 投影透传（evidence 不出网）+
+    # log 存在 → 裁决终态 completed
+    assert len(d["dismissed"]) == 1
+    item = d["dismissed"][0]
+    assert item["service"] == "gateway"
+    assert item["ID"] == "INJ-LLM-SAFE-01"
+    assert item["dismissed_at_stage"] == "llm-exploration"
+    assert "evidence" not in item
+    assert d["adjudication_status"] == "completed"
 
 
 def test_correlation_endpoint_legacy_list_flows_compat(authed_client, tmp_workspaces):
@@ -101,7 +124,7 @@ def test_correlation_endpoint_legacy_list_flows_compat(authed_client, tmp_worksp
 
 
 def test_correlation_endpoint_adjudication_error_form(authed_client, tmp_workspaces):
-    """阶段 B 整体异常留档形态 {"error": ...} 原样透传(spec §10)。"""
+    """阶段 B 整体异常留档形态 {"error": ...} 原样透传(spec §10)；状态推导 failed。"""
     _make_scan(tmp_workspaces, "WS", scan_id="c1")
     dlv = tmp_workspaces / "WS" / "scans" / "c1" / "deliverables"
     dlv.mkdir(parents=True)
@@ -109,7 +132,77 @@ def test_correlation_endpoint_adjudication_error_form(authed_client, tmp_workspa
         {"error": "adjudication infra down"}))
     r = authed_client.get("/api/workspaces/WS/scans/c1/correlation")
     assert r.status_code == 200, r.text
-    assert r.json()["adjudication"] == {"error": "adjudication infra down"}
+    d = r.json()
+    assert d["adjudication"] == {"error": "adjudication infra down"}
+    assert d["adjudication_status"] == "failed"
+
+
+def _append_events(scan_dir, events):
+    with (scan_dir / "events.ndjson").open("a", encoding="utf-8") as fh:
+        for e in events:
+            fh.write(json.dumps(e) + "\n")
+
+
+def _adj_phase(status):
+    return {"type": "correlation_progress", "node": "phase",
+            "name": "adjudication", "status": status}
+
+
+def test_correlation_adjudication_status_from_events(authed_client, tmp_workspaces):
+    """无 log 时从 events.ndjson 尾读推导：running / failed / 最后一条优先。"""
+    _make_scan(tmp_workspaces, "WS", scan_id="c1", status="running")
+    scan_dir = tmp_workspaces / "WS" / "scans" / "c1"
+    dlv = scan_dir / "deliverables"
+    dlv.mkdir(parents=True)
+    # started → running
+    _append_events(scan_dir, [_adj_phase("started")])
+    d = authed_client.get("/api/workspaces/WS/scans/c1/correlation").json()
+    assert d["adjudication_status"] == "running"
+    # completed 追加在后 → completed（取最后一条）
+    _append_events(scan_dir, [_adj_phase("completed")])
+    d = authed_client.get("/api/workspaces/WS/scans/c1/correlation").json()
+    assert d["adjudication_status"] == "completed"
+    # 再 started（重跑语义）→ running；中间隔无关事件不影响
+    _append_events(scan_dir, [{"type": "scan_end", "status": "completed"},
+                              _adj_phase("started")])
+    d = authed_client.get("/api/workspaces/WS/scans/c1/correlation").json()
+    assert d["adjudication_status"] == "running"
+
+
+def test_correlation_adjudication_status_terminal_session_guard(authed_client, tmp_workspaces):
+    """加固：events 说 running 但 session 已终态（被取消/中断旧扫描）→ failed，
+    防前端「裁决进行中」横幅永挂。"""
+    _make_scan(tmp_workspaces, "WS", scan_id="c1", status="cancelled")
+    scan_dir = tmp_workspaces / "WS" / "scans" / "c1"
+    (scan_dir / "deliverables").mkdir(parents=True)
+    _append_events(scan_dir, [_adj_phase("started")])
+    d = authed_client.get("/api/workspaces/WS/scans/c1/correlation").json()
+    assert d["adjudication_status"] == "failed"
+
+
+def test_correlation_dismissed_children_tolerant(authed_client, tmp_workspaces):
+    """子仓 dismissed 读取容错：坏 JSON/缺文件/scan_id 含路径分隔符 → 跳过不 500，
+    其余子仓照读；无任何数据 → dismissed==[]。"""
+    _make_scan(tmp_workspaces, "WS", scan_id="c1", corr_children=[
+        {"service": "bad", "scan_id": "bad-1", "reused": True},
+        {"service": "gone", "scan_id": "gone-1", "reused": True},
+        {"service": "evil", "scan_id": "../evil-1", "reused": True},
+        {"service": "good", "scan_id": "good-1", "reused": True},
+    ])
+    _make_child_scan(tmp_workspaces, "WS", "bad-1", dismissed=[], bad_json=True)
+    _make_child_scan(tmp_workspaces, "WS", "good-1", dismissed=[
+        {"ID": "XSS-9", "vuln_class": "xss", "title": "t", "dismiss_reason": "r"}])
+    dlv = tmp_workspaces / "WS" / "scans" / "c1" / "deliverables"
+    dlv.mkdir(parents=True)
+    d = authed_client.get("/api/workspaces/WS/scans/c1/correlation").json()
+    assert [x["service"] for x in d["dismissed"]] == ["good"]
+    assert d["dismissed"][0]["ID"] == "XSS-9"
+    # 无 corr_children 的 scan：dismissed 恒 []
+    _make_scan(tmp_workspaces, "WS", scan_id="c9")
+    (tmp_workspaces / "WS" / "scans" / "c9" / "deliverables").mkdir(parents=True)
+    d9 = authed_client.get("/api/workspaces/WS/scans/c9/correlation").json()
+    assert d9["dismissed"] == []
+    assert d9["adjudication_status"] is None
 
 
 def test_correlation_endpoint_missing_queue_key_absent(authed_client, tmp_workspaces):
@@ -133,6 +226,7 @@ def test_correlation_endpoint_pending(authed_client, tmp_workspaces):
     assert d["boundaries"] == [] and d["report_md"] is None
     assert d["merged_vulns"] == {}
     assert d["corr_children"] == []
+    assert d["dismissed"] == [] and d["adjudication_status"] is None
 
 
 def test_correlation_endpoint_wrong_type(authed_client, tmp_workspaces):

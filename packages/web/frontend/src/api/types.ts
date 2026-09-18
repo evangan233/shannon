@@ -968,6 +968,19 @@ export interface CorrVuln {
   service?: string;
   [k: string]: unknown;
 }
+/** 子仓 dismissed_findings.json 条目投影（后端 _collect_dismissed_children，已丢 evidence）。 */
+export interface CorrDismissed {
+  service: string;
+  ID: string;
+  vuln_class?: string;
+  title?: string;
+  dismiss_reason?: string;
+  confidence?: string;
+  source_track?: string;
+  dismissed_at_stage?: string;
+  source?: string;
+  sink_call?: string;
+}
 export interface CorrelationDetail {
   topology: { services: { name: string; role: string; repo: string }[];
               edges: { from: string; to: string; protocol: string; status: string;
@@ -981,6 +994,9 @@ export interface CorrelationDetail {
   // 首版保守恒 []（后端不解析 correlation-report.md；后续版本从事件/report 提取）。
   drift_warnings: unknown[];
   corr_children: { service: string; scan_id: string; reused: boolean }[];
+  // 成立/消掉视图（2026-09-18）：子仓已否决发现汇总 + 裁决阶段状态（null = 从未跑）。
+  dismissed: CorrDismissed[];
+  adjudication_status: "running" | "failed" | "completed" | null;
   report_md: string | null;
 }
 

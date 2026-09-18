@@ -634,6 +634,12 @@
       "adjProcess": "Analysis process",
       "adjEvidence": "Verification evidence",
       "adjReasoning": "Reasoning",
+      "adjRunning": "Cross-service adjudication in progress — cards appear here automatically (refreshes every 15s)",
+      "dismissedTitle": "Dismissed in single-repo (re-adjudicated)",
+      "dismissedIntro": "Findings archived as not-vulnerable by each single-repo scan; cross-service adjudication re-examines them — see the inline verdict badges",
+      "colVulnClass": "Class",
+      "colDismissReason": "Dismiss reason",
+      "colDismissStage": "Dismissed at",
       "analysis": {
         "panel": "Automatic topology analysis",
         "start": "Analyze relationships",

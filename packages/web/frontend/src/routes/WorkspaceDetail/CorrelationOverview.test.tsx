@@ -25,6 +25,8 @@ const detail: CorrelationDetail = {
     { service: "frontend", scan_id: "20260824-000001", reused: false },
     { service: "order-svc", scan_id: "20260824-000002", reused: true },
   ],
+  dismissed: [],
+  adjudication_status: null,
   report_md: null,
 };
 
