@@ -71,6 +71,12 @@ export interface CorrVulnView {
   notes?: string;
 }
 
+/** 漏洞卡 DOM 锚点 id（ID 可能含空白/特殊字符，统一安全化）——跨仓 tab 的定位
+ *  （攻击链引用点击 / 总览 severity 药丸）与卡身 id 同源，改一处两处同步。 */
+export function corrVulnAnchorId(id: string): string {
+  return `corr-vuln-${id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+}
+
 const asStr = (x: unknown): string | undefined =>
   typeof x === "string" && x ? x : undefined;
 const asStrList = (x: unknown): string[] =>
@@ -173,11 +179,26 @@ export function toCorrVulnView(v: CorrVuln): CorrVulnView {
  * 跨仓漏洞卡：卡头（ID + severity 药丸 + 标题 + 双轨/置信度/可达 + 入口接口）折叠按钮，
  * 展开体七节（空数据整节省略）：危害 → 相关接口 → 问题点 → POC（curl ↔ Burp 双 tab）
  * → 修复建议 → 漏洞细节（CVSS/CWE/OWASP）→ notes。
+ * 折叠支持受控（collapsed/onToggleCollapse，ReportView 集中 state 模式——跨仓 tab 的
+ * 全部收起/展开 + 定位联动需在父级持有）；缺省走内部 state（非受控，向后兼容）。
  */
-export function CorrVulnCard({ view }: { view: CorrVulnView }) {
+export function CorrVulnCard({ view, anchorId, collapsed, onToggleCollapse }: {
+  view: CorrVulnView;
+  /** DOM 锚点 id（定位目标），缺省不挂。 */
+  anchorId?: string;
+  /** 受控折叠态；undefined = 非受控（内部 state）。 */
+  collapsed?: boolean;
+  /** 受控时的切换回调（非受控忽略）。 */
+  onToggleCollapse?: () => void;
+}) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+  const [innerOpen, setInnerOpen] = useState(false);
   const [pocTab, setPocTab] = useState<"curl" | "burp">("curl");
+  const open = collapsed === undefined ? innerOpen : !collapsed;
+  const toggleOpen = () => {
+    if (onToggleCollapse) onToggleCollapse();
+    else setInnerOpen((o) => !o);
+  };
   const { poc } = view;
   const curl = poc?.curl ?? null;
   const rawHttp = poc?.raw_http ?? null;
@@ -187,14 +208,16 @@ export function CorrVulnCard({ view }: { view: CorrVulnView }) {
     <section
       data-testid="corr-vuln-card"
       data-severity={view.severity ?? ""}
+      id={anchorId}
       className={`space-y-4 rounded-md border border-border bg-card p-4 shadow-[var(--shadow-card)]${
         view.severity ? ` ${SEV_EDGE[view.severity]}` : ""
       }`}
     >
       <button
         type="button"
+        data-testid="corr-vuln-card-head"
         aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggleOpen}
         className="flex w-full items-start justify-between gap-2 rounded-sm text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
       >
         <div className="min-w-0 flex-1 space-y-1.5">

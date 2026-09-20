@@ -1,8 +1,9 @@
-// D5：CorrelationTab 结果视图集成测试——区块顺序（漂移警告 → 拓扑 → 攻击链 →
+// D5：CorrelationTab 结果视图集成测试——区块顺序（总览头 → 拓扑 → 攻击链 →
 // 裁决 → 单仓已否决 → 按服务分组漏洞 → 信任边界 → 报告 md）、pending 占位、
-// 空 flows 降级、service 徽标、severity/PoC/成立-消掉视图（2026-09-18）。
+// 空 flows 降级、service 徽标、severity/PoC/成立-消掉视图（2026-09-18）、
+// 总览头/定位/集中折叠（2026-09-20 可读性批次）。
 // 风格对齐 DataFlowTab.test：msw + MemoryRouter + SWRConfig 独立 cache + i18n zh。
-import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from "vitest";
 import { render, screen, within, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { setupServer } from "msw/node";
@@ -38,7 +39,7 @@ const detail: CorrelationDetail = {
       method: "order.CreateOrder",
       call_site: { file: "checkout.ts", line: 42, snippet: "await stub.create(order)" },
       vuln_refs: [
-        { service: "order-svc", title: "SQL 注入", severity: "high", location: "db.py:10" },
+        { vuln_id: "INJ-VULN-01", service: "order-svc", title: "SQL 注入", severity: "high", location: "db.py:10" },
       ],
       confidence: "high",
       evidence: "入口参数未过滤透传到后端拼接 SQL",
@@ -207,10 +208,10 @@ describe("CorrelationTab", () => {
     expect(screen.getByText("暂无候选攻击链")).toBeInTheDocument();
   });
 
-  it("按服务分组漏洞 + service 徽标（CorrVulnCard 出现，severity/PoC 可见）", async () => {
+  it("按服务分组漏洞 + service 徽标（默认全展开，severity/PoC 可见；卡头可收起）", async () => {
     await renderWithDetail();
     const vulns = screen.getByTestId("corr-vulns");
-    // CorrVulnCard 渲染两条（ID 在收起态卡头可见）
+    // CorrVulnCard 渲染两条
     expect(within(vulns).getByText("INJ-VULN-01")).toBeInTheDocument();
     expect(within(vulns).getByText("INJ-VULN-02")).toBeInTheDocument();
     // severity 药丸（critical → 严重）
@@ -220,13 +221,17 @@ describe("CorrelationTab", () => {
     expect(groups.length).toBe(2);
     expect(within(groups[0]).getByText("frontend")).toBeInTheDocument();
     expect(within(groups[1]).getByText("order-svc")).toBeInTheDocument();
-    // 展开卡头 → 接口/PoC 可见（默认收起，卡头是唯一 button）
-    await fireEvent.click(within(groups[1]).getByRole("button"));
+    // 默认全展开（对齐单仓报告默认态）：接口/PoC 直接可见
     const card = within(groups[1]).getByTestId("corr-vuln-card");
     expect(within(card).getByTestId("corr-vuln-endpoints")).toHaveTextContent("POST /orders");
     expect(within(card).getByTestId("corr-poc-curl")).toHaveTextContent("1 OR 1=1");
     expect(within(card).getAllByTestId("corr-poc-steps").length).toBeGreaterThan(0);
     expect(within(card).getByTestId("corr-problem-point-location")).toHaveTextContent("db.py:10");
+    // 卡头点击收起 → 展开体消失（卡头 ID 仍在）；再点恢复
+    fireEvent.click(within(card).getByTestId("corr-vuln-card-head"));
+    expect(within(card).queryByTestId("corr-vuln-endpoints")).not.toBeInTheDocument();
+    fireEvent.click(within(card).getByTestId("corr-vuln-card-head"));
+    expect(within(card).getByTestId("corr-vuln-endpoints")).toBeInTheDocument();
   });
 
   it("信任边界表（service / method / exposure / reachable_from / reason）", async () => {
@@ -238,17 +243,25 @@ describe("CorrelationTab", () => {
     expect(within(boundaries).getByText(/仅集群内 grpc 可达/)).toBeInTheDocument();
   });
 
-  it("报告 markdown 渲染（MarkdownView）", async () => {
+  it("报告 md：默认收起只留标题+下载，展开后渲染全文（2026-09-20）", async () => {
     await renderWithDetail();
+    const section = screen.getByTestId("corr-report");
+    // 默认 details 收起：标题 + 下载入口可见，正文不渲染
     expect(
-      screen.getByRole("heading", { name: "跨仓关联报告" }),
+      within(section).getByRole("heading", { name: "关联报告" }),
     ).toBeInTheDocument();
+    expect(within(section).getByRole("button", { name: /下载/ })).toBeInTheDocument();
+    // jsdom 不隐藏 details 收起内容（DOM 常驻）——收起语义断言 open 属性
+    const det = section.querySelector("details") as HTMLDetailsElement;
+    expect(det.open).toBe(false);
+    fireEvent.click(within(section).getByText("展开报告全文"));
+    expect(det.open).toBe(true);
     expect(screen.getByText(/入口参数透传至后端未过滤/)).toBeInTheDocument();
   });
 
-  it("区块顺序：拓扑 → 攻击链 → 裁决 → 单仓已否决 → 分组漏洞 → 信任边界 → 报告", async () => {
+  it("区块顺序：总览头 → 拓扑 → 攻击链 → 裁决 → 单仓已否决 → 分组漏洞 → 信任边界 → 报告", async () => {
     await renderWithDetail();
-    const order = ["corr-topology", "corr-flows", "corr-adjudication", "corr-dismissed",
+    const order = ["corr-stats", "corr-topology", "corr-flows", "corr-adjudication", "corr-dismissed",
       "corr-vulns", "corr-boundaries", "corr-report"];
     const els = order.map((id) => screen.getByTestId(id));
     for (let i = 1; i < els.length; i++) {
@@ -273,21 +286,28 @@ describe("CorrelationTab", () => {
     expect(screen.queryByTestId("corr-topology")).not.toBeInTheDocument();
   });
 
-  it("跨仓裁决区:三向分组卡片(vuln_id/direction/error 卡留证)", async () => {
+  it("跨仓裁决区:三向分组卡片(error 卡默认展开,非 error 收起需展开后留证)", async () => {
     await renderWithDetail(detail, "corr-adjudication");
     const section = screen.getByTestId("corr-adjudication");
     // within 限定裁决区(分组漏洞区 VulnCard 也渲染 vuln_id,全文查询会撞多匹配)
     expect(within(section).getByText("INJ-09")).toBeInTheDocument();
     expect(within(section).getAllByText(/INJ-VULN-02/).length).toBeGreaterThan(0);
-    // 翻案论证留证
+    // error 卡默认展开（故障信号必见）：reasoning 直接可见
+    expect(within(section).getByText(/adjudication batch failed/)).toBeInTheDocument();
+    // 非 error 卡默认收起：展开 upgrade 卡 → 翻案论证/分析过程/证据可见
+    fireEvent.click(within(section).getAllByTestId("corr-adj-card-head")[0]);
     expect(within(section).getByText(/跨仓可达,翻案候选/)).toBeInTheDocument();
-    // 分析过程与证据可见
     expect(within(section).getByText(/dismissed 理由=internal 不可达/)).toBeInTheDocument();
-    expect(within(section).getByText(/db.py:10/)).toBeInTheDocument();
+    expect(within(section).getByText(/db\.py:10/)).toBeInTheDocument();
   });
 
-  it("多跳链展示(path 链)", async () => {
+  it("多跳链展示(默认收起,details 展开后 path 链可见)", async () => {
     await renderWithDetail(detail, "corr-adjudication");
+    const det = screen.getByTestId("corr-multihop-list") as HTMLDetailsElement;
+    // jsdom 不隐藏 details 收起内容（DOM 常驻）——收起语义断言 open 属性
+    expect(det.open).toBe(false);
+    fireEvent.click(within(det).getByText("展开 1 条候选链"));
+    expect(det.open).toBe(true);
     expect(
       screen.getByText(/frontend → order-svc → payment-svc/),
     ).toBeInTheDocument();
@@ -336,6 +356,74 @@ describe("CorrelationTab", () => {
     cleanup();
     await renderWithDetail({ ...detail, dismissed: [] }, "corr-topology");
     expect(screen.queryByTestId("corr-dismissed")).not.toBeInTheDocument();
+  });
+
+  it("总览头:数字卡(服务/攻击链/多跳/裁决/漏洞)+severity 药丸点击定位", async () => {
+    const scrollTo = vi.fn();
+    window.scrollTo = scrollTo as unknown as typeof window.scrollTo;
+    await renderWithDetail(detail, "corr-stats");
+    const stats = screen.getByTestId("corr-stats");
+    expect(within(stats).getByTestId("corr-stat-services")).toHaveTextContent("2");
+    expect(within(stats).getByTestId("corr-stat-flows")).toHaveTextContent("1");
+    expect(within(stats).getByTestId("corr-stat-multihop")).toHaveTextContent("1");
+    expect(within(stats).getByTestId("corr-stat-adjudication")).toHaveTextContent("3");
+    expect(within(stats).getByTestId("corr-stat-vulns")).toHaveTextContent("2");
+    // severity 药丸：critical 1（INJ-VULN-01）、high 0（flows 的 high 不计入漏洞）
+    expect(within(stats).getByTestId("corr-stat-sev-critical")).toHaveTextContent("1");
+    expect(within(stats).getByTestId("corr-stat-sev-high")).toHaveTextContent("0");
+    // 点击定位：scrollTo smooth + 目标卡描边闪烁
+    fireEvent.click(within(stats).getByTestId("corr-stat-sev-critical"));
+    expect(scrollTo).toHaveBeenCalledWith({ top: expect.any(Number), behavior: "smooth" });
+    expect(
+      document.getElementById("corr-vuln-INJ-VULN-01")!.classList.contains("dataflow-flash"),
+    ).toBe(true);
+  });
+
+  it("攻击链漏洞引用点击定位(目标卡折叠时先展开再定位)", async () => {
+    const scrollTo = vi.fn();
+    window.scrollTo = scrollTo as unknown as typeof window.scrollTo;
+    await renderWithDetail(detail, "corr-flows");
+    // 先全部收起 → 引用点击应联动展开（异步 setTimeout 后定位）
+    fireEvent.click(screen.getByTestId("corr-collapse-all-vulns"));
+    expect(
+      document.getElementById("corr-vuln-INJ-VULN-01")!.classList.contains("dataflow-flash"),
+    ).toBe(false);
+    fireEvent.click(screen.getByTestId("chain-vuln-ref"));
+    await waitFor(() =>
+      expect(
+        document.getElementById("corr-vuln-INJ-VULN-01")!.classList.contains("dataflow-flash"),
+      ).toBe(true));
+    expect(scrollTo).toHaveBeenCalledWith({ top: expect.any(Number), behavior: "smooth" });
+  });
+
+  it("漏洞区集中折叠:全部收起/展开(ReportView 模式),默认全展开", async () => {
+    await renderWithDetail(detail, "corr-vulns");
+    const vulns = screen.getByTestId("corr-vulns");
+    // 默认全展开（对齐单仓报告默认态）：INJ-VULN-01 展开体可见
+    expect(within(vulns).getByTestId("corr-vuln-endpoints")).toBeInTheDocument();
+    // 全部收起 → 展开体不可见（卡头 ID 仍在）
+    fireEvent.click(within(vulns).getByTestId("corr-collapse-all-vulns"));
+    expect(within(vulns).queryByTestId("corr-vuln-endpoints")).not.toBeInTheDocument();
+    expect(within(vulns).getByText("INJ-VULN-01")).toBeInTheDocument();
+    // 全部展开 → 恢复
+    fireEvent.click(within(vulns).getByTestId("corr-expand-all-vulns"));
+    expect(within(vulns).getByTestId("corr-vuln-endpoints")).toBeInTheDocument();
+  });
+
+  it("裁决区集中折叠:默认非 error 收起,全部收起/展开可用", async () => {
+    await renderWithDetail(detail, "corr-adjudication");
+    const section = screen.getByTestId("corr-adjudication");
+    const cards = within(section).getAllByTestId("corr-adj-card");
+    expect(cards.length).toBe(3);
+    // 默认态：非 error 卡收起（展开体 context 不可见），error 卡展开（reasoning 可见）
+    expect(within(section).queryByText(/经 frontend POST/)).not.toBeInTheDocument();
+    expect(within(section).getByText(/adjudication batch failed/)).toBeInTheDocument();
+    // 全部展开 → 非 error 卡论证可见
+    fireEvent.click(within(section).getByTestId("corr-expand-all-adj"));
+    expect(within(section).getByText(/经 frontend POST/)).toBeInTheDocument();
+    // 全部收起 → error 卡论证也收起
+    fireEvent.click(within(section).getByTestId("corr-collapse-all-adj"));
+    expect(within(section).queryByText(/adjudication batch failed/)).not.toBeInTheDocument();
   });
 
   it("加载中显示 Skeleton 占位", async () => {
