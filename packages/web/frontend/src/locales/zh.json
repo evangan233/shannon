@@ -642,7 +642,7 @@
         "invalid_protocol": "协议仅支持 grpc/http/graphql",
         "duplicate_edge": "重复关系",
         "missing_source": "仓库缺少扫描来源",
-        "isolated_node": "存在孤立仓库"
+        "isolated_node": "存在孤立仓库（无任何关联边），将按普通仓库一并扫描"
       },
       "multihopTitle": "多跳候选链",
       "multihopIntro": "按相邻调用边拼装的候选路径（结构推断），供人工复核",
@@ -705,7 +705,6 @@
         "redo": "重做",
         "resetLayout": "重置布局",
         "connect": "连接",
-        "referenceOnly": "参考仓库",
         "confirm": "确认拓扑",
         "details": "证据与覆盖",
         "submit": "开始扫描",
