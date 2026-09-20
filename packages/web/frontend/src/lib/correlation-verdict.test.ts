@@ -47,19 +47,19 @@ describe("verdictGroupFromCard / classifyVulnVerdict", () => {
   });
   it("classifyVulnVerdict 按 service|ID 命中", () => {
     const index = buildVerdictIndex([card({}), card({ direction: "downgrade", finding_ref: { service: "web", vuln_id: "INJ-2", origin: "queue" } })]);
-    expect(classifyVulnVerdict({ ID: "INJ-1", service: "order-svc" }, index)).toBe("confirmed");
-    expect(classifyVulnVerdict({ ID: "INJ-2", service: "web" }, index)).toBe("refuted");
+    expect(classifyVulnVerdict({ ID: "INJ-1", service: "order-svc", title: "t" }, index)).toBe("confirmed");
+    expect(classifyVulnVerdict({ ID: "INJ-2", service: "web", title: "t" }, index)).toBe("refuted");
   });
 });
 
 describe("splitVulnsByVerdict / countVerdictGroups", () => {
   const vulns = {
     injection: [
-      { ID: "INJ-1", service: "order-svc" },
-      { ID: "INJ-2", service: "web" },
-      { ID: "INJ-3", service: "web" }, // 无卡
+      { ID: "INJ-1", service: "order-svc", title: "t" },
+      { ID: "INJ-2", service: "web", title: "t" },
+      { ID: "INJ-3", service: "web", title: "t" }, // 无卡
     ],
-    xss: [{ ID: "X-1", service: "order-svc" }], // 无卡
+    xss: [{ ID: "X-1", service: "order-svc", title: "t" }], // 无卡
   };
   const cards = [
     card({}), // order-svc|INJ-1 confirm
@@ -120,7 +120,7 @@ describe("findChainsForVuln", () => {
 
 describe("adjudicationCoverage", () => {
   it("queue 总数与 origin=queue 卡数（error 占位也算已出位）", () => {
-    const merged = { injection: [{ ID: "1" }, { ID: "2" }], xss: [{ ID: "3" }] };
+    const merged = { injection: [{ ID: "1", title: "t" }, { ID: "2", title: "t" }], xss: [{ ID: "3", title: "t" }] };
     const cards = [
       card({}),
       card({ direction: "error", conclusion: "needs-review", confidence: "low",
