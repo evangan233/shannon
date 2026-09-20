@@ -112,6 +112,8 @@ const corrMain = {
 let listCalls = 0;
 const server = setupServer(
   http.get("/api/workspaces/:ws/scans", () => { listCalls++; return HttpResponse.json([]); }),
+  // 闸门快照（选择模式用例重挂后 SWR 重新拉取）：空快照即可，面板空态无断言依赖。
+  http.get("/api/scan/gate", () => HttpResponse.json({ held: [], waiting: [] })),
 );
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -1151,5 +1153,75 @@ describe("ScanList 批量取消/续跑", () => {
     expect(screen.getByRole("button", { name: /批量删除（0）/ })).toBeDisabled();
     // 取消按钮反而可用（两行皆可取消）
     expect(screen.getByRole("button", { name: /批量取消（2）/ })).toBeEnabled();
+  });
+});
+
+// === 选择模式与勾选持久化（2026-09-20）========================================
+// 勾选任意行进入选择模式：整行点击从「进详情」切换为「切换勾选」（防批量操作期间
+// 误触跳详情），进详情收窄到任务名链接/「查看」；未勾选时整行导航不变。勾选集落
+// sessionStorage（按 ws 键），进详情返回/刷新恢复；清空选择/批量完成时存档一并清空。
+describe("ScanList 选择模式与勾选持久化", () => {
+  beforeEach(() => sessionStorage.clear());
+
+  // 详情路由 stub：任务名链接走真路由（Link 不经 navMock），以挂载 stub 断言可达。
+  function renderListWithDetail() {
+    return renderWithSwr(
+      <MemoryRouter initialEntries={["/p/ws"]}>
+        <Routes>
+          <Route path="/p/:workspace" element={<ScanList />} />
+          <Route path="/p/:workspace/scans/:scanId/:tab" element={<p>scan-detail-stub</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  it("未勾选（常态）：点击行体进入详情（running → live tab）", async () => {
+    server.use(http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([running, wbDone])));
+    renderList();
+    await waitFor(() => expect(screen.getByText("ws-s5")).toBeInTheDocument());
+    // 点 s1 行进度格（行体非链接区）→ 整行导航
+    const row = screen.getByText("s1").closest("tr")!;
+    fireEvent.click(within(row).getByText("5%"));
+    expect(navMock).toHaveBeenCalledWith("/p/ws/scans/s1/live");
+  });
+
+  it("选择模式：点击另一行行体=切换勾选，不导航", async () => {
+    server.use(http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([running, wbDone])));
+    renderList();
+    await waitFor(() => expect(screen.getByText("ws-s5")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择任务 s1" }));
+    expect(screen.getByTestId("scan-bulk-bar")).toBeInTheDocument();
+    navMock.mockClear();
+    // 点 ws-s5 行的进度格「100%」（行体非链接区）→ 勾选而非跳详情
+    const row = screen.getByText("ws-s5").closest("tr")!;
+    fireEvent.click(within(row).getByText("100%"));
+    expect(navMock).not.toHaveBeenCalled();
+    expect(screen.getByText("已选 2 项")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "选择任务 ws-s5" })).toBeChecked();
+  });
+
+  it("选择模式：任务名链接仍进详情", async () => {
+    server.use(http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([running, wbDone])));
+    renderListWithDetail();
+    await waitFor(() => expect(screen.getByText("ws-s5")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择任务 s1" }));
+    fireEvent.click(screen.getByText("ws-s5"));
+    expect(await screen.findByText("scan-detail-stub")).toBeInTheDocument();
+  });
+
+  it("勾选持久化：卸载重挂（进详情返回/刷新）勾选恢复；清空选择存档一并清空", async () => {
+    server.use(http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([running, wbDone])));
+    renderList();
+    await waitFor(() => expect(screen.getByText("ws-s5")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择任务 s1" }));
+    expect(screen.getByTestId("scan-bulk-bar")).toBeInTheDocument();
+    cleanup();
+    renderList();
+    expect(await screen.findByTestId("scan-bulk-bar")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "选择任务 s1" })).toBeChecked();
+    // 清空选择 → 存档同步清空（下次进入不复活旧勾选）
+    fireEvent.click(screen.getByRole("button", { name: "清空选择" }));
+    await waitFor(() =>
+      expect(sessionStorage.getItem("supernova.scan-selection:ws")).toBe("[]"));
   });
 });

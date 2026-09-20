@@ -97,6 +97,24 @@ function fmtTimeFull(unix?: number | null): string {
   return new Date(unix * 1000).toLocaleString();
 }
 
+/** 批量勾选集跨导航存续（2026-09-20 交互修复）：进详情返回 / 刷新页面勾选不丢。
+ *  sessionStorage 按 ws 键隔离（勾选是临时操作态，不进 URL；关 tab 自然失效）。
+ *  恢复时行已删除的 id 在 selectedRows 解析处自然落空，无副作用。批量操作完成
+ *  （finishBulkAction）与「清除」按钮置空 Set 后由写回 effect 清空存档。 */
+const selectionKey = (ws: string) => `supernova.scan-selection:${ws}`;
+function loadSelection(ws: string | undefined): Set<string> {
+  if (!ws) return new Set();
+  try {
+    const raw = sessionStorage.getItem(selectionKey(ws));
+    const ids: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(ids)
+      ? new Set(ids.filter((x): x is string => typeof x === "string"))
+      : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
 /** 在一次任务生命周期内保持进度不回退；续跑/状态切换通过 key 重置。 */
 function useMonotonicPct(key: string, candidate: number): number {
   const [state, setState] = useState(() => ({ key, value: candidate }));
@@ -154,7 +172,17 @@ export function ScanList() {
   // 批量取消/续跑（2026-09-15）：勾选态照 ReposTab（Set 独立于分段过滤，切换
   // 分段不清空；表头全选只作用于当前过滤视图）。预筛口径与单行按钮同源
   // （cancelableRow / canResumeRow），不可操作项不拦截勾选——由弹窗/横幅 skipped 明细呈现。
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // 2026-09-20：初始值从 sessionStorage 恢复（进详情返回/刷新不丢），变化写回。
+  const [selected, setSelected] = useState<Set<string>>(() => loadSelection(workspace));
+  // /p/:ws 同 route 切工作区不重挂：ws 变化重读新 ws 的选择集（旧集已存在其键下）。
+  useEffect(() => { setSelected(loadSelection(workspace)); }, [workspace]);
+  // 选择集落盘（含 ws 切换重置后的回写，幂等）；配额/隐私模式写失败静默降级为不持久。
+  useEffect(() => {
+    if (!workspace) return;
+    try {
+      sessionStorage.setItem(selectionKey(workspace), JSON.stringify([...selected]));
+    } catch { /* ignore */ }
+  }, [workspace, selected]);
   const [pendingBulk, setPendingBulk] = useState<"cancel" | "resume" | "delete" | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   // 批量续跑确认弹窗数据（用户选「汇总断点弹窗」）：逐项并发拉 resume-preview；
@@ -207,6 +235,10 @@ export function ScanList() {
 
   // ── 批量取消/续跑（2026-09-15）────────────────────────────────────────────
   // 勾选集跨过滤视图：用全量 scans 解析选中行（关键词/分段过滤不连带丢选中）。
+  // 选择模式（2026-09-20）：勾了任意行即进入——整行点击从「进详情」切换为「切换
+  // 勾选」，防批量操作期间误触跳页；进详情收窄到任务名链接/「查看」（显式意图），
+  // 清空勾选自动退出恢复整行导航。
+  const selecting = selected.size > 0;
   const selectedRows = scans.filter((s) => selected.has(s.scan_id));
   const cancelableSel = selectedRows.filter(cancelableRow);
   const resumableSel = selectedRows.filter(canResumeRow);
@@ -538,7 +570,8 @@ export function ScanList() {
             <TableBody>
               {filtered.map((s) => (
                 <ScanRow key={s.scan_id} ws={workspace!} scan={s} scansById={scansById} onChanged={reload}
-                  checked={selected.has(s.scan_id)} onToggleSelect={() => toggleSelect(s.scan_id)} />
+                  checked={selected.has(s.scan_id)} onToggleSelect={() => toggleSelect(s.scan_id)}
+                  selecting={selecting} />
               ))}
             </TableBody>
           </Table>
@@ -702,9 +735,9 @@ function RepoMultiSelect({ options, selected, onChange }: {
 /** 表格主行 + 嵌套子行（可展开，默认收起——列表扫读优先，明细按需展开）：
  *  组合任务 = 黑盒 run 子行（NestedBlackboxRuns）；correlation 主行 = 子仓白盒 +
  *  黑盒验证 run + 复用引用子行（NestedCorrChildren + NestedBlackboxRuns，D4）。 */
-function ScanRow({ ws, scan, scansById, onChanged, checked, onToggleSelect }: {
+function ScanRow({ ws, scan, scansById, onChanged, checked, onToggleSelect, selecting }: {
   ws: string; scan: ScanSummary; scansById: Map<string, ScanSummary>; onChanged: () => void;
-  checked: boolean; onToggleSelect: () => void;
+  checked: boolean; onToggleSelect: () => void; selecting: boolean;
 }) {
   const { t } = useTranslation();
   const nav = useNavigate();
@@ -882,10 +915,13 @@ function ScanRow({ ws, scan, scansById, onChanged, checked, onToggleSelect }: {
   return (
     <>
       {/* 整行可点（v4）：与 ID/查看同目标（defaultTab）；行内交互元素 stopPropagation 防误触。
+          选择模式（2026-09-20）：勾选任意行后整行点击改为切换勾选（防批量操作期间误触
+          跳详情），进详情只走任务名链接/「查看」；清空勾选恢复整行导航。已勾行淡 primary
+          底色标识当前模式（twMerge 覆盖基类 hover:bg-muted/70）。
           展开时去底边线——父行与嵌套子行组无缝相接（树形从属，组内子行间仍保留细线）。 */}
       <TableRow
-        onClick={() => nav(`${scanPath}/${defaultTab}`)}
-        className={`cursor-pointer ${open && expandable ? "border-b-0" : ""}`}
+        onClick={() => (selecting ? onToggleSelect() : nav(`${scanPath}/${defaultTab}`))}
+        className={`cursor-pointer ${checked ? "bg-primary/[0.07] hover:bg-primary/10" : ""} ${open && expandable ? "border-b-0" : ""}`}
       >
         {/* 勾选框 + 展开柄（2026-09-15 批量取消/续跑）：checkbox 常驻可勾（不按状态
             禁用——预筛在批量操作条按口径计数，用户可自由勾选后看横幅 skipped 明细）。
