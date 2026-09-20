@@ -2696,6 +2696,7 @@ class ScanManager:
             WorkflowExecutionStatus.TIMED_OUT,
             WorkflowExecutionStatus.TERMINATED,
         }
+        cancelled = False  # web 关停 cancel：跳过 finally 的 crashed 兜底（见 except）
         try:
             deadline = (time.monotonic() + self._scan_timeout) if self._scan_timeout > 0 else None
             describe_tick = 0
@@ -2722,9 +2723,17 @@ class ScanManager:
                         except Exception:
                             pass  # temporal 断连等:忽略,下个 tick 重试
                 await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            # web 进程关停取消 tail 循环：_watch 死 ≠ workflow 死——"worker 未写 scan_end"
+            # 的 crashed 兜底只对 workflow 真死成立，此时补写会把 Temporal 里还活着的扫描
+            # 打成 crashed（2026-09-18 假终态事故同源）。不写，留 running 交
+            # orphan_reconcile 按 Temporal 状态收口。re-raise 保 task 取消语义。
+            cancelled = True
+            raise
         finally:
-            # 兜底: 若 worker 未写 scan_end(异常/crash), 补一条
-            if not self._has_scan_end(event_file):
+            # 兜底: 若 worker 未写 scan_end(异常/crash), 补一条（web 关停 cancel 例外，
+            # 见 except CancelledError）
+            if not cancelled and not self._has_scan_end(event_file):
                 await self._write_scan_end(event_file, "crashed", -1, "worker 未写 scan_end")
             # 清理登记必须兜底: 即便 _write_scan_end 抛出, _handles/_tasks/_active_reqs 也得释放,
             # 否则 active_repo_sources() 误报引用.
@@ -3036,6 +3045,7 @@ class ScanManager:
         ws, scan_id = scan_key
         run_id: str | None = None
         final_status = "completed"
+        cancelled = False  # web 关停 cancel：跳过 finally 收口（见 except CancelledError）
         try:
             wb_result = await self._await_workflow_result(wb_handle)
             # 白盒正常返回 status=failed（部分 agent 失败，workflow 未 raise）：停止接力，不建黑盒 run。
@@ -3066,6 +3076,16 @@ class ScanManager:
             await self._run_blackbox_phase(
                 scan_dir, ws, scan_id, self._snapshot_auth_ref(req), run_id,
                 workflow_id_suffix=f"-bb-{k}")
+        except asyncio.CancelledError:
+            # web 进程关停取消编排协程：web 编排死了 ≠ 扫描死了——workflow 仍在 Temporal
+            # 跑。CancelledError 是 BaseException，except Exception 接不住，若放行到
+            # finally 会把在跑扫描收口成假 completed（2026-09-18 cross-repo-20260918-064512
+            # 事故：部署重启把整个在跑关联扫描写成 completed）。不写终态、不标 run failed，
+            # 留 running 交 orphan_reconcile 按 Temporal 状态收口；终态由取消方/对账方负责
+            # （对齐 _add_run_kickoff 既有 cancel 语义）。必须 re-raise：吞掉会破坏 task
+            # 取消语义（uvicorn 关停卡死）。
+            cancelled = True
+            raise
         except Exception as exc:
             final_status = "failed"
             # 接力任意阶段失败：run 已建则标该 run failed；白盒失败（run 未建）则 run_id
@@ -3074,9 +3094,10 @@ class ScanManager:
                 await self._mark_run(scan_dir, run_id, "failed",
                                      reason=str(exc), status="failed")
         finally:
-            # 幂等收尾：成功路径黑盒已写 scan_end → no-op；异常/跳过 → 补写。
-            await self._ensure_scan_end(scan_dir, status=final_status)
             self._orchestrator_tasks.pop(scan_key, None)
+            if not cancelled:
+                # 幂等收尾：成功路径黑盒已写 scan_end → no-op；异常/跳过 → 补写。
+                await self._ensure_scan_end(scan_dir, status=final_status)
 
     async def _combined_report_orchestrator(self, scan_key: tuple[str, str],
                                             bb_handle: Any, scan_dir: Path,
@@ -3092,6 +3113,7 @@ class ScanManager:
         （幂等）收尾（与 _combined_orchestrator 同构）。
         """
         final_status = "completed"
+        cancelled = False  # web 关停 cancel：跳过 finally 收口（同 _combined_orchestrator）
         try:
             bb_result = await self._await_workflow_result(bb_handle)
             # 对齐 _run_blackbox_phase 终态口径：workflow 正常返回 status=failed（未
@@ -3104,13 +3126,19 @@ class ScanManager:
                 return
             await self._generate_combined_report(scan_dir, run_id)
             await self._mark_run(scan_dir, run_id, "completed", status="completed")
+        except asyncio.CancelledError:
+            # web 编排死了 ≠ 扫描死了，不写终态留 running 交 orphan_reconcile
+            # （2026-09-18 假 completed 事故，详见 _combined_orchestrator 同款注释）。
+            cancelled = True
+            raise
         except Exception as exc:
             final_status = "failed"
             await self._mark_run(scan_dir, run_id, "failed",
                                  reason=str(exc), status="failed")
         finally:
-            await self._ensure_scan_end(scan_dir, status=final_status)
             self._orchestrator_tasks.pop(scan_key, None)
+            if not cancelled:
+                await self._ensure_scan_end(scan_dir, status=final_status)
 
     async def _correlation_orchestrator(self, scan_key: tuple[str, str],
                                         child_handles: dict[str, tuple[str, Any]],
@@ -3132,6 +3160,7 @@ class ScanManager:
         ws, scan_id = scan_key
         final_status = "completed"
         run_id: str | None = None
+        cancelled = False  # web 关停 cancel：跳过 finally 收口（见 except CancelledError）
         event_file = scan_dir / "events.ndjson"
         corr_writer = CorrelationEventWriter(event_file)
         try:
@@ -3163,6 +3192,16 @@ class ScanManager:
                     scan_dir, ws, scan_id, self._snapshot_auth_ref(req), run_id,
                     workflow_id_suffix=f"-bb-{k}",
                     correlated_workspace=scan_id)
+        except asyncio.CancelledError:
+            # web 进程关停取消编排协程：web 编排死了 ≠ 扫描死了——correlation workflow
+            # 恒在 Temporal（write_scan_end=False，任务级终态 100% 依赖本编排收口）。
+            # CancelledError 穿透 except Exception 落到 finally 会把在跑扫描收口成假
+            # completed（2026-09-18 cross-repo-20260918-064512 事故：部署重启时本协程
+            # 被 cancel，主行被写成 completed 而关联 workflow 还在跑）。不写终态，留
+            # running 交 orphan_reconcile 按 Temporal 状态收口。必须 re-raise：吞掉会
+            # 破坏 task 取消语义（uvicorn 关停卡死）。
+            cancelled = True
+            raise
         except Exception as exc:
             final_status = "failed"
             # 接力任意阶段失败：黑盒 run 已建则标该 run failed；关联/子仓阶段（run 未建）
@@ -3171,10 +3210,11 @@ class ScanManager:
                 await self._mark_run(scan_dir, run_id, "failed",
                                      reason=str(exc), status="failed")
         finally:
-            # 幂等收口（同 _combined_orchestrator）：events 无 scan_end 才写（唯一的
-            # 任务级终态事件；run 级 scan_end 由 _mark_run 终态钩子/黑盒 finalize 管）。
-            await self._ensure_scan_end(scan_dir, status=final_status)
             self._orchestrator_tasks.pop(scan_key, None)
+            if not cancelled:
+                # 幂等收口（同 _combined_orchestrator）：events 无 scan_end 才写（唯一的
+                # 任务级终态事件；run 级 scan_end 由 _mark_run 终态钩子/黑盒 finalize 管）。
+                await self._ensure_scan_end(scan_dir, status=final_status)
 
     def _build_combined_resume_req(self, data: dict, ws: str) -> ScanRequest:
         """从 session data 重建组合扫描 ScanRequest（resume 编排 task 用）。
@@ -3312,15 +3352,23 @@ class ScanManager:
         黑盒表单候选消失，无法再次发起黑盒）。
         """
         final_status = self._posthoc_run_task_terminal(scan_dir)
+        cancelled = False  # web 关停 cancel：跳过 finally 收口（见 except CancelledError）
         try:
             await self._run_blackbox_phase(
                 scan_dir, ws, scan_id, auth_ref, run_id, workflow_id_suffix=suffix)
+        except asyncio.CancelledError:
+            # web 编排死了 ≠ 扫描死了：不写任务级终态、也不把 run 标 failed（run 没失败，
+            # 是 web 关停），留 running 交 orphan_reconcile（2026-09-18 假 completed 事故，
+            # 详见 _combined_orchestrator 同款注释）。
+            cancelled = True
+            raise
         except Exception as exc:
             await self._mark_run(scan_dir, run_id, "failed",
                                  reason=str(exc), status="failed")
         finally:
-            await self._ensure_scan_end(scan_dir, status=final_status)
             self._orchestrator_tasks.pop(scan_key, None)
+            if not cancelled:
+                await self._ensure_scan_end(scan_dir, status=final_status)
 
     @staticmethod
     def _posthoc_pre_run_status(data: dict) -> str:
@@ -3893,6 +3941,7 @@ class ScanManager:
         bb_runs = data.get("bb_runs") or []
         wf_active = False  # 白盒或某 run 的 workflow 仍 RUNNING → 跳过 scan_end 补写
         final_status = "completed"  # precheck 分流改写（failed/interrupted）；其余维持默认
+        cancelled = False  # web 关停 cancel：跳过 finally 收口（见 except CancelledError）
 
         try:
             # 白盒 workflow：仍 running → 不干预（让 temporal 自然完成写 scan_end）。
@@ -3958,6 +4007,12 @@ class ScanManager:
                     await self._mark_run(
                         scan_dir, run_id, "failed",
                         reason="编排中断（web 重启），run 未完成", status="failed")
+        except asyncio.CancelledError:
+            # web 关停取消 reconcile 后台 task：与编排协程 cancel 同理不收口（对账被
+            # 中断 ≠ 扫描死了，写终态会把 Temporal 里还活着的组合扫描收成假终态）。
+            # 下次启动 reconcile 幂等重来（2026-09-18 假终态事故同源）。
+            cancelled = True
+            raise
         except Exception:  # noqa: BLE001 - reconcile 是兜底增强，绝不因单 scan 异常拖垮
             _log.exception("_reconcile_combined_scan failed for %s", scan_dir)
         finally:
@@ -3965,8 +4020,9 @@ class ScanManager:
             # raise（如 Task-8 _generate_combined_report NotImplementedError stub、或
             # _run_blackbox_phase 提交后抛），也要确保 events 有 scan_end，否则 scan
             # 永久卡 running（orphan_reconciler 已委托本方法、未写 interrupted 兜底）。
-            # workflow 仍活跃（wf_active=True）→ 跳过（让 temporal 自然完成写 scan_end）。
-            if not wf_active:
+            # workflow 仍活跃（wf_active=True）→ 跳过（让 temporal 自然完成写 scan_end）；
+            # web 关停 cancel（cancelled=True）→ 跳过（同上，重启后对账幂等补收口）。
+            if not wf_active and not cancelled:
                 try:
                     await self._ensure_scan_end(scan_dir, status=final_status)
                 except Exception:  # noqa: BLE001 - finally 内 best-effort

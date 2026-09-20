@@ -1696,3 +1696,139 @@ async def test_resume_preview_missing_scan_raises(tmp_path):
     sm, _ = _make_manager_with_store(tmp_path)
     with pytest.raises(ValueError, match="不存在"):
         await sm.resume_preview("ws", "nope")
+
+
+# ── 2026-09-18 假终态事故：web 关停 cancel 编排/收口协程不写终态 ───────────────
+# CancelledError 是 BaseException，except Exception 接不住；此前编排协程 finally 无条件
+# _ensure_scan_end(final_status=completed)，部署重启会把 Temporal 里还在跑的扫描写成
+# 假 completed（cross-repo-20260918-064512：主行 completed 而关联 workflow 仍 RUNNING）。
+# 修法：except CancelledError → re-raise + finally 跳过收口，留 running 交
+# orphan_reconcile 按 Temporal 状态收口。
+
+
+async def _hang(*_a, **_k):
+    """永挂的 fake await 点：编排协程 cancel 测试统一注入（只能被 cancel 打断）。"""
+    await asyncio.Event().wait()
+
+
+def _seed_running_scan(sm, name, scan_type="whitebox", extra=None):
+    """种一个 running scan 行，返回 (scan_key, scan_dir)。"""
+    from supernova_core.session import SessionManager
+
+    scan_id, scan_dir = sm._store.create_scan("ws", "", name, scan_type)
+    SessionManager(scan_dir.parent).update_session(
+        scan_dir, {"status": "running", **(extra or {})})
+    return ("ws", scan_id), scan_dir
+
+
+async def _cancel_and_assert_raised(task):
+    """cancel task 并断言 CancelledError 原样上抛（不吞取消语义）。"""
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+def _make_bare_manager(tmp_path, monkeypatch):
+    from supernova_web.components.multi_repo_config_store import MultiRepoConfigStore
+
+    sm = ScanManager(tmp_path, tmp_path / "r", MultiRepoConfigStore(tmp_path / "configs"))
+    _patch_temporal_ok(monkeypatch, sm)
+    return sm
+
+
+@pytest.mark.asyncio
+async def test_correlation_orchestrator_cancel_writes_no_scan_end(tmp_path, monkeypatch):
+    """编排协程被 cancel：不写 scan_end、session 保持 running、登记已清。"""
+    sm = _make_bare_manager(tmp_path, monkeypatch)
+    monkeypatch.setattr(type(sm), "_await_workflow_result", _hang)
+    scan_key, scan_dir = _seed_running_scan(sm, "corr-x", "correlation")
+    orch = asyncio.create_task(sm._correlation_orchestrator(
+        scan_key, {"svc": ("child-1", _FakeHandle("wb:child-1"))}, scan_dir,
+        ScanRequest(type="correlation", workspace="ws"),
+        Path("corr.yaml"), {"svc": scan_dir}))
+    sm._orchestrator_tasks[scan_key] = orch
+    await asyncio.sleep(0.01)  # 进入挂起的 fake await
+    await _cancel_and_assert_raised(orch)
+    assert not sm._has_scan_end(scan_dir / "events.ndjson")
+    sess = json.loads((scan_dir / "session.json").read_text("utf-8"))
+    assert sess["status"] == "running"
+    assert scan_key not in sm._orchestrator_tasks
+
+
+@pytest.mark.asyncio
+async def test_combined_orchestrator_cancel_writes_no_scan_end(tmp_path, monkeypatch):
+    sm = _make_bare_manager(tmp_path, monkeypatch)
+    monkeypatch.setattr(type(sm), "_await_workflow_result", _hang)
+    scan_key, scan_dir = _seed_running_scan(sm, "comb-x")
+    orch = asyncio.create_task(sm._combined_orchestrator(
+        scan_key, _FakeHandle("wb"), scan_dir,
+        ScanRequest(type="whitebox", workspace="ws")))
+    sm._orchestrator_tasks[scan_key] = orch
+    await asyncio.sleep(0.01)
+    await _cancel_and_assert_raised(orch)
+    assert not sm._has_scan_end(scan_dir / "events.ndjson")
+    assert scan_key not in sm._orchestrator_tasks
+
+
+@pytest.mark.asyncio
+async def test_combined_report_orchestrator_cancel_writes_no_scan_end(
+        tmp_path, monkeypatch):
+    sm = _make_bare_manager(tmp_path, monkeypatch)
+    monkeypatch.setattr(type(sm), "_await_workflow_result", _hang)
+    scan_key, scan_dir = _seed_running_scan(sm, "crep-x")
+    orch = asyncio.create_task(sm._combined_report_orchestrator(
+        scan_key, _FakeHandle("bb"), scan_dir, "run-1"))
+    sm._orchestrator_tasks[scan_key] = orch
+    await asyncio.sleep(0.01)
+    await _cancel_and_assert_raised(orch)
+    assert not sm._has_scan_end(scan_dir / "events.ndjson")
+    assert scan_key not in sm._orchestrator_tasks
+
+
+@pytest.mark.asyncio
+async def test_rerun_orchestrator_cancel_writes_no_scan_end_and_keeps_run(
+        tmp_path, monkeypatch):
+    """cancel 不把 run 标 failed（run 没失败，是 web 关停）。"""
+    sm = _make_bare_manager(tmp_path, monkeypatch)
+    monkeypatch.setattr(type(sm), "_run_blackbox_phase", _hang)
+    scan_key, scan_dir = _seed_running_scan(
+        sm, "rerun-x", extra={"bb_pre_run_status": "completed"})
+    orch = asyncio.create_task(sm._rerun_orchestrator(
+        scan_key, scan_dir, "ws", scan_key[1], {}, "run-1", "-bb-1"))
+    sm._orchestrator_tasks[scan_key] = orch
+    await asyncio.sleep(0.01)
+    await _cancel_and_assert_raised(orch)
+    assert not sm._has_scan_end(scan_dir / "events.ndjson")
+    runs = sm._store.list_blackbox_runs("ws", scan_key[1])
+    assert all(r.get("status") != "failed" for r in runs)
+    assert scan_key not in sm._orchestrator_tasks
+
+
+@pytest.mark.asyncio
+async def test_watch_cancel_writes_no_crashed_scan_end(tmp_path, monkeypatch):
+    """_watch 被 cancel：不补 crashed（"worker 未写 scan_end" 兜底只对 workflow 真死
+    成立），登记清理仍执行。"""
+    sm = _make_bare_manager(tmp_path, monkeypatch)
+    scan_key, scan_dir = _seed_running_scan(sm, "watch-x")
+    event_file = scan_dir / "events.ndjson"
+    watch = asyncio.create_task(sm._watch(scan_key, event_file, scan_dir))
+    sm._tasks[scan_key] = watch
+    await asyncio.sleep(0.01)
+    await _cancel_and_assert_raised(watch)
+    assert not sm._has_scan_end(event_file)
+    assert scan_key not in sm._tasks
+    assert scan_key not in sm._handles
+    assert scan_key not in sm._active_reqs
+
+
+@pytest.mark.asyncio
+async def test_reconcile_combined_scan_cancel_writes_no_scan_end(tmp_path, monkeypatch):
+    """reconcile 后台 task 被 cancel：finally 不收口（下次启动幂等重来）。"""
+    sm = _make_bare_manager(tmp_path, monkeypatch)
+    monkeypatch.setattr(type(sm), "_query_workflow_status", _hang)
+    _scan_key, scan_dir = _seed_running_scan(
+        sm, "recmb-x", extra={"combined": True})
+    task = asyncio.create_task(sm._reconcile_combined_scan(scan_dir))
+    await asyncio.sleep(0.01)
+    await _cancel_and_assert_raised(task)
+    assert not sm._has_scan_end(scan_dir / "events.ndjson")

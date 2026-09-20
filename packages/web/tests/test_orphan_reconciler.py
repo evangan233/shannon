@@ -341,3 +341,101 @@ async def test_reconcile_keeps_reconnecting_when_temporal_query_slow(tmp_path, m
     wrote = await reconcile_orphaned(scan_dir, is_running=False)
     assert wrote is False
     assert not (scan_dir / "events.ndjson").exists()
+
+
+# ── 2026-09-18 cross-repo 假终态事故：correlation probe id + COMPLETED 收口特判 ──
+
+def _make_scan_dir(tmp_path, scan_type="whitebox", status="running",
+                   resume_attempts=None, scan_id="corr-1"):
+    """scans/<scan_id> 结构的 scan 目录（_workflow_id_from_scan_dir 的合法入参）。
+    无 heartbeat 文件 = 判活 stale（孤儿前提）。"""
+    scan_dir = tmp_path / "workspaces" / "ws1" / "scans" / scan_id
+    scan_dir.mkdir(parents=True, exist_ok=True)
+    session = {"scan_type": scan_type, "status": status}
+    if resume_attempts:
+        session["resumeAttempts"] = resume_attempts
+    (scan_dir / "session.json").write_text(json.dumps(session), encoding="utf-8")
+    return scan_dir
+
+
+def test_workflow_id_correlation_uses_corr_suffix(tmp_path):
+    """correlation 主行 probe -corr 后缀（裸 id 会 NOT_FOUND 误判 ABSENT → 把活
+    workflow 标 interrupted）。"""
+    from supernova_web.components.orphan_reconciler import _workflow_id_from_scan_dir
+
+    scan_dir = _make_scan_dir(tmp_path, scan_type="correlation")
+    assert _workflow_id_from_scan_dir(scan_dir) == "ws1-corr-1-corr"
+
+
+def test_workflow_id_non_correlation_unchanged(tmp_path):
+    from supernova_web.components.orphan_reconciler import _workflow_id_from_scan_dir
+
+    scan_dir = _make_scan_dir(tmp_path, scan_type="whitebox")
+    assert _workflow_id_from_scan_dir(scan_dir) == "ws1-corr-1"
+    resumed = _make_scan_dir(tmp_path, scan_type="whitebox",
+                             resume_attempts=[{"workflowId": "x"}], scan_id="corr-2")
+    assert _workflow_id_from_scan_dir(resumed) == "ws1-corr-2-resume-1"
+
+
+@pytest.mark.asyncio
+async def test_reconciled_closed_correlation_completed_without_result_status(
+        tmp_path, monkeypatch):
+    """correlation result 无业务 status 键：Temporal COMPLETED 即成功（失败恒
+    raise → FAILED），不走白盒/黑盒的保守 interrupted 兜底。"""
+    from temporalio.client import WorkflowExecutionStatus
+    from supernova_web.components import orphan_reconciler as reconciler
+
+    async def _no_status(_scan_dir):
+        return None
+
+    monkeypatch.setattr(reconciler, "_closed_workflow_result_status", _no_status)
+    scan_dir = _make_scan_dir(tmp_path, scan_type="correlation")
+    assert await reconciler._reconciled_closed_status(
+        scan_dir, WorkflowExecutionStatus.COMPLETED) == "completed"
+
+
+@pytest.mark.asyncio
+async def test_reconciled_closed_whitebox_completed_without_result_status_stays_conservative(
+        tmp_path, monkeypatch):
+    """白盒/黑盒保守口径不回归：COMPLETED 且读不到业务 status → interrupted。"""
+    from temporalio.client import WorkflowExecutionStatus
+    from supernova_web.components import orphan_reconciler as reconciler
+
+    async def _no_status(_scan_dir):
+        return None
+
+    monkeypatch.setattr(reconciler, "_closed_workflow_result_status", _no_status)
+    scan_dir = _make_scan_dir(tmp_path, scan_type="whitebox")
+    assert await reconciler._reconciled_closed_status(
+        scan_dir, WorkflowExecutionStatus.COMPLETED) == "interrupted"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_correlation_orphan_workflow_completed_marks_completed(
+        tmp_path, monkeypatch):
+    """集成：correlation 孤儿（编排随重启丢失、heartbeat stale）+ Temporal COMPLETED
+    → 收口 completed（非 interrupted），reason 为对账文案而非 worker 心跳失败文案。"""
+    from temporalio.client import WorkflowExecutionStatus
+    from supernova_web.components import orphan_reconciler as reconciler
+
+    scan_dir = _make_scan_dir(tmp_path, scan_type="correlation", status="running")
+
+    async def _probe(_scan_dir):
+        return reconciler.WorkflowProbeResult(
+            reconciler.WorkflowProbe.CLOSED, WorkflowExecutionStatus.COMPLETED)
+
+    async def _no_status(_scan_dir):
+        return None
+
+    monkeypatch.setattr(reconciler, "_probe_workflow", _probe)
+    monkeypatch.setattr(reconciler, "_closed_workflow_result_status", _no_status)
+
+    wrote = await reconcile_orphaned(scan_dir, is_running=False)
+    assert wrote is True
+    line = json.loads((scan_dir / "events.ndjson").read_text("utf-8").strip())
+    assert line["type"] == "scan_end"
+    assert line["status"] == "completed"
+    assert "Temporal workflow 终态" in line["stderr_tail"]
+    sess = json.loads((scan_dir / "session.json").read_text("utf-8"))
+    assert sess["status"] == "completed"
+    assert sess["completed_at"] is not None

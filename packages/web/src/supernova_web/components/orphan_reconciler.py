@@ -101,6 +101,11 @@ def _workflow_id_from_scan_dir(scan_dir: Path) -> str | None:
     scan_dir = <workspaces>/<ws>/scans/<scan_id>（T3 1:N 结构）。非此结构（legacy 平铺 ws 根
     scan、或 default/ logs/ 等辅助目录）→ None，上层据此回退纯 heartbeat 判活。
     resume 后缀读 session.json resumeAttempts（与 scan_manager._resolve_workflow_id 同口径）。
+
+    correlation 主行特例（2026-09-18 cross-repo-20260918-064512 事故配对缺口）：workflow
+    id 恒为 {ws}-{scan_id}-corr（scan_manager._submit_correlation 拼后缀），且 correlation
+    不支持 resume（resume 契约 C4：关联扫描暂不支持断点恢复）——按裸 id probe 会 NOT_FOUND
+    误判 ABSENT，把 Temporal 里还活着的关联 workflow 收成 interrupted。
     """
     scans_dir = scan_dir.parent
     if scans_dir.name != "scans":  # legacy 根 scan / 辅助目录 → 无可靠 workflow_id
@@ -108,14 +113,21 @@ def _workflow_id_from_scan_dir(scan_dir: Path) -> str | None:
     ws = scans_dir.parent.name
     scan_id = scan_dir.name
     n = 0
+    scan_type: str | None = None
     session_file = scan_dir / "session.json"
     if session_file.exists():
         try:
-            att = json.loads(session_file.read_text("utf-8")).get("resumeAttempts") or []
+            data = json.loads(session_file.read_text("utf-8"))
+            att = data.get("resumeAttempts") or []
             if isinstance(att, list):
                 n = len(att)
+            st = data.get("scan_type")
+            if isinstance(st, str):
+                scan_type = st
         except (OSError, ValueError):
             n = 0
+    if scan_type == "correlation":
+        return f"{ws}-{scan_id}-corr"
     return f"{ws}-{scan_id}-resume-{n}" if n else f"{ws}-{scan_id}"
 
 
@@ -212,15 +224,36 @@ async def _closed_workflow_result_status(scan_dir: Path) -> str | None:
         return None
 
 
+def _scan_type_of(scan_dir: Path) -> str | None:
+    """读 session.json 的 scan_type（缺文件/坏 JSON/非字符串 → None）。"""
+    try:
+        data = json.loads((scan_dir / "session.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    st = data.get("scan_type") if isinstance(data, dict) else None
+    return st if isinstance(st, str) else None
+
+
 async def _reconciled_closed_status(scan_dir: Path,
                                     temporal_status: WorkflowExecutionStatus | None) -> str:
-    """结合 Temporal close status 与 workflow 返回的业务 status 生成最终状态。"""
+    """结合 Temporal close status 与 workflow 返回的业务 status 生成最终状态。
+
+    correlation 特判（2026-09-18 事故）：correlation workflow 的返回值没有业务 status 键
+    （run_correlation_phase 返回 {"edge_statuses", "deliverables_path"}），而其失败语义恒为
+    raise → Temporal FAILED（run_correlation_phase 注释「扫描失败不上探…scan_end 恒
+    completed」）。故 Temporal COMPLETED 即业务成功，直接 completed，不走下方
+    「COMPLETED 且读不到业务 status → 保守 interrupted」的兜底（该兜底为白盒/黑盒的
+    return-failed 语义设，对 correlation 恒误报 interrupted）。若未来 correlation 改为
+    return-failed 语义，此特判须同步撤销。
+    """
     fallback = _closed_business_status(temporal_status)
     if temporal_status is not WorkflowExecutionStatus.COMPLETED:
         return fallback
     result_status = await _closed_workflow_result_status(scan_dir)
     if result_status in {"completed", "failed", "cancelled", "killed", "crashed", "interrupted"}:
         return result_status
+    if _scan_type_of(scan_dir) == "correlation":
+        return "completed"
     return fallback
 
 
@@ -294,9 +327,15 @@ async def reconcile_orphaned(ws_dir: Path, is_running: bool,
 
         final_status = (await _reconciled_closed_status(ws_dir, probe.temporal_status)
                         if probe.kind is WorkflowProbe.CLOSED else "interrupted")
-        reason = ("扫描未检测到 worker 心跳——worker 容器可能未启动或已退出"
-                  "（worker 应在扫描提交后数秒内写首个 heartbeat；持续无心跳请检查"
-                  " worker 容器是否运行，如 ./scripts/up.sh 是否已带起 worker）")
+        if final_status == "completed":
+            # workflow 正常完成的收口（典型：correlation 编排随 web 重启丢失）——
+            # 不带下方 worker 心跳失败文案（成功收口配失败原因误导）。
+            reason = ("web 编排随进程重启丢失，由对账按 Temporal workflow 终态收口"
+                      "（workflow 正常完成，产物已落 deliverables/）")
+        else:
+            reason = ("扫描未检测到 worker 心跳——worker 容器可能未启动或已退出"
+                      "（worker 应在扫描提交后数秒内写首个 heartbeat；持续无心跳请检查"
+                      " worker 容器是否运行，如 ./scripts/up.sh 是否已带起 worker）")
         tail = _failure_tail(ws_dir)
         if tail:
             reason = reason + "；activity 失败日志尾部：\n" + tail
