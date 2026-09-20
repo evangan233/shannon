@@ -383,8 +383,16 @@ async def run_correlation_phase(
     #    隔离:阶段 A 产物照常交付,scan 终态不受影响(spec §10)。
     adjudication_cards: list[dict] = []
     try:
+        # 批大小可调（SUPERNOVA_ADJUDICATION_BATCH_LIMIT，默认 15）：更小的批 ×
+        # 批间并发（run_adjudication_phase 内部，独立 env 上限）→ 单批 prompt 更小、
+        # 总时长成倍缩短（2026-09-20 cross-repo 串行大批排队的结构性优化）。
+        try:
+            batch_limit = max(1, int(os.getenv("SUPERNOVA_ADJUDICATION_BATCH_LIMIT", "15")))
+        except ValueError:
+            batch_limit = 15
         batches = build_adjudication_batches(findings_by_service,
-                                             dismissed_by_service)
+                                             dismissed_by_service,
+                                             batch_limit=batch_limit)
         if batches:
             await corr_writer.phase("adjudication", "started")
             from supernova_multi.adjudication_phase import run_adjudication_phase
@@ -399,7 +407,10 @@ async def run_correlation_phase(
                     "flows": [f for e in validated_edges
                               for f in e.get("flows", [])],
                     "multi_hop_chains": multi_hop_chains},
-                executor=executor, sem=sem,
+                executor=executor,
+                # sem 不传：adjudication 批是大 prompt，独立并发上限
+                # （SUPERNOVA_ADJUDICATION_MAX_CONCURRENT，默认 3），不随
+                # edge agents 的 SUPERNOVA_MAX_CONCURRENT 池放大限流风险。
                 repo_path=str(out_ws), deliverables_path=str(out_dlv),
                 pipeline_testing=pipeline_testing,
                 provider_config=provider_config,

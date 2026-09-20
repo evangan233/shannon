@@ -128,7 +128,11 @@ async def _run_with_writer(executor, batches, writer):
 
 @pytest.mark.asyncio
 async def test_batch_progress_events_written():
-    """批 started/completed 事件按序落 writer（2026-09-20 cross-repo 零观测遗留项）。"""
+    """批 started/completed 事件落 writer（2026-09-20 cross-repo 零观测遗留项）。
+
+    批并发跑（gather）——批间事件顺序不保证，按批分组断言：每批恰好一对
+    started→completed，批内 started 先于 completed，detail 带批序与 cards 数。
+    """
     ok = {"cards": [{
         "direction": "confirm", "finding_ref": {"service": "order-svc",
                                                 "vuln_id": "INJ-1", "origin": "queue"},
@@ -136,13 +140,45 @@ async def test_batch_progress_events_written():
     ex = FakeExecutor([ok, ok])
     writer = FakeWriter()
     await _run_with_writer(ex, [_batch(ids=("INJ-1",)), _batch(vc="authz")], writer)
-    assert [e[1] for e in writer.events] == ["started", "completed",
-                                             "started", "completed"]
-    assert all(e[0] == "order-svc/injection" or e[0] == "order-svc/authz"
-               for e in writer.events)
-    # detail 带批序与 cards 数
-    assert "1/2" in writer.events[0][2] and "completed" == writer.events[1][1]
-    assert "cards=1" in writer.events[1][2]
+    by_label: dict[str, list[tuple[str, str | None]]] = {}
+    for name, status, detail in writer.events:
+        by_label.setdefault(name, []).append((status, detail))
+    assert set(by_label) == {"order-svc/injection", "order-svc/authz"}
+    batch_nums = set()
+    for name, evs in by_label.items():
+        assert [s for s, _ in evs] == ["started", "completed"]
+        assert "cards=1" in evs[1][1]
+        batch_nums.add(evs[0][1].split(" ")[0])   # started detail 首词 = "i/total"
+    assert batch_nums == {"1/2", "2/2"}           # 两批批序各占其一
+
+
+class ProbeExecutor:
+    """记录最大同时在飞批数（验证 gather 并发 + sem 限流）。"""
+
+    def __init__(self):
+        self.inflight = 0
+        self.max_inflight = 0
+
+    async def execute(self, **kw):
+        self.inflight += 1
+        self.max_inflight = max(self.max_inflight, self.inflight)
+        await asyncio.sleep(0.05)
+        self.inflight -= 1
+        return _M({"cards": []})
+
+
+@pytest.mark.asyncio
+async def test_batches_run_concurrently_bounded_by_sem():
+    """批并发执行且受 sem 限流（2026-09-20 串行 for 循环的回归锁）。"""
+    ex = ProbeExecutor()
+    batches = [_batch(ids=(f"INJ-{i}",)) for i in range(4)]
+    await run_adjudication_phase(
+        batches=batches,
+        artifacts_by_service=_artifacts(["gateway", "order-svc"]),
+        correlation_context={"edges": [], "flows": [], "multi_hop_chains": []},
+        executor=ex, sem=asyncio.Semaphore(2),
+        repo_path="/ws", deliverables_path="/ws/deliverables")
+    assert ex.max_inflight == 2          # 恰好 2 路并发（串行则 =1，无限流则 =4）
 
 
 @pytest.mark.asyncio
@@ -171,3 +207,16 @@ async def test_exec_timeout_yields_error_cards(monkeypatch):
     assert cards[0]["direction"] == "error"
     assert "wall-clock" in cards[0]["reasoning"]
     assert writer.events[1][1] == "failed"
+
+
+def test_batch_concurrency_env_parsing(monkeypatch):
+    """独立并发上限 env：缺省 3；合法值生效；垃圾/非法值回落默认（不炸 scan）。"""
+    from supernova_multi.adjudication_phase import _batch_concurrency
+    monkeypatch.delenv("SUPERNOVA_ADJUDICATION_MAX_CONCURRENT", raising=False)
+    assert _batch_concurrency() == 3
+    monkeypatch.setenv("SUPERNOVA_ADJUDICATION_MAX_CONCURRENT", "5")
+    assert _batch_concurrency() == 5
+    monkeypatch.setenv("SUPERNOVA_ADJUDICATION_MAX_CONCURRENT", "abc")
+    assert _batch_concurrency() == 3
+    monkeypatch.setenv("SUPERNOVA_ADJUDICATION_MAX_CONCURRENT", "0")
+    assert _batch_concurrency() == 3
