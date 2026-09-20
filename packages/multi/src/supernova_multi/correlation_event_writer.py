@@ -77,6 +77,19 @@ class CorrelationEventWriter:
                             "type": "correlation_progress", "node": "edge",
                             "name": name, "status": mapped, "detail": detail})
 
+    async def adjudication_batch(self, name: str, status: str,
+                                 detail: str | None = None) -> None:
+        """阶段 B 批级进度（node=adjudication-batch）：批 started/completed/failed。
+
+        2026-09-20 cross-repo-20260920-073614：批循环此前零观测——events.ndjson
+        在 adjudication started 后 50min 无任何更新，live 页「哑火」疑似卡死。
+        批次进度事件是跨仓可观测性的既有遗留项，本方法为其转正。前端
+        LogStream correlation_progress 分支对任意 node 通用渲染，零改动。
+        """
+        await self._append({"ts": _now_iso(), "category": "CONTROL",
+                            "type": "correlation_progress", "node": "adjudication-batch",
+                            "name": name, "status": status, "detail": detail})
+
     async def scan_end(self, status: str) -> None:
         await self._append({"ts": _now_iso(), "category": "CONTROL",
                             "type": "scan_end", "status": status})

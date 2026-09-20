@@ -402,7 +402,8 @@ async def run_correlation_phase(
                 executor=executor, sem=sem,
                 repo_path=str(out_ws), deliverables_path=str(out_dlv),
                 pipeline_testing=pipeline_testing,
-                provider_config=provider_config)
+                provider_config=provider_config,
+                corr_writer=corr_writer)
             await corr_writer.phase("adjudication", "completed")
     except Exception as e:  # noqa: BLE001 —— 阶段 B 整体异常:留痕不阻断
         logger.warning("adjudication phase failed (phase A deliverables kept): %s", e)
