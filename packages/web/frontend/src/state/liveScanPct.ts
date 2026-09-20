@@ -34,9 +34,10 @@ export function liveScanPct(
   events: NdjsonEvent[],
   scan: { combined?: boolean | null; scan_type: string },
 ): number | null {
-  // 子仓源（src=c-<scan_id>，2026-09-10 归并流扩子仓）不进列表行进度 fold——其白盒
-  // PhaseEvent(start) 的网格重置语义会清掉 correlation_progress 累积网格。子仓行各自
-  // 订阅自己的流（无 c-* 源），不受影响。
+  // 子仓源（src=c-<scan_id>，2026-09-10 归并流扩子仓）不进列表行进度 fold——分流
+  // 2026-09-20 已收进 dashboardReducer（c-* 源只透传阶段进 repo 行 detail，网格/
+  // 终态不动），此处 reduce 前过滤为冗余防御保留。子仓行各自订阅自己的流（无
+  // c-* 源），不受影响。
   const mainEvents = events.filter((e) => !String(e.src ?? "").startsWith("c-"));
   const state = mainEvents.reduce(dashboardReducer, emptyState());
   const ratio = state.total_units > 0

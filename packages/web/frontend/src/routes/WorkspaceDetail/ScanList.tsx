@@ -750,8 +750,10 @@ function ScanRow({ ws, scan, scansById, onChanged, checked, onToggleSelect }: {
   const sseUrl = isRunning ? scanEventsUrl(ws, scan.scan_id) : "";
   const { events, hydrated } = useEventSource(sseUrl);
   // 子仓源（src=c-<scan_id>，2026-09-10 归并流扩子仓）不进列表行阶段——correlation
-  // 主行流现含现扫子仓白盒日志，其 PhaseEvent 不得冒充主行阶段（主行三段网格无
-  // PhaseEvent，过滤后维持无后缀现状）。子仓行自己的流无 c-* 源，不受影响。
+  // 主行流现含现扫子仓白盒日志，其 PhaseEvent 不得冒充主行阶段。2026-09-20 起
+  // 分流已收进 dashboardReducer（c-* 源只透传阶段进 repo 行 detail），此处 reduce
+  // 前过滤为冗余防御保留；列表行阶段后缀显示编排 phase 事件（repo-scan /
+  // correlation / adjudication / 段③黑盒阶段名）。子仓行自己的流无 c-* 源，不受影响。
   const mainEvents = useMemo(
     () => events.filter((e) => !String(e.src ?? "").startsWith("c-")),
     [events]);

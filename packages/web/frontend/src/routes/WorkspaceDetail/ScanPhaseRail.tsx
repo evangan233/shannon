@@ -14,8 +14,10 @@ import type { DashboardState } from "@/state/dashboardReducer";
  * （phase_status/resumed_completed）只补状态不补顺序——计划外观察到的阶段
  * （如组合扫描黑盒段 preflight/exploitation）不进轨道，段级语义由
  * CombinedDetailTimeline 叙述。阶段 slug 保持原文（与日志/current_phase
- * 同源，不造翻译层）。correlation 不渲染（三段接力的网格模型在
- * phase_units/进度条，计划序不适用）。
+ * 同源，不造翻译层）。correlation 四节点轨（2026-09-20 跨仓 live 阶段）：
+ * repo-scan（段① 子仓白盒，编排 phase 事件 + repo 行点亮双源）→ correlation
+ * → adjudication（段② node=phase）→ blackbox-verify（段③ run 的黑盒四阶段
+ * 观察聚合，未配 gateway URL 时常驻 pending——与「计划内未跑到」同语义）。
  */
 
 // 白盒旅程（step_intents.PHASE_STEPS 键序 = workflows PhaseEvent 发射序）。
@@ -27,9 +29,13 @@ const WHITEBOX_PHASES = [
 // 黑盒旅程（blackbox workflows：preflight → auth-validation → exploitation → reporting）。
 const BLACKBOX_PHASES = ["preflight", "auth-validation", "exploitation", "reporting"] as const;
 
+// 跨仓关联旅程（三段接力）：段① 子仓白盒 → 段② 关联 + 裁决 → 段③ 黑盒验证（可选）。
+const CORRELATION_PHASES = ["repo-scan", "correlation", "adjudication", "blackbox-verify"] as const;
+
 function planFor(scanType: string | null | undefined): readonly string[] | null {
   if (scanType === "whitebox" || scanType === "combined") return WHITEBOX_PHASES;
   if (scanType === "blackbox") return BLACKBOX_PHASES;
+  if (scanType === "correlation") return CORRELATION_PHASES;
   return null;
 }
 
@@ -44,13 +50,31 @@ const RESUME_SEED_PHASE: Record<string, string> = {
 export type PhaseMark = "pending" | "running" | "done" | "failed" | "halted";
 
 /** 阶段状态合成：观察序 phase_status 优先；无观察时用 Resume 种子（续跑跳过
- *  的已完成阶段不重发 PhaseEvent）；都无 → pending（计划内未跑到）。 */
+ *  的已完成阶段不重发 PhaseEvent）；都无 → pending（计划内未跑到）。
+ *  blackbox-verify 特判：该节点无同名 phase，聚合段③黑盒 run 四阶段的观察。 */
 function phaseMark(state: DashboardState, phase: string): PhaseMark {
+  if (phase === "blackbox-verify") return verifyMark(state);
   const observed = state.phase_status[phase];
   if (observed) return observed;
   const seedAgent = Object.entries(RESUME_SEED_PHASE)
     .find(([agent, p]) => p === phase && state.resumed_completed.includes(agent));
   return seedAgent ? "done" : "pending";
+}
+
+/** verify 段聚合（correlation 轨专属）：段③黑盒 run 的 PhaseEvent 写进
+ *  phase_status 的四个黑盒阶段观察——无观察 → pending（未配 gateway URL 或未跑到）；
+ *  failed/halted 优先保留现场；有 running 或部分 done → running（run 进行中）；
+ *  四阶段全 done → done。 */
+function verifyMark(state: DashboardState): PhaseMark {
+  const observed = BLACKBOX_PHASES
+    .map((p) => state.phase_status[p])
+    .filter((v): v is NonNullable<typeof v> => Boolean(v));
+  if (observed.length === 0) return "pending";
+  if (observed.includes("failed")) return "failed";
+  if (observed.includes("halted")) return "halted";
+  return observed.length === BLACKBOX_PHASES.length && observed.every((v) => v === "done")
+    ? "done"
+    : "running";
 }
 
 // 轨道 glyph：与步级明细（unitGlyph）/进度条分段同色系——绿✓/红✗/muted·，

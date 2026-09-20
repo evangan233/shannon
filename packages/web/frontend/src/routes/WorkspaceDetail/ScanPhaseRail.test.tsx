@@ -125,10 +125,69 @@ describe("ScanPhaseRail", () => {
     expect(rail.querySelector('[data-phase="preflight"]')).toBeNull();
   });
 
-  it("correlation / 缺省 scanType → 不渲染", () => {
-    const { rerender } = render(<ScanPhaseRail state={emptyState()} scanType="correlation" />);
-    expect(screen.queryByTestId("scan-phase-rail")).not.toBeInTheDocument();
-    rerender(<ScanPhaseRail state={emptyState()} scanType={undefined} />);
+  // === correlation 四节点轨（2026-09-20 跨仓 live 阶段）===
+  it("correlation 计划序：repo-scan → correlation → adjudication → blackbox-verify 常驻", () => {
+    render(<ScanPhaseRail state={emptyState()} scanType="correlation" />);
+    const chips = screen.getByTestId("scan-phase-rail").querySelectorAll("[data-phase]");
+    expect(Array.from(chips).map((c) => c.getAttribute("data-phase"))).toEqual([
+      "repo-scan", "correlation", "adjudication", "blackbox-verify",
+    ]);
+    chips.forEach((c) => expect(c).toHaveAttribute("data-status", "pending"));
+  });
+
+  it("correlation 三段事件流：repo-scan done（新 phase 事件）/ correlation running / 后续 pending", () => {
+    const state = foldState([
+      ev({ type: "correlation_progress", category: "CONTROL", node: "repo", name: "frontend", status: "started" }),
+      ev({ type: "correlation_progress", category: "CONTROL", node: "phase", name: "repo-scan", status: "completed" }),
+      ev({ type: "correlation_progress", category: "CONTROL", node: "phase", name: "correlation", status: "started" }),
+    ]);
+    render(<ScanPhaseRail state={state} scanType="correlation" />);
+    const rail = screen.getByTestId("scan-phase-rail");
+    expect(rail.querySelector('[data-phase="repo-scan"]')).toHaveAttribute("data-status", "done");
+    expect(rail.querySelector('[data-phase="correlation"]')).toHaveAttribute("data-status", "running");
+    expect(rail.querySelector('[data-phase="adjudication"]')).toHaveAttribute("data-status", "pending");
+    expect(rail.querySelector('[data-phase="blackbox-verify"]')).toHaveAttribute("data-status", "pending");
+  });
+
+  it("旧事件流回放（无 repo-scan phase 事件）：repo 行点亮 + correlation started 兜底收 done", () => {
+    const state = foldState([
+      ev({ type: "correlation_progress", category: "CONTROL", node: "repo", name: "frontend", status: "completed" }),
+      ev({ type: "correlation_progress", category: "CONTROL", node: "phase", name: "correlation", status: "started" }),
+    ]);
+    render(<ScanPhaseRail state={state} scanType="correlation" />);
+    const rail = screen.getByTestId("scan-phase-rail");
+    expect(rail.querySelector('[data-phase="repo-scan"]')).toHaveAttribute("data-status", "done");
+    expect(rail.querySelector('[data-phase="correlation"]')).toHaveAttribute("data-status", "running");
+  });
+
+  it("blackbox-verify 聚合段③ run 观察：有 running → running；全 done → done；无观察 → pending", () => {
+    // 段③黑盒 run 的 PhaseEvent（run-K 源不经 c- 过滤）写 phase_status
+    const runningState = foldState([
+      ev({ type: "PhaseEvent", phase: "preflight", event: "start" }),
+      ev({ type: "PhaseEvent", phase: "auth-validation", event: "start" }), // preflight 隐式收 done
+    ]);
+    const { rerender } = render(<ScanPhaseRail state={runningState} scanType="correlation" />);
+    expect(screen.getByTestId("scan-phase-rail").querySelector('[data-phase="blackbox-verify"]'))
+      .toHaveAttribute("data-status", "running");
+
+    const allDone = foldState([
+      ev({ type: "PhaseEvent", phase: "preflight", event: "start" }),
+      ev({ type: "PhaseEvent", phase: "auth-validation", event: "start" }),
+      ev({ type: "PhaseEvent", phase: "exploitation", event: "start" }),
+      ev({ type: "PhaseEvent", phase: "reporting", event: "start" }),
+      ev({ type: "scan_end", category: "CONTROL", status: "completed" }),
+    ]);
+    rerender(<ScanPhaseRail state={allDone} scanType="correlation" />);
+    expect(screen.getByTestId("scan-phase-rail").querySelector('[data-phase="blackbox-verify"]'))
+      .toHaveAttribute("data-status", "done");
+
+    rerender(<ScanPhaseRail state={emptyState()} scanType="correlation" />);
+    expect(screen.getByTestId("scan-phase-rail").querySelector('[data-phase="blackbox-verify"]'))
+      .toHaveAttribute("data-status", "pending");
+  });
+
+  it("缺省 scanType → 不渲染（correlation 已开放，缺省保持既有零变化）", () => {
+    const { rerender } = render(<ScanPhaseRail state={emptyState()} scanType={undefined} />);
     expect(screen.queryByTestId("scan-phase-rail")).not.toBeInTheDocument();
     rerender(<ScanPhaseRail state={emptyState()} scanType={null} />);
     expect(screen.queryByTestId("scan-phase-rail")).not.toBeInTheDocument();

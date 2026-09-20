@@ -3166,15 +3166,22 @@ class ScanManager:
         try:
             # 段①：await 全部现扫子仓（dict 序 = 提交序）；任一子仓 workflow 返回
             # status=failed（或 raise，走下方 except）→ 主行 failed，不进关联阶段。
+            # phase("repo-scan")（2026-09-20 跨仓 live 阶段）：段①是全流程最长时段，
+            # 编排层发 phase 事件让主行「当前阶段」槽 + 阶段轨（ScanPhaseRail 的
+            # CORRELATION_PHASES）可见；子仓细分阶段由前端 reducer 透传（src=c-* 的
+            # PhaseEvent → repo 行 detail），不在此聚合。
+            await corr_writer.phase("repo-scan", "started")
             for svc, (_c_scan_id, wb_handle) in child_handles.items():
                 result = await self._await_workflow_result(wb_handle)
                 status = (result.get("status") if isinstance(result, dict)
                           else getattr(result, "status", None))
                 if status == "failed":
                     await corr_writer.repo(svc, "failed", detail="scan failed")
+                    await corr_writer.phase("repo-scan", "failed")
                     final_status = "failed"
                     return  # finally 走 _ensure_scan_end(failed) + pop _orchestrator_tasks
                 await corr_writer.repo(svc, "completed")
+            await corr_writer.phase("repo-scan", "completed")
             # 段②：关联阶段（repo_workspace_paths = 复用 scan_dir ∪ 现扫 c_dir）。
             await corr_writer.phase("correlation", "started")
             handle = await self._submit_correlation(

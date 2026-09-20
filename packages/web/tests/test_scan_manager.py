@@ -883,6 +883,12 @@ async def test_start_correlation_creates_main_and_children(tmp_path, monkeypatch
               if l.strip()]
     types = [e.get("type") for e in events]
     assert types.count("correlation_progress") >= 5  # 2 repo started + 2 completed + 2 phase
+    # 段① phase 事件（2026-09-20 跨仓 live 阶段）：repo-scan started/completed 领先
+    # 于 correlation——前端「当前阶段」槽段①显示 repo-scan + 阶段轨点亮。
+    phase_events = [(e.get("name"), e.get("status")) for e in events
+                    if e.get("type") == "correlation_progress" and e.get("node") == "phase"]
+    assert phase_events == [("repo-scan", "started"), ("repo-scan", "completed"),
+                            ("correlation", "started"), ("correlation", "completed")]
     assert "scan_end" in types
     assert (ws_name, scan_id) not in sm._orchestrator_tasks  # 编排 finally 自清
     assert (ws_name, scan_id) not in sm._active_reqs  # _watch 退出清引用

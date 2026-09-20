@@ -107,19 +107,17 @@ export function ScanProgressOverview({
   const { t } = useTranslation();
   const eventsUrl = mergedScanEventsUrl(ws, scanId, runsCount);
   const { events, status } = useEventSource(eventsUrl);
-  // 子仓源（src=c-<scan_id>，2026-09-10 归并流纳入的现扫子仓白盒日志）不进主行概览
-  // fold——其 PhaseEvent start 的网格重置语义会清掉 correlation 网格，agent 芯片归
-  // 子行自己的详情页看。live tab 的 LogStream 不过滤（子仓日志正是要看的内容）。
-  const mainEvents = useMemo(
-    () => events.filter((e) => !String(e.src ?? "").startsWith("c-")),
-    [events]);
-  const state = useMemo(() => mainEvents.reduce(dashboardReducer, emptyState()), [mainEvents]);
+  // 子仓源（src=c-<scan_id>，2026-09-10 归并流纳入的现扫子仓白盒日志）的分流收在
+  // dashboardReducer（2026-09-20）：子仓 PhaseEvent 的阶段名写进 repo 行 detail（阶段
+  // 透传），网格重置/end_status 污染/agent 芯片混仓在 reducer 挡住——组件全量 fold，
+  // 不再 reduce 前过滤。live tab 的 LogStream 不过滤（子仓日志正是要看的内容）。
+  const state = useMemo(() => events.reduce(dashboardReducer, emptyState()), [events]);
   // 同一 eventsUrl 只通知一次（切换 run 换 URL 后重新通知）；历史回放里的 scan_end 也会
-  // 触发一次首拉刷新，幂等无害。
+  // 触发一次首拉刷新，幂等无害。子仓源 scan_end 不算主行终态（c-* 排除）。
   const endedFor = useRef<string | null>(null);
   useEffect(() => {
     if (!onScanEnd || endedFor.current === eventsUrl) return;
-    if (events.some((e) => e.type === "scan_end")) {
+    if (events.some((e) => e.type === "scan_end" && !String(e.src ?? "").startsWith("c-"))) {
       endedFor.current = eventsUrl;
       onScanEnd();
     }

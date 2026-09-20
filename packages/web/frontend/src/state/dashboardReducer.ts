@@ -105,6 +105,22 @@ function derive(s: DashboardState): DashboardState {
 export function dashboardReducer(state: DashboardState, event: NdjsonEvent): DashboardState {
   let next: DashboardState = state;
 
+  // 子仓源分流（2026-09-20 跨仓 live 阶段透传）：src=c-<scan_id> 的现扫子仓白盒
+  // 事件只取 PhaseEvent start——子仓当前阶段写进 repo 行 unit_intent[service]
+  // （service 与编排 repo(svc) 行名一致，MergedEventTailer 已注入），主网格/
+  // current_phase/phase_status/agents 一概不动：网格重置、end_status 污染、agent
+  // 芯片混仓都在此挡住（原先由 ScanProgressOverview 的 reduce 前过滤承担，收进
+  // reducer 后组件与列表页共用同一语义）。其余子仓事件类型全忽略。
+  if (String(event.src ?? "").startsWith("c-")) {
+    if (event.type === "PhaseEvent" && event.event === "start" && event.service) {
+      next = {
+        ...state,
+        unit_intent: { ...state.unit_intent, [event.service]: event.phase },
+      };
+    }
+    return derive(next);
+  }
+
   switch (event.type) {
     case "PhaseEvent": {
       // 阶段轨道 fold（前端扩展，见 DashboardState.phase_status 注释）：start 把其余
@@ -282,7 +298,23 @@ export function dashboardReducer(state: DashboardState, event: NdjsonEvent): Das
       // 累积网格（repo 段成果保留到 edge 段；段③黑盒 run 的常规 PhaseEvent start 进来
       // 才按既有语义重置）。
       if (event.node === "phase") {
-        next = { ...state, current_phase: event.name };
+        // 阶段轨 fold（2026-09-20 跨仓 live 阶段轨）：node=phase 也写 phase_status
+        // ——correlation 主行无 PhaseEvent，ScanPhaseRail 的 CORRELATION_PHASES 靠
+        // 此点亮；started 把其余 running 阶段隐式收 done（与 PhaseEvent start 同一
+        // 兜底：下一阶段 start 即前序完结的证据——旧事件流回放时 repo-scan 也经
+        // 此收口）。
+        const mark: "running" | "done" | "failed" =
+          event.status === "completed" ? "done"
+          : event.status === "failed" ? "failed"
+          : "running";
+        const ps: DashboardState["phase_status"] = { ...state.phase_status };
+        if (mark === "running") {
+          for (const k of Object.keys(ps)) {
+            if (ps[k] === "running" && k !== event.name) ps[k] = "done";
+          }
+        }
+        ps[event.name] = mark;
+        next = { ...state, current_phase: event.name, phase_status: ps };
         break;
       }
       const status: string =
@@ -297,6 +329,15 @@ export function dashboardReducer(state: DashboardState, event: NdjsonEvent): Das
         phase_units,
         unit_status: { ...state.unit_status, [event.name]: status },
       };
+      // repo 行首次出现即点亮 repo-scan 段（2026-09-20）：编排 phase("repo-scan")
+      // 事件之前的历史流回放兼容——段① running；收 done 走 node=phase started 的
+      // 兜底（correlation start 隐式收前序）或 scan_end 终态收敛。已有观察不降级。
+      if (event.node === "repo" && !next.phase_status["repo-scan"]) {
+        next = {
+          ...next,
+          phase_status: { ...next.phase_status, "repo-scan": "running" },
+        };
+      }
       if (event.detail) {
         next = { ...next, unit_intent: { ...next.unit_intent, [event.name]: event.detail } };
       }

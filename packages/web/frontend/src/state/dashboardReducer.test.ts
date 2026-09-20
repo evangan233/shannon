@@ -503,6 +503,70 @@ describe("dashboardReducer — correlation_progress 事件", () => {
     expect(s.phase_units).toEqual(["recon"]);
     expect(s.current_phase).toBe("recon");
   });
+
+  // ── 2026-09-20 跨仓 live 阶段透传：node=phase 写 phase_status（阶段轨可点亮）──
+  it("phase started/completed：写 phase_status；started 把其余 running 阶段隐式收 done", () => {
+    let s = dashboardReducer(emptyState(), corr("phase", "repo-scan", "started"));
+    expect(s.phase_status["repo-scan"]).toBe("running");
+    s = dashboardReducer(s, corr("phase", "correlation", "started"));
+    expect(s.phase_status["repo-scan"]).toBe("done"); // 下一阶段 start = 前序完结兜底
+    expect(s.phase_status["correlation"]).toBe("running");
+    s = dashboardReducer(s, corr("phase", "correlation", "completed"));
+    expect(s.phase_status["correlation"]).toBe("done");
+  });
+
+  it("phase failed：phase_status 标 failed（停在出事阶段）", () => {
+    const s = dashboardReducer(emptyState(), corr("phase", "correlation", "failed"));
+    expect(s.phase_status["correlation"]).toBe("failed");
+  });
+
+  it("repo started/completed：点亮 phase_status[repo-scan]=running（旧事件流回放兼容）", () => {
+    // 无编排 phase("repo-scan") 事件的历史流：首个 repo 行出现即段① running；
+    // 收 done 走 node=phase started 兜底（correlation start 隐式收前序）。
+    let s = dashboardReducer(emptyState(), corr("repo", "frontend", "started"));
+    expect(s.phase_status["repo-scan"]).toBe("running");
+    s = dashboardReducer(s, corr("phase", "correlation", "started"));
+    expect(s.phase_status["repo-scan"]).toBe("done");
+    // reused-only：repo completed 直发（无 started）同样点亮
+    let r = dashboardReducer(emptyState(), corr("repo", "users", "completed", "reused"));
+    expect(r.phase_status["repo-scan"]).toBe("running");
+  });
+
+  // ── 2026-09-20 子仓源（src=c-*）分流：阶段透传进 repo 行，其余全忽略 ──
+  it("子仓源 PhaseEvent：阶段写进 repo 行 unit_intent[service]，不动主网格/current_phase/phase_status", () => {
+    let s = dashboardReducer(emptyState(), corr("repo", "frontend", "started"));
+    s = dashboardReducer(s, corr("repo", "order-svc", "started"));
+    s = dashboardReducer(s, ev({
+      type: "PhaseEvent", category: "PHASE", phase: "recon", event: "start",
+      src: "c-os-456", service: "order-svc",
+    }));
+    expect(s.current_phase).toBeNull(); // 不冒充主行阶段
+    expect(s.phase_units).toEqual(["frontend", "order-svc"]); // 网格不重置
+    expect(s.unit_status).toEqual({ frontend: "running", "order-svc": "running" });
+    expect(s.unit_intent["order-svc"]).toBe("recon"); // 子仓当前阶段进行 detail
+    expect(s.phase_status).toEqual({ "repo-scan": "running" }); // 不写子仓阶段
+    // 阶段推进覆盖 detail（最新阶段名）
+    s = dashboardReducer(s, ev({
+      type: "PhaseEvent", category: "PHASE", phase: "vulnerability-analysis", event: "start",
+      src: "c-os-456", service: "order-svc",
+    }));
+    expect(s.unit_intent["order-svc"]).toBe("vulnerability-analysis");
+  });
+
+  it("子仓源其余事件全忽略：AgentEvent 不进 agents、scan_end 不污染主行 end_status", () => {
+    let s = dashboardReducer(emptyState(), corr("repo", "frontend", "started"));
+    s = dashboardReducer(s, ev({
+      type: "AgentEvent", category: "AGENT", agent_name: "vuln-injection",
+      event: "start", attempt: 1, src: "c-gw-123", service: "gateway",
+    }));
+    expect(s.agents).toEqual({}); // 子仓 agent 归子行详情页
+    s = dashboardReducer(s, ev({
+      type: "scan_end", category: "CONTROL", status: "completed",
+      src: "c-gw-123", service: "gateway",
+    }));
+    expect(s.end_status).toBeNull(); // 子仓终态不是主行终态
+    expect(s.unit_status["frontend"]).toBe("running"); // 收敛也不发生
+  });
 });
 
 describe("formatters — 对齐 core formatters.py", () => {

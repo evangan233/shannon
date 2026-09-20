@@ -194,11 +194,12 @@ describe("ScanProgressOverview", () => {
   });
 });
 
-// === correlation 子仓源过滤（2026-09-10 主行 live）===
-// 归并流把现扫子仓（src=c-<scan_id>）白盒日志也送进来——顶部概览只呈现主行编排，
-// 子仓事件（尤其 PhaseEvent start 的网格重置语义）必须挡在 reduce 之外。
-describe("ScanProgressOverview 子仓源过滤", () => {
-  it("src=c-* 的 PhaseEvent 不重置 correlation 网格 / 不改 current_phase", () => {
+// === correlation 子仓源分流（2026-09-20 阶段透传；原 2026-09-10 reduce 前过滤收进 reducer）===
+// 归并流把现扫子仓（src=c-<scan_id>）白盒日志也送进来——dashboardReducer 对 c-* 源
+// 分流：子仓 PhaseEvent 的阶段名写进 repo 行 detail（网格不被重置语义清掉），其余
+// 子仓事件（Agent/终态）忽略。组件全量 fold，不再 reduce 前过滤。
+describe("ScanProgressOverview 子仓源分流", () => {
+  it("src=c-* 的 PhaseEvent：阶段进 repo 行 detail，不重置网格 / 不冒充主行阶段", () => {
     eventsState.events = [
       { ts: TS, category: "CONTROL", type: "correlation_progress", node: "repo", name: "gateway", status: "completed", src: "wb" },
       { ts: TS, category: "PHASE", type: "PhaseEvent", phase: "precheck", event: "start", src: "c-gw-123", service: "gateway" },
@@ -208,6 +209,11 @@ describe("ScanProgressOverview 子仓源过滤", () => {
     const segs = strip.querySelectorAll("[data-unit]");
     expect(segs).toHaveLength(1);  // 仅 repo 行——子仓 PhaseEvent 没把网格清掉
     expect(strip.querySelector('[data-unit="gateway"]')).toHaveAttribute("data-status", "done");
+    // 主行未发 phase 事件：当前阶段槽仍是 "—"（子仓阶段不冒充）
+    expect(screen.getByText("—")).toBeInTheDocument();
+    // 步级明细（Popover）：repo 行 detail 显示子仓当前阶段
+    fireEvent.click(screen.getByTestId("progress-details-trigger"));
+    expect(screen.getByText(/- precheck/)).toBeInTheDocument();
   });
 
   it("src=c-* 的 AgentEvent 不进顶部 Agent 概览（子仓 agent 归子行详情页看）", () => {
@@ -218,7 +224,16 @@ describe("ScanProgressOverview 子仓源过滤", () => {
     expect(screen.queryByText(/vuln-injection/)).not.toBeInTheDocument();
   });
 
-  it("wb 源 correlation_progress 照常进网格（过滤只针对子仓源）", () => {
+  it("src=c-* 的 scan_end 不触发 onScanEnd（子仓终态不是主行终态）", () => {
+    eventsState.events = [
+      { ts: TS, category: "CONTROL", type: "scan_end", status: "completed", src: "c-gw-123", service: "gateway" },
+    ];
+    const onScanEnd = vi.fn();
+    render(<ScanProgressOverview ws="ws" scanId="s1" scanType="correlation" onScanEnd={onScanEnd} />);
+    expect(onScanEnd).not.toHaveBeenCalled();
+  });
+
+  it("wb 源 correlation_progress 照常进网格（分流只针对子仓源）", () => {
     eventsState.events = [
       { ts: TS, category: "CONTROL", type: "correlation_progress", node: "edge", name: "gateway->order", status: "running", src: "wb" },
     ];
