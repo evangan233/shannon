@@ -208,21 +208,30 @@ describe("CorrelationTab", () => {
     expect(screen.getByText("暂无候选攻击链")).toBeInTheDocument();
   });
 
-  it("按服务分组漏洞 + service 徽标（默认全展开，severity/PoC 可见；卡头可收起）", async () => {
+  it("漏洞按结论分组（成立默认展开，存疑默认折叠），组内 service 徽标 + severity/PoC 可见", async () => {
     await renderWithDetail();
     const vulns = screen.getByTestId("corr-vulns");
-    // CorrVulnCard 渲染两条
-    expect(within(vulns).getByText("INJ-VULN-01")).toBeInTheDocument();
-    expect(within(vulns).getByText("INJ-VULN-02")).toBeInTheDocument();
-    // severity 药丸（critical → 严重）
-    expect(within(vulns).getByTestId("corr-vuln-sev")).toHaveTextContent("严重");
-    // 分组徽标：frontend / order-svc 各一组（组序随拓扑服务序——入口在前）
-    const groups = within(vulns).getAllByTestId("corr-vuln-group");
-    expect(groups.length).toBe(2);
-    expect(within(groups[0]).getByText("frontend")).toBeInTheDocument();
-    expect(within(groups[1]).getByText("order-svc")).toBeInTheDocument();
-    // 默认全展开（对齐单仓报告默认态）：接口/PoC 直接可见
-    const card = within(groups[1]).getByTestId("corr-vuln-card");
+    // INJ-VULN-01 有 confirm 卡 → 成立组（默认展开）；INJ-VULN-02 是 error 卡 →
+    // 存疑/未重审组（默认折叠，卡不挂载）；组容器恒渲染（折叠只收卡）
+    const confirmedGroup = within(vulns)
+      .getAllByTestId("corr-vuln-verdict-group")
+      .find((g) => g.getAttribute("data-group") === "confirmed")!;
+    expect(confirmedGroup).toBeInTheDocument();
+    expect(within(confirmedGroup).getByText("INJ-VULN-01")).toBeInTheDocument();
+    expect(within(vulns).queryByText("INJ-VULN-02")).not.toBeInTheDocument();
+    // 展开存疑组 → INJ-VULN-02 卡挂载
+    fireEvent.click(within(vulns).getByTestId("corr-verdict-group-head-uncertain"));
+    const uncertainGroup = within(vulns)
+      .getAllByTestId("corr-vuln-verdict-group")
+      .find((g) => g.getAttribute("data-group") === "uncertain")!;
+    expect(within(uncertainGroup).getByText("INJ-VULN-02")).toBeInTheDocument();
+    // severity 药丸（critical → 严重）+ 组内 service 徽标（组序随拓扑服务序——入口在前）
+    expect(within(confirmedGroup).getByTestId("corr-vuln-sev")).toHaveTextContent("严重");
+    const groups = within(confirmedGroup).getAllByTestId("corr-vuln-group");
+    expect(groups.length).toBe(1);
+    expect(within(groups[0]).getByText("order-svc")).toBeInTheDocument();
+    // 成立组默认展开：接口/PoC 直接可见
+    const card = within(groups[0]).getByTestId("corr-vuln-card");
     expect(within(card).getByTestId("corr-vuln-endpoints")).toHaveTextContent("POST /orders");
     expect(within(card).getByTestId("corr-poc-curl")).toHaveTextContent("1 OR 1=1");
     expect(within(card).getAllByTestId("corr-poc-steps").length).toBeGreaterThan(0);
@@ -232,6 +241,23 @@ describe("CorrelationTab", () => {
     expect(within(card).queryByTestId("corr-vuln-endpoints")).not.toBeInTheDocument();
     fireEvent.click(within(card).getByTestId("corr-vuln-card-head"));
     expect(within(card).getByTestId("corr-vuln-endpoints")).toBeInTheDocument();
+  });
+
+  it("漏洞卡跨仓富化：结论徽标 + 跨仓上下文（所在链 + 单仓结果链接）", async () => {
+    await renderWithDetail();
+    const card = within(screen.getByTestId("corr-vulns")).getByTestId("corr-vuln-card");
+    // 卡头结论徽标（confirm → 成立 + confidence）
+    expect(within(card).getByTestId("corr-vuln-verdict")).toHaveTextContent(/成立/);
+    // 跨仓上下文节：reasoning + cross_service_context + 所在链（flows vuln_refs 反查命中）
+    expect(within(card).getByTestId("corr-verdict-reasoning")).toHaveTextContent("确认");
+    expect(within(card).getByTestId("corr-cross-context")).toHaveTextContent("via frontend");
+    expect(within(card).getByTestId("corr-vuln-chain")).toHaveTextContent("POST /orders");
+    expect(within(card).getByTestId("corr-vuln-chain")).toHaveTextContent("order.CreateOrder");
+    // 单仓结果链接：corr_children service → /p/w1/scans/20260824-000002
+    expect(within(card).getByTestId("corr-child-link")).toHaveAttribute(
+      "href",
+      "/p/w1/scans/20260824-000002",
+    );
   });
 
   it("信任边界表（service / method / exposure / reachable_from / reason）", async () => {
@@ -259,10 +285,10 @@ describe("CorrelationTab", () => {
     expect(screen.getByText(/入口参数透传至后端未过滤/)).toBeInTheDocument();
   });
 
-  it("区块顺序：总览头 → 拓扑 → 攻击链 → 裁决 → 单仓已否决 → 分组漏洞 → 信任边界 → 报告", async () => {
+  it("区块顺序：总览头 → 结论摘要 → 漏洞 → 攻击链 → 多跳 → 拓扑 → 裁决 → 单仓已否决 → 信任边界 → 报告", async () => {
     await renderWithDetail();
-    const order = ["corr-stats", "corr-topology", "corr-flows", "corr-adjudication", "corr-dismissed",
-      "corr-vulns", "corr-boundaries", "corr-report"];
+    const order = ["corr-stats", "corr-verdict-section", "corr-vulns", "corr-flows", "corr-multihop",
+      "corr-topology", "corr-adjudication", "corr-dismissed", "corr-boundaries", "corr-report"];
     const els = order.map((id) => screen.getByTestId(id));
     for (let i = 1; i < els.length; i++) {
       expect(
@@ -271,6 +297,23 @@ describe("CorrelationTab", () => {
     }
     // 漂移警告首版恒空：不渲染横幅
     expect(screen.queryByTestId("corr-drift")).not.toBeInTheDocument();
+  });
+
+  it("结论摘要区：五向结论卡计数 + 翻案组展开裁决卡论证 + 条目点击定位", async () => {
+    const scrollTo = vi.fn();
+    window.scrollTo = scrollTo as unknown as typeof window.scrollTo;
+    await renderWithDetail(detail, "corr-verdict-section");
+    // 五向计数：confirm→成立 1、error(needs-review)→存疑 1、未重审 0、dismissed upgrade→翻案 1
+    expect(screen.getByTestId("corr-verdict-card-confirmed")).toHaveTextContent("1");
+    expect(screen.getByTestId("corr-verdict-card-uncertain")).toHaveTextContent("1");
+    expect(screen.getByTestId("corr-verdict-card-upgraded")).toHaveTextContent("1");
+    expect(screen.getByTestId("corr-verdict-card-refuted")).toHaveTextContent("0");
+    // 成立组清单：ID + reasoning 一句话；点击 → 同步定位（组默认展开、卡展开）
+    fireEvent.click(within(screen.getByTestId("corr-verdict-list-confirmed")).getByTestId("corr-verdict-entry"));
+    expect(scrollTo).toHaveBeenCalledWith({ top: expect.any(Number), behavior: "smooth" });
+    // 翻案组展开（details）：裁决卡默认折叠（collapsed 传入）——点卡头展开后论证可见
+    fireEvent.click(within(screen.getByTestId("corr-verdict-upgraded-list")).getByTestId("corr-adj-card-head"));
+    expect(screen.getByTestId("corr-verdict-upgraded-list")).toHaveTextContent(/跨仓可达,翻案候选/);
   });
 
   it("topology null 显示进行中占位 + corr_children 子仓状态", async () => {

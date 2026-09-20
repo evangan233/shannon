@@ -590,7 +590,7 @@
       "flowsIntro": "概率性 Agent 推断产物，供人工复核",
       "flowsEmpty": "暂无候选攻击链",
       "evidence": "证据",
-      "vulnsTitle": "按服务分组漏洞",
+      "vulnsTitle": "漏洞（按跨仓结论）",
       "vulnsEmpty": "暂无合并漏洞",
       "serviceUnknown": "未知服务",
       "boundariesTitle": "信任边界",
@@ -642,7 +642,7 @@
         "invalid_protocol": "协议仅支持 grpc/http/graphql",
         "duplicate_edge": "重复关系",
         "missing_source": "仓库缺少扫描来源",
-        "isolated_node": "存在孤立仓库（无任何关联边），将按普通仓库一并扫描"
+        "isolated_node": "存在孤立仓库"
       },
       "multihopTitle": "多跳候选链",
       "multihopIntro": "按相邻调用边拼装的候选路径（结构推断），供人工复核",
@@ -705,6 +705,7 @@
         "redo": "重做",
         "resetLayout": "重置布局",
         "connect": "连接",
+        "referenceOnly": "参考仓库",
         "confirm": "确认拓扑",
         "details": "证据与覆盖",
         "submit": "开始扫描",
@@ -743,7 +744,24 @@
       "graphEmptyYaml": "粘贴 YAML 配置",
       "sourceRail": "拓扑来源",
       "railTitle": "服务与分析",
-      "gatewayOptional": "可选"
+      "gatewayOptional": "可选",
+      "verdict": {
+        "title": "跨仓结论",
+        "confirmed": "成立",
+        "refuted": "消掉",
+        "uncertain": "存疑",
+        "unadjudicated": "未重审",
+        "upgraded": "翻案",
+        "empty": "暂无条目",
+        "more": "还有 {{count}} 条",
+        "running": "跨仓裁决进行中——已出 {{covered}}/{{total}} 条，结论生成后自动呈现（页面每 15 秒刷新）",
+        "failed": "跨仓裁决阶段失败——结论缺席，漏洞保留单仓扫描结论；可查看运行日志定位原因"
+      },
+      "crossCtxTitle": "跨仓上下文",
+      "chainsTitle": "所在跨服链",
+      "childScanLink": "查看单仓结果",
+      "tocAria": "跨仓结果目录",
+      "tocVulns": "漏洞（按跨仓结论）"
     },
     "subtitleMr": "指定 base..head 变更范围，只对增量改动做安全检测",
     "mrBaseHeadHint": "仅对 base 到 head 之间的新增/删除代码做增量检测",

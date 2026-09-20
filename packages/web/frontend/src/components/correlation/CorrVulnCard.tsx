@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronDown } from "lucide-react";
+import { Link } from "react-router-dom";
+import { ChevronDown, ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { MergeSourceBadge } from "@/components/VulnCard";
-import type { CorrVuln } from "@/api/types";
+import type { CorrFlow, CorrVuln } from "@/api/types";
+import type { CorrVerdictGroup } from "@/lib/correlation-verdict";
 import { SEV_CAP, SEV_PILL, SEV_DOT, SEV_EDGE } from "@/lib/severity-visual";
 import { highlightCode, langFromPath } from "@/lib/highlight-code";
 import { CopyableCodePanel } from "@/components/report/CopyableCodePanel";
@@ -70,6 +72,24 @@ export interface CorrVulnView {
   poc?: CorrPoc;
   notes?: string;
 }
+
+/** 跨仓裁决归一视图（父级由裁决卡 join 算好传入，组件纯渲染）：无卡 = 未重审。 */
+export interface CorrVerdictView {
+  group: CorrVerdictGroup;
+  direction?: string;
+  conclusion?: string;
+  confidence?: string;
+  crossServiceContext?: string;
+  reasoning?: string;
+}
+
+/** 结论组 → 卡头徽标视觉（语义色走主题 token green/red/amber，同 AttackChainCard）。 */
+export const VERDICT_BADGE_CLS: Record<CorrVerdictGroup, string> = {
+  confirmed: "border-green/40 bg-green/10 text-green",
+  refuted: "border-red/40 bg-red/10 text-red",
+  uncertain: "border-amber/40 bg-amber/10 text-amber",
+  unadjudicated: "border-border text-muted-foreground",
+};
 
 /** 漏洞卡 DOM 锚点 id（ID 可能含空白/特殊字符，统一安全化）——跨仓 tab 的定位
  *  （攻击链引用点击 / 总览 severity 药丸）与卡身 id 同源，改一处两处同步。 */
@@ -176,13 +196,14 @@ export function toCorrVulnView(v: CorrVuln): CorrVulnView {
 }
 
 /**
- * 跨仓漏洞卡：卡头（ID + severity 药丸 + 标题 + 双轨/置信度/可达 + 入口接口）折叠按钮，
- * 展开体七节（空数据整节省略）：危害 → 相关接口 → 问题点 → POC（curl ↔ Burp 双 tab）
- * → 修复建议 → 漏洞细节（CVSS/CWE/OWASP）→ notes。
+ * 跨仓漏洞卡：卡头（ID + 结论徽标 + severity 药丸 + 标题 + 双轨/置信度/可达 + 入口接口）
+ * 折叠按钮，展开体（空数据整节省略）：跨仓上下文（裁决结论 + 所在链 + 单仓入口）
+ * → 危害 → 相关接口 → 问题点 → POC（curl ↔ Burp 双 tab）→ 修复建议 → 漏洞细节
+ * （CVSS/CWE/OWASP）→ notes。
  * 折叠支持受控（collapsed/onToggleCollapse，ReportView 集中 state 模式——跨仓 tab 的
  * 全部收起/展开 + 定位联动需在父级持有）；缺省走内部 state（非受控，向后兼容）。
  */
-export function CorrVulnCard({ view, anchorId, collapsed, onToggleCollapse }: {
+export function CorrVulnCard({ view, anchorId, collapsed, onToggleCollapse, verdict, chains, childScanHref }: {
   view: CorrVulnView;
   /** DOM 锚点 id（定位目标），缺省不挂。 */
   anchorId?: string;
@@ -190,6 +211,12 @@ export function CorrVulnCard({ view, anchorId, collapsed, onToggleCollapse }: {
   collapsed?: boolean;
   /** 受控时的切换回调（非受控忽略）。 */
   onToggleCollapse?: () => void;
+  /** 跨仓裁决结论（父级 join 裁决卡所得；缺省 = 未重审）。 */
+  verdict?: CorrVerdictView;
+  /** 漏洞所在跨服候选链（父级 findChainsForVuln 反查）。 */
+  chains?: CorrFlow[];
+  /** 子仓扫描详情页路由（父级由 corr_children 映射；缺省不显「查看单仓结果」）。 */
+  childScanHref?: string;
 }) {
   const { t } = useTranslation();
   const [innerOpen, setInnerOpen] = useState(false);
@@ -203,6 +230,8 @@ export function CorrVulnCard({ view, anchorId, collapsed, onToggleCollapse }: {
   const curl = poc?.curl ?? null;
   const rawHttp = poc?.raw_http ?? null;
   const cv = view.cvss ? splitCvss(view.cvss) : null;
+  const group: CorrVerdictGroup = verdict?.group ?? "unadjudicated";
+  const chainList = chains ?? [];
 
   return (
     <section
@@ -225,6 +254,15 @@ export function CorrVulnCard({ view, anchorId, collapsed, onToggleCollapse }: {
             <span className="shrink-0 font-mono text-[13px] font-semibold text-foreground">
               {view.id}
             </span>
+            {verdict && (
+              <span
+                data-testid="corr-vuln-verdict"
+                className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide ${VERDICT_BADGE_CLS[group]}`}
+              >
+                {t(`scan.correlation.verdict.${group}`)}
+                {verdict.confidence ? ` · ${verdict.confidence}` : ""}
+              </span>
+            )}
             {view.severity && (
               <span
                 data-testid="corr-vuln-sev"
@@ -268,6 +306,58 @@ export function CorrVulnCard({ view, anchorId, collapsed, onToggleCollapse }: {
 
       {open && (
         <div className="space-y-4">
+          {/* 跨仓上下文（2026-09-20 结论优先批次）：裁决结论 + 所在跨服链 + 单仓结果入口 */}
+          {(verdict || chainList.length > 0 || childScanHref) && (
+            <div data-testid="corr-cross-ctx" className={SEC_CLS}>
+              <div className={`mb-1.5 ${SEC_LABEL_CLS}`}>
+                {t("scan.correlation.crossCtxTitle")}
+              </div>
+              <div className="space-y-2">
+                {verdict?.reasoning && (
+                  <p data-testid="corr-verdict-reasoning" className="text-xs leading-relaxed text-foreground/85">
+                    {verdict.reasoning}
+                  </p>
+                )}
+                {verdict?.crossServiceContext && (
+                  <div data-testid="corr-cross-context" className="text-xs text-foreground/80">
+                    <span className={SEC_LABEL_CLS}>{t("scan.correlation.adjContext")}: </span>
+                    {verdict.crossServiceContext}
+                  </div>
+                )}
+                {chainList.length > 0 && (
+                  <div data-testid="corr-vuln-chains" className="space-y-1.5">
+                    <div className={SEC_LABEL_CLS}>{t("scan.correlation.chainsTitle")}</div>
+                    {chainList.map((f, i) => (
+                      <div key={i} data-testid="corr-vuln-chain" className="space-y-0.5">
+                        <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
+                          <span className="text-foreground">{f.entry}</span>
+                          <span className="text-muted-foreground">→</span>
+                          <span className="text-cyan">{f.method}</span>
+                          <Badge variant="outline" className="font-sans text-[10px] text-muted-foreground">
+                            {f.confidence}
+                          </Badge>
+                        </div>
+                        {f.evidence && (
+                          <p className="line-clamp-2 text-[11px] text-muted-foreground">{f.evidence}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {childScanHref && (
+                  <Link
+                    to={childScanHref}
+                    data-testid="corr-child-link"
+                    className="inline-flex items-center gap-1 text-xs text-primary underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                  >
+                    <ExternalLink className="size-3.5" aria-hidden="true" />
+                    {t("scan.correlation.childScanLink")}
+                  </Link>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* 危害 */}
           {view.impact && (
             <div data-testid="corr-impact" className={SEC_CLS}>

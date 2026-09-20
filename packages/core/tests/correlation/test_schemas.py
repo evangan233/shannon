@@ -126,3 +126,20 @@ def test_flows_file_written(tmp_path):
     # spec 2026-08-27 §8:flows json 对象形态 {"flows": [...], "multi_hop_chains": [...]}
     assert data["flows"][0]["method"] == "m"
     assert data["multi_hop_chains"] == []
+
+
+def test_drift_warnings_file_written(tmp_path):
+    """2026-09-20 接线：drift_warnings 落盘 drift-warnings.json（None 不落盘），
+    web API 侧经 assemble_correlation_detail 读取（此前只进 md 的断链修复）。"""
+    from supernova_core.correlation.report import write_correlation_deliverables
+    from supernova_core.correlation.schemas import (
+        CrossServiceTopology, ServiceNode)
+    topo = CrossServiceTopology(services=[ServiceNode("g", "entrypoint", "/r/g")], edges=[])
+    write_correlation_deliverables(tmp_path, topo, [], {}, "# r",
+                                   drift_warnings=["svc: 复用产物,源码版本可能漂移"])
+    data = json.loads((tmp_path / "drift-warnings.json").read_text(encoding="utf-8"))
+    assert data == ["svc: 复用产物,源码版本可能漂移"]
+    # None（显式不传/旧调用方）不落盘——保持产物面最小
+    out2 = tmp_path / "b"
+    write_correlation_deliverables(out2, topo, [], {}, "# r")
+    assert not (out2 / "drift-warnings.json").exists()

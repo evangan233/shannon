@@ -240,3 +240,23 @@ def test_correlation_endpoint_wrong_type(authed_client, tmp_workspaces):
 def test_correlation_endpoint_unknown_scan_404(authed_client, tmp_workspaces):
     _make_scan(tmp_workspaces, "WS", scan_id="c1")
     assert authed_client.get("/api/workspaces/WS/scans/nope/correlation").status_code == 404
+
+
+def test_correlation_endpoint_drift_warnings_read(authed_client, tmp_workspaces):
+    """2026-09-20 接线：drift-warnings.json 存在 → 透传；坏 JSON → 回落 []。"""
+    _make_scan(tmp_workspaces, "WS", scan_id="c1")
+    dlv = tmp_workspaces / "WS" / "scans" / "c1" / "deliverables"
+    dlv.mkdir(parents=True)
+    (dlv / "cross-service-topology.json").write_text(json.dumps({
+        "services": [{"name": "gateway", "role": "frontend", "repo": "/code/gateway"}],
+        "edges": []}))
+    (dlv / "drift-warnings.json").write_text(json.dumps(
+        ["backend/x: 复用产物,源码版本可能漂移"]))
+    r = authed_client.get("/api/workspaces/WS/scans/c1/correlation")
+    assert r.status_code == 200, r.text
+    assert r.json()["drift_warnings"] == ["backend/x: 复用产物,源码版本可能漂移"]
+    # 坏 JSON：静默回落 []（对齐本文件容错立场）
+    (dlv / "drift-warnings.json").write_text("not-json")
+    r2 = authed_client.get("/api/workspaces/WS/scans/c1/correlation")
+    assert r2.status_code == 200
+    assert r2.json()["drift_warnings"] == []

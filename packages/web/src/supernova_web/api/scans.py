@@ -735,8 +735,8 @@ def assemble_correlation_detail(scan_dir: Path) -> dict:
     黑盒产物，不经 DeliverablesReader），此处原文透传 JSON（不 preview 截断）。
     缺文件语义（关联未跑完，前端显示进行中/未开始）：topology/report_md → None、
     boundaries/flows → []、{vc}_exploitation_queue.json 缺 → merged_vulns 键缺席
-    （不用空数组冒充「该类无漏洞」）。drift_warnings 首版保守返回 []（不解析
-    correlation-report.md；事件/report 提取留给后续版本）。
+    （不用空数组冒充「该类无漏洞」）。drift_warnings 读 drift-warnings.json
+    （2026-09-20 落盘接线，此前硬编码 [] 断链）。
 
     dismissed / adjudication_status（2026-09-18 成立/消掉视图）：前者汇总各子仓
     dismissed_findings.json 投影（单仓判非漏洞留档，裁决可翻案），后者推导裁决
@@ -766,6 +766,11 @@ def assemble_correlation_detail(scan_dir: Path) -> dict:
         if isinstance(data, dict) and isinstance(data.get("vulnerabilities"), list):
             merged_vulns[q.name[: -len("_exploitation_queue.json")]] = data["vulnerabilities"]
 
+    # 版本漂移警告（2026-09-20 接线）：orchestrator 落盘 drift-warnings.json，
+    # 此前硬编码 []（只进 report md）致前端横幅恒死的断链。
+    drift_raw = _read_json("drift-warnings.json")
+    drift_warnings = drift_raw if isinstance(drift_raw, list) else []
+
     boundaries = _read_json("trust-boundaries.json")
     flows_raw = _read_json("cross-service-flows.json")
     # spec 2026-08-27 §8/§9:flows json 对象形态 {"flows": [...], "multi_hop_chains": [...]}
@@ -785,7 +790,7 @@ def assemble_correlation_detail(scan_dir: Path) -> dict:
         "multi_hop_chains": multi_hop_chains if isinstance(multi_hop_chains, list) else [],
         "adjudication": adjudication if isinstance(adjudication, dict) else None,
         "merged_vulns": merged_vulns,
-        "drift_warnings": [],
+        "drift_warnings": drift_warnings,
         "corr_children": corr_children,
         "dismissed": _collect_dismissed_children(scan_dir, corr_children),
         "adjudication_status": _adjudication_status(scan_dir, adjudication, session),

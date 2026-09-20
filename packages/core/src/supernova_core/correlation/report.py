@@ -14,6 +14,7 @@ def write_correlation_deliverables(
     report_md: str,
     flows: list[CrossServiceFlow] | None = None,
     multi_hop_chains: list[dict] | None = None,
+    drift_warnings: list[str] | None = None,
 ) -> None:
     out_deliverables.mkdir(parents=True, exist_ok=True)
     (out_deliverables / "cross-service-topology.json").write_text(
@@ -22,6 +23,12 @@ def write_correlation_deliverables(
         json.dumps([json.loads(b.to_json()) for b in boundaries], ensure_ascii=False, indent=2),
         encoding="utf-8")
     (out_deliverables / "correlation-report.md").write_text(report_md, encoding="utf-8")
+    # 版本漂移警告结构化落盘（2026-09-20）：此前只渲染进 report md，web API 侧
+    # 读不到（硬编码 []）致前端漂移横幅恒死的断链。
+    if drift_warnings is not None:
+        (out_deliverables / "drift-warnings.json").write_text(
+            json.dumps(drift_warnings, ensure_ascii=False, indent=2),
+            encoding="utf-8")
     for vc, entries in merged_queues.items():
         (out_deliverables / f"{vc}_exploitation_queue.json").write_text(
             json.dumps({"vulnerabilities": entries}, ensure_ascii=False, indent=2),

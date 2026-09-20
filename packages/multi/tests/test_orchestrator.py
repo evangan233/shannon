@@ -563,3 +563,84 @@ async def test_run_correlation_phase_installs_failure_redirect(tmp_path, monkeyp
         "Completing activity as failed ({'activity_type': 'run_correlation_activity'})")
     assert "run_correlation_activity" in (
         out_ws / "activity_failures.log").read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-20 报告充实：结论统计 + 成立漏洞全文 + 消掉/存疑清单（裁决后重渲染）
+# ---------------------------------------------------------------------------
+def _report_topology():
+    from supernova_core.correlation.schemas import (
+        CrossServiceTopology, ServiceNode, TopologyEdge)
+    return CrossServiceTopology(
+        services=[ServiceNode(name="gateway", role="entrypoint", repo="/r/gw")],
+        edges=[TopologyEdge(from_="gateway", to="order-svc", protocol="grpc")])
+
+
+def test_render_report_first_version_has_adjudication_pending_note():
+    """阶段 A 首版（无 cards）：报告尾部标注裁决进行中，无结论章节。"""
+    from supernova_multi.orchestrator import _render_report
+    md = _render_report(_report_topology(), [], {}, [])
+    assert "裁决阶段进行中" in md
+    assert "结论统计" not in md
+
+
+def test_render_report_full_verdict_sections():
+    """裁决后：结论统计一行 + 成立漏洞全文（接口/问题点/POC/修复）+ 翻案卡全文
+    + 消掉/存疑清单 + 既有裁决五组列表。"""
+    from supernova_multi.orchestrator import _render_report
+    merged = {"injection": [{
+        "ID": "INJ-01", "service": "order-svc", "title": "SQL 注入", "severity": "critical",
+        "impact": "拖库", "remediation": "参数化查询",
+        "location": "db.py:10",
+        "report_endpoints": [{"method": "POST", "path": "/orders", "params": ["q"],
+                              "auth": "public", "route_registered_at": "api.py:12"}],
+        "report_problem_points": [{"location": "db.py:10", "description": "拼接 SQL",
+                                   "snippet": "query(sql)"}],
+        "report_poc": {"curl": "curl -X POST /orders", "steps": ["1. 注入"],
+                       "preconditions": "可公网达", "expected_response": "行数异常"},
+    }]}
+    cards = [
+        {"direction": "confirm",
+         "finding_ref": {"service": "order-svc", "vuln_id": "INJ-01", "origin": "queue"},
+         "conclusion": "vulnerable", "cross_service_context": "via gateway",
+         "analysis_process": [], "verification_evidence": [], "reasoning": "可达", "confidence": "high"},
+        {"direction": "downgrade",
+         "finding_ref": {"service": "order-svc", "vuln_id": "XSS-01", "origin": "queue"},
+         "conclusion": "not-vulnerable", "cross_service_context": "",
+         "analysis_process": [], "verification_evidence": [], "reasoning": "出口转义", "confidence": "high"},
+        {"direction": "upgrade",
+         "finding_ref": {"service": "order-svc", "vuln_id": "INJ-09", "origin": "dismissed"},
+         "conclusion": "vulnerable", "cross_service_context": "经 gateway 可达",
+         "analysis_process": ["① 读 dismissed"], "verification_evidence": [],
+         "reasoning": "翻案", "confidence": "high"},
+    ]
+    md = _render_report(_report_topology(), [], merged, ["svc: drifted"], cards=cards)
+    assert "## 结论统计" in md and "成立 1" in md and "消掉 1" in md and "未重审 0" in md
+    # 成立全文：confirm 关联 queue 条目渲染全文
+    assert "## 成立的漏洞（跨仓确认 + 翻案）" in md
+    assert "[INJ-01] order-svc — SQL 注入（critical）" in md
+    assert "- 接口: POST /orders" in md
+    assert "curl -X POST /orders" in md
+    assert "参数化查询" in md
+    # 翻案：裁决卡全文（无 queue 条目）
+    assert "### 翻案候选（单仓已否决 → 跨仓可达，待人工复核）" in md
+    assert "① 读 dismissed" in md
+    # 消掉清单一行一条
+    assert "## 消掉/存疑清单" in md
+    assert "[XSS-01] order-svc（消掉, confidence: high）— 出口转义" in md
+    # 既有裁决五组列表保留 + 漂移
+    assert "## 跨仓裁决(阶段 B)" in md
+    assert "svc: drifted" in md
+
+
+def test_render_report_unadjudicated_counted():
+    """queue 条目无卡 → 未重审计数（error 卡占位算已出位但仍计存疑）。"""
+    from supernova_multi.orchestrator import _render_report
+    merged = {"xss": [{"ID": "X-1", "service": "s"}, {"ID": "X-2", "service": "s"}]}
+    cards = [{"direction": "error",
+              "finding_ref": {"service": "s", "vuln_id": "X-1", "origin": "queue"},
+              "conclusion": "needs-review", "cross_service_context": "",
+              "analysis_process": [], "verification_evidence": [],
+              "reasoning": "batch failed", "confidence": "low"}]
+    md = _render_report(_report_topology(), [], merged, [], cards=cards)
+    assert "存疑 1 ｜ 未重审 1（合并漏洞共 2 条）" in md
