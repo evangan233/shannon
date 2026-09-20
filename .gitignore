@@ -47,3 +47,11 @@ configs/*.yaml
 # superpowers brainstorm 本地设计协作 mockups（不入库）
 .superpowers/
 repos.zip
+tests/1.txt
+tests/香港-4000.md
+tests/fin/general-meeting-20260910-031628-黑盒验证与PoC.md
+tests/fin/grey_mkt_quote-20260910-040055-blackbox.md
+tests/fin/gw_trade-20260910-191453-黑盒验证与PoC.md
+tests/fin/shortselling_view-20260910-120859-黑盒验证与PoC.md
+tests/failed-scan-ids-金融平台-2026h2.txt
+tests/failed-scans-金融平台-2026h2.txt
