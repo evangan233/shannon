@@ -1156,6 +1156,80 @@ describe("ScanList 批量取消/续跑", () => {
   });
 });
 
+// === 已取消分段 + 批量重跑（2026-09-20）=======================================
+// cancelled 从 other 段拆出独立「已取消」分段（此前只在「全部」混显，取消的任务难找）；
+// 批量重跑：终态白盒/MR/组合读原配置起全新 scan（correlation 多仓 yaml 不可重建，预筛排除）。
+describe("ScanList 已取消分段 + 批量重跑", () => {
+  const corrCancelled = {
+    scan_id: "corr-x", scan_type: "correlation", status: "cancelled", created_at: 6000,
+    completed_at: 6100, vuln_count: 0, total_cost_usd: 0, cost_currency: "USD",
+    is_running: false,
+  } as const;
+  // queued 本 describe 自备（批量取消/续跑 describe 内的同名 fixture 不可跨作用域引用）。
+  const queuedRow = {
+    scan_id: "sq-2", scan_type: "whitebox", status: "queued", created_at: 1600,
+    completed_at: null, vuln_count: 0, total_cost_usd: 0, cost_currency: "USD",
+    is_running: false,
+  } as const;
+
+  it("「已取消」分段：cancelled 行单独归档（不落「失败」档），带计数", async () => {
+    server.use(http.get("/api/workspaces/:ws/scans",
+      () => HttpResponse.json([cancelled, failedWb])));
+    renderList();
+    await waitFor(() => expect(screen.getByText("s4")).toBeInTheDocument());
+    // cancelled 不再混进「失败」——点「失败」只剩 failed 白盒行（行名 = workflow_id）
+    fireEvent.click(screen.getByText("失败", { selector: "button" }));
+    expect(screen.queryByText("s4")).not.toBeInTheDocument();
+    expect(screen.getByText("ws-s9")).toBeInTheDocument();
+    // 「已取消」档只剩 cancelled 行
+    fireEvent.click(screen.getByText("已取消", { selector: "button" }));
+    expect(screen.getByText("s4")).toBeInTheDocument();
+    expect(screen.queryByText("ws-s9")).not.toBeInTheDocument();
+  });
+
+  it("cancelled 行状态徽标显中文「已取消」（i18n 键存在，非原始英文回退）", async () => {
+    server.use(http.get("/api/workspaces/:ws/scans", () => HttpResponse.json([cancelled])));
+    renderList();
+    await waitFor(() => expect(screen.getByText("s4")).toBeInTheDocument());
+    // StatusBadge title=原始 status——据此精确定位徽标（分段按钮文本区分开）
+    expect(screen.getByTitle("cancelled")).toHaveTextContent("已取消");
+  });
+
+  it("批量重跑流：勾 cancelled+correlation -> 重跑(1) -> 确认弹窗 -> POST batch-rerun 只含可重建项 -> 结果横幅", async () => {
+    const rerunBodies: unknown[] = [];
+    server.use(
+      http.get("/api/workspaces/:ws/scans",
+        () => HttpResponse.json([cancelled, corrCancelled])),
+      http.post("/api/workspaces/:ws/scans/batch-rerun", async ({ request }) => {
+        rerunBodies.push(await request.json());
+        return HttpResponse.json({ workspace: "ws", submitted: 1, skipped: 0, failed: 0,
+          results: [{ scan_id: "s4", ok: true }] });
+      }),
+    );
+    renderList();
+    await waitFor(() => expect(screen.getByText("s4")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择任务 s4" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择任务 corr-x" }));
+    // 预筛计数只含可重建项（correlation 多仓 yaml 不可自动重建）
+    fireEvent.click(screen.getByRole("button", { name: /批量重跑（1）/ }));
+    expect(await screen.findByText("批量重跑 1 个任务")).toBeInTheDocument();
+    expect(screen.getByText(/将用原配置重新发起以下 1 个任务/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认重跑" }));
+    await waitFor(() => expect(rerunBodies).toEqual([{ scan_ids: ["s4"] }]));
+    expect(await screen.findByTestId("scan-bulk-result-banner")).toBeInTheDocument();
+    expect(screen.getByText(/成功 1/)).toBeInTheDocument();
+  });
+
+  it("全勾 running/queued：重跑按钮禁用（无可重跑项）", async () => {
+    server.use(http.get("/api/workspaces/:ws/scans",
+      () => HttpResponse.json([running, queuedRow])));
+    renderList();
+    await waitFor(() => expect(screen.getByText("s1")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("checkbox", { name: "全选当前列表" }));
+    expect(screen.getByRole("button", { name: /批量重跑（0）/ })).toBeDisabled();
+  });
+});
+
 // === 选择模式与勾选持久化（2026-09-20）========================================
 // 勾选任意行进入选择模式：整行点击从「进详情」切换为「切换勾选」（防批量操作期间
 // 误触跳详情），进详情收窄到任务名链接/「查看」；未勾选时整行导航不变。勾选集落

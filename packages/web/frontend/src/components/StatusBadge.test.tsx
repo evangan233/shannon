@@ -92,6 +92,15 @@ describe("StatusBadge i18n", () => {
     expect(screen.getByText("重连中")).toBeInTheDocument();
   });
 
+  it("cancelled → 中文「已取消」+ 中性灰（非问号 fallback，用户取消不是失败）", () => {
+    const { container } = render(<StatusBadge status="cancelled" />);
+    expect(screen.getByText("已取消")).toBeInTheDocument();
+    const badge = container.querySelector("[title='cancelled']");
+    expect(badge?.className).toMatch(/text-muted-foreground/);
+    expect(badge?.className).not.toMatch(/text-yellow/);
+    expect(badge?.querySelector("svg[aria-hidden='true']")).not.toBeNull();
+  });
+
   it("未知状态 fallback 原值不空白", () => {
     render(<StatusBadge status="some-new-state" />);
     expect(screen.getByText("some-new-state")).toBeInTheDocument();

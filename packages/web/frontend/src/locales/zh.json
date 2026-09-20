@@ -280,7 +280,8 @@
       "done": "已完成",
       "failed": "失败",
       "killed": "已终止",
-      "crashed": "已崩溃"
+      "crashed": "已崩溃",
+      "cancelled": "已取消"
     },
     "expandAria": "展开",
     "typeFilterAria": "类型筛选",
@@ -1118,7 +1119,11 @@
         "deleteSelected": "批量删除（{{count}}）",
         "deleteConfirmTitle": "批量删除 {{count}} 个任务",
         "deleteConfirmDesc": "将永久删除以下 {{count}} 个任务的全部产物（共勾选 {{total}} 项，运行中/排队中不可删）：",
-        "deleteConfirmGo": "确认删除"
+        "deleteConfirmGo": "确认删除",
+        "rerunSelected": "批量重跑（{{count}}）",
+        "rerunConfirmTitle": "批量重跑 {{count}} 个任务",
+        "rerunConfirmDesc": "将用原配置重新发起以下 {{count}} 个任务（全新扫描，从零开始；共勾选 {{total}} 项，其余不可重跑）：",
+        "rerunConfirmGo": "确认重跑"
       }
     },
     "errorBoundary": {

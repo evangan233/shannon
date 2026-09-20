@@ -6,7 +6,7 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import aiofiles
@@ -27,7 +27,7 @@ from supernova_multi.orchestrator import plan_repo_scans
 from supernova_whitebox.pipeline.workflows import WhiteboxScanWorkflow, MrScanWorkflow
 from supernova_whitebox.pipeline.shared import PipelineInput
 from supernova_whitebox.pipeline.whitebox_resume import WhiteboxResumeStateBuilder
-from supernova_web.models import ScanRequest
+from supernova_web.models import RepoSource, ScanRequest
 from .host_profile_store import (
     HostMapping,
     HostProfileRefreshEmpty,
@@ -92,6 +92,11 @@ _RESUMABLE_STATUSES = frozenset(
 # 扫完即删状态门：running / queued 与 heartbeat stale 但尚未确认关闭的 reconnecting
 # 都可能仍被 Temporal worker 使用仓库；只有明确业务终态才允许 sweep。
 _SWEEP_ACTIVE_STATUSES = frozenset({"running", "queued", "reconnecting"})
+
+# 重跑状态门（2026-09-20 批量重跑）：与批量删除终态集一致（含 interrupted——重跑是
+# 全新 scan，不动原行，无并发风险）；running/queued/reconnecting 拒。
+_RERUN_TERMINAL = frozenset(
+    {"completed", "done", "failed", "killed", "crashed", "cancelled", "interrupted"})
 
 
 def _now_iso() -> str:
@@ -891,6 +896,84 @@ class ScanManager:
         except Exception:
             _log.info("resume %s/%s: prior execution %s absent/terminal; "
                       "skip terminate", ws, scan_id, prior_id, exc_info=True)
+
+    @staticmethod
+    def _read_auth_config(scan_dir: Path) -> dict | None:
+        """读 scan_dir/scan-config.yaml 的 authentication（inline 登录配置，重跑重建用）。
+
+        与 api/scans.py::_read_auth_config 同口径（components 不 import api，防循环）；
+        组合扫描认证明文唯一来源是该文件（session 不落明文，D2）。无文件/损坏 → None。
+        """
+        cfg = scan_dir / "scan-config.yaml"
+        if not cfg.exists():
+            return None
+        try:
+            import yaml
+            data = yaml.safe_load(cfg.read_text("utf-8"))
+            if isinstance(data, dict) and isinstance(data.get("authentication"), dict):
+                return data["authentication"]
+        except (OSError, ValueError):
+            return None
+        return None
+
+    async def rerun(self, ws: str, scan_id: str) -> tuple[str, str]:
+        """终态 scan 用原配置重跑（2026-09-20 批量重跑）：读 session.json 重建
+        ScanRequest -> self.start() 起全新 scan（新 scan_id，原行不动）。
+
+        与 resume（断点续跑，同 scan_id）互补：重跑 = 从头全新扫描。字段映射对齐
+        _scan_detail 重跑预填口径（前端 onRerun 同源）。不可重建 -> ValueError
+        （批量端点逐项转 skipped/error）：correlation 多仓 yaml、blackbox（白盒下游段，
+        与单行重跑口径一致）、非终态/不存在（状态门）。
+        """
+        scan_dir = self._store.get_scan_dir(ws, scan_id)
+        if scan_dir is None:
+            raise ValueError(f"扫描不存在: {scan_id}")
+        status = self.scan_status(ws, scan_id)
+        if status not in _RERUN_TERMINAL:
+            raise ValueError(f"该扫描状态为 {status or '未知'}，不可重跑（仅终态可重跑）")
+        data = SessionManager(scan_dir.parent).get_session_data(scan_dir)
+        scan_type = data.get("scan_type") or "whitebox"
+        if scan_type == "correlation":
+            raise ValueError("跨仓关联扫描的多仓配置不可自动重建，请用单行「重跑」手动配置")
+        if scan_type == "blackbox":
+            raise ValueError("黑盒验证无独立重跑（白盒下游段），请从白盒行重新发起")
+        # source_repo 缺失时 repo_path basename 兜底（存量 precheck 失败行，对齐
+        # _scan_detail 重跑预填口径）。
+        repo = data.get("source_repo") or (
+            PurePosixPath(data["repo_path"]).name if data.get("repo_path") else None)
+        if not repo:
+            raise ValueError("原扫描未记录仓库，无法重建重跑配置")
+        req = ScanRequest(
+            type=scan_type, workspace=ws,
+            source=RepoSource(kind="repo", value=repo),
+            url=data.get("bb_url"),
+            base_ref=data.get("mr_base_ref"),
+            head_ref=data.get("mr_head_ref"),
+            head_commit=data.get("mr_head_commit"),
+            base_commit=data.get("mr_base_commit"),
+        )
+        # 认证：profile 引用优先（session 不落明文，D2）；inline 回读 scan-config.yaml。
+        # 互斥由 ScanRequest._validate_auth_fields 兜底（profile_id 非空才带 cred_ids）。
+        auth_ref = data.get("bb_auth_ref") or {}
+        if isinstance(auth_ref, dict) and auth_ref.get("profile_id"):
+            req.auth_profile_id = auth_ref["profile_id"]
+            req.auth_credential_ids = auth_ref.get("cred_ids") or None
+        else:
+            auth = self._read_auth_config(scan_dir)
+            if auth:
+                req.authentication = auth
+        # HOST：profile 引用 / url 源（映射内容不重建——start 经 _resolve_host_config
+        # 重新解析档案拿最新 mappings；与 detail 预填同口径）。
+        host = data.get("host_config") or {}
+        if isinstance(host, dict) and host.get("enabled"):
+            if host.get("source") == "profile":
+                ids = (host.get("profile_ids")
+                       or ([host["profile_id"]] if host.get("profile_id") else None))
+                if ids:
+                    req.host_profile_ids = ids
+            elif host.get("source") == "url" and host.get("source_url"):
+                req.host_url = host["source_url"]
+        return await self.start(req)
 
     async def resume_preview(self, ws: str, scan_id: str) -> dict:
         """断点详情（spec 2026-08-27-web-resume-breakpoint §4.5，只读不动状态）。

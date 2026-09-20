@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import {
-  CircleCheck, CircleHelp, CirclePause, CircleX, Clock, LoaderCircle, TriangleAlert,
+  CircleCheck, CircleHelp, CircleOff, CirclePause, CircleX, Clock, LoaderCircle, TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +27,9 @@ const MAP: Record<string, { Icon: LucideIcon; cls: string }> = {
   failed:       { Icon: CircleX,       cls: "border-red/25 bg-red/10 text-red" },
   killed:       { Icon: CircleX,       cls: "border-red/25 bg-red/10 text-red" },
   crashed:      { Icon: TriangleAlert, cls: "border-yellow/25 bg-yellow/10 text-yellow" },
+  // cancelled（2026-09-20）：此前缺 MAP 条目走黄色问号 fallback——用户取消是中性
+  // 事件（非失败），灰阶中性色与 failed/interrupted 区分。
+  cancelled:    { Icon: CircleOff,     cls: "border-muted-foreground/25 bg-muted/50 text-muted-foreground" },
 };
 
 export function StatusBadge({ status }: { status: string }) {

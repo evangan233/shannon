@@ -280,7 +280,8 @@
       "done": "Completed",
       "failed": "Failed",
       "killed": "Killed",
-      "crashed": "Crashed"
+      "crashed": "Crashed",
+      "cancelled": "Cancelled"
     },
     "expandAria": "Expand",
     "typeFilterAria": "Type filter",
@@ -1118,7 +1119,11 @@
         "deleteSelected": "Delete selected ({{count}})",
         "deleteConfirmTitle": "Delete {{count}} scans",
         "deleteConfirmDesc": "The following {{count}} scans and all their artifacts will be permanently deleted ({{total}} selected; running/queued scans cannot be deleted):",
-        "deleteConfirmGo": "Delete"
+        "deleteConfirmGo": "Delete",
+        "rerunSelected": "Rerun selected ({{count}})",
+        "rerunConfirmTitle": "Rerun {{count}} scans",
+        "rerunConfirmDesc": "The following {{count}} scans will be re-submitted with their original config (fresh scans from scratch; {{total}} selected, the rest are not rerunnable):",
+        "rerunConfirmGo": "Rerun"
       }
     },
     "errorBoundary": {

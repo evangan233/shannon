@@ -24,7 +24,8 @@ import {
 } from "@/components/ui/dialog";
 import {
   cancelScan, deleteScan, deleteBlackboxRun, resumeScan, getScan, getResumePreview,
-  scanEventsUrl, batchCancelScans, batchResumeScans, batchDeleteScans, ApiError, type ResumePreview,
+  scanEventsUrl, batchCancelScans, batchResumeScans, batchDeleteScans, batchRerunScans,
+  ApiError, type ResumePreview,
 } from "@/api/client";
 import useSWR from "swr";
 import { useScans } from "./useScans";
@@ -62,12 +63,21 @@ const canResumeRow = (s: ScanSummary) => !isActiveRow(s)
 // running/queued/reconnecting 拦（后者仍可能有 Temporal workflow）。
 const deletableRow = (s: ScanSummary) => TERMINAL.has(s.status) || s.status === "interrupted";
 
-/** 状态分段（filter 分段控件口径）：running/completed/failed + other（interrupted 等，仅「全部」可见）。 */
-type Seg = "running" | "completed" | "failed";
+// 可重跑判定（2026-09-20 批量重跑）：与后端 _RERUN_TERMINAL 一致的终态集；correlation
+// 多仓 yaml / blackbox（白盒下游段）不可自动重建，预筛排除（后端再兜底 ValueError）。
+const RERUNNABLE = new Set([...TERMINAL, "interrupted"]);
+const rerunnableRow = (s: ScanSummary) =>
+  RERUNNABLE.has(s.status) && s.scan_type !== "correlation" && s.scan_type !== "blackbox";
+
+/** 状态分段（filter 分段控件口径）：running/completed/failed/cancelled + other
+ *  （interrupted 等，仅「全部」可见）。cancelled 独立分段（2026-09-20）：取消的
+ *  任务此前只在「全部」混显，难定位——用户要按「已取消」筛选后批量重跑。 */
+type Seg = "running" | "completed" | "failed" | "cancelled";
 function segOf(s: ScanSummary): Seg | "other" {
   if (isActiveRow(s)) return "running";
   if (s.status === "completed" || s.status === "done") return "completed";
   if (["failed", "killed", "crashed"].includes(s.status)) return "failed";
+  if (s.status === "cancelled") return "cancelled";
   return "other";
 }
 
@@ -183,7 +193,7 @@ export function ScanList() {
       sessionStorage.setItem(selectionKey(workspace), JSON.stringify([...selected]));
     } catch { /* ignore */ }
   }, [workspace, selected]);
-  const [pendingBulk, setPendingBulk] = useState<"cancel" | "resume" | "delete" | null>(null);
+  const [pendingBulk, setPendingBulk] = useState<"cancel" | "resume" | "delete" | "rerun" | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   // 批量续跑确认弹窗数据（用户选「汇总断点弹窗」）：逐项并发拉 resume-preview；
   // 拉取失败的项带 error 也进列表（可见性优于静默丢弃）。
@@ -222,6 +232,7 @@ export function ScanList() {
     running: kwTyped.filter((s) => segOf(s) === "running").length,
     completed: kwTyped.filter((s) => segOf(s) === "completed").length,
     failed: kwTyped.filter((s) => segOf(s) === "failed").length,
+    cancelled: kwTyped.filter((s) => segOf(s) === "cancelled").length,
   };
 
   // correlation 子行富化源（D4）：corr_children 只带 {service, scan_id, reused}，状态/
@@ -243,6 +254,7 @@ export function ScanList() {
   const cancelableSel = selectedRows.filter(cancelableRow);
   const resumableSel = selectedRows.filter(canResumeRow);
   const deletableSel = selectedRows.filter(deletableRow);
+  const rerunnableSel = selectedRows.filter(rerunnableRow);
 
   function toggleSelect(scanId: string) {
     setSelected((prev) => {
@@ -295,14 +307,18 @@ export function ScanList() {
       ? cancelableSel.map((s) => s.scan_id)
       : pendingBulk === "delete"
         ? deletableSel.map((s) => s.scan_id)
-        : (bulkPreviews ?? []).filter((p) => p.preview?.resumable).map((p) => p.scan.scan_id);
+        : pendingBulk === "rerun"
+          ? rerunnableSel.map((s) => s.scan_id)
+          : (bulkPreviews ?? []).filter((p) => p.preview?.resumable).map((p) => p.scan.scan_id);
     try {
       setBulkBusy(true);
       const res = pendingBulk === "cancel"
         ? await batchCancelScans(workspace, ids)
         : pendingBulk === "delete"
           ? await batchDeleteScans(workspace, ids)
-          : await batchResumeScans(workspace, ids);
+          : pendingBulk === "rerun"
+            ? await batchRerunScans(workspace, ids)
+            : await batchResumeScans(workspace, ids);
       finishBulkAction(res);
     } catch (e) {
       if (e instanceof ApiError && e.body && typeof e.body === "object" && "results" in e.body) {
@@ -387,7 +403,8 @@ export function ScanList() {
           {([["all", "workspaceDetail.scans.seg.all", segCounts.all],
              ["running", "workspaces.status.running", segCounts.running],
              ["completed", "workspaces.status.completed", segCounts.completed],
-             ["failed", "workspaces.status.failed", segCounts.failed]] as const).map(([seg, key, n]) => (
+             ["failed", "workspaces.status.failed", segCounts.failed],
+             ["cancelled", "workspaces.status.cancelled", segCounts.cancelled]] as const).map(([seg, key, n]) => (
             <button
               key={seg}
               type="button"
@@ -445,6 +462,11 @@ export function ScanList() {
             onClick={() => void onBulkResume()}>
             <Play className="size-3.5" />
             {t("workspaceDetail.scans.bulk.resumeSelected", { count: resumableSel.length })}
+          </Button>
+          <Button size="sm" variant="ghost" disabled={rerunnableSel.length === 0 || bulkBusy}
+            onClick={() => setPendingBulk("rerun")}>
+            <RefreshCw className="size-3.5" />
+            {t("workspaceDetail.scans.bulk.rerunSelected", { count: rerunnableSel.length })}
           </Button>
           <Button size="sm" variant="ghost" className="text-destructive hover:bg-destructive/10"
             disabled={deletableSel.length === 0}
@@ -591,19 +613,26 @@ export function ScanList() {
                 ? t("workspaceDetail.scans.bulk.cancelConfirmTitle", { count: cancelableSel.length })
                 : pendingBulk === "delete"
                   ? t("workspaceDetail.scans.bulk.deleteConfirmTitle", { count: deletableSel.length })
-                  : t("workspaceDetail.scans.bulk.resumeConfirmTitle", { count: resumableSel.length })}
+                  : pendingBulk === "rerun"
+                    ? t("workspaceDetail.scans.bulk.rerunConfirmTitle", { count: rerunnableSel.length })
+                    : t("workspaceDetail.scans.bulk.resumeConfirmTitle", { count: resumableSel.length })}
             </DialogTitle>
             <DialogDescription asChild>
               <div className="space-y-1.5">
-                {pendingBulk === "cancel" || pendingBulk === "delete" ? (
+                {pendingBulk === "cancel" || pendingBulk === "delete" || pendingBulk === "rerun" ? (
                   <>
                     <p>{pendingBulk === "cancel"
                       ? t("workspaceDetail.scans.bulk.cancelConfirmDesc",
                         { count: cancelableSel.length, total: selected.size })
-                      : t("workspaceDetail.scans.bulk.deleteConfirmDesc",
-                        { count: deletableSel.length, total: selected.size })}</p>
+                      : pendingBulk === "delete"
+                        ? t("workspaceDetail.scans.bulk.deleteConfirmDesc",
+                          { count: deletableSel.length, total: selected.size })
+                        : t("workspaceDetail.scans.bulk.rerunConfirmDesc",
+                          { count: rerunnableSel.length, total: selected.size })}</p>
                     <ul className="space-y-0.5">
-                      {(pendingBulk === "cancel" ? cancelableSel : deletableSel).map((s) => (
+                      {(pendingBulk === "cancel"
+                        ? cancelableSel
+                        : pendingBulk === "delete" ? deletableSel : rerunnableSel).map((s) => (
                         <li key={s.scan_id} className="font-mono text-[11px]">
                           {s.workflow_id ?? s.scan_id}<span className="text-muted-foreground"> · {s.status}</span>
                         </li>
@@ -645,13 +674,17 @@ export function ScanList() {
               disabled={bulkBusy
                 || (pendingBulk === "cancel" || pendingBulk === "delete"
                   ? (pendingBulk === "cancel" ? cancelableSel.length : deletableSel.length) === 0
-                  : resumablePreviewCount === 0)}
+                  : pendingBulk === "rerun"
+                    ? rerunnableSel.length === 0
+                    : resumablePreviewCount === 0)}
               onClick={() => void doBulkAction()}>
               {pendingBulk === "cancel"
                 ? t("workspaceDetail.scans.bulk.cancelConfirmGo")
                 : pendingBulk === "delete"
                   ? t("workspaceDetail.scans.bulk.deleteConfirmGo")
-                  : t("workspaceDetail.scans.bulk.resumeConfirmGo", { count: resumablePreviewCount })}
+                  : pendingBulk === "rerun"
+                    ? t("workspaceDetail.scans.bulk.rerunConfirmGo")
+                    : t("workspaceDetail.scans.bulk.resumeConfirmGo", { count: resumablePreviewCount })}
             </Button>
           </DialogFooter>
         </DialogContent>

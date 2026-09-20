@@ -925,6 +925,39 @@ async def batch_resume_scans(ws: str, req: ScanIdsBatchRequest, request: Request
                              failed=len(results) - submitted, results=results)
 
 
+@router.post("/{ws}/scans/batch-rerun", response_model=ScanBatchAccepted, status_code=202)
+async def batch_rerun_scans(ws: str, req: ScanIdsBatchRequest, request: Request,
+                            _: User = Depends(workspace_member)):
+    """批量重跑扫描任务（2026-09-20）：终态行读原配置起全新 scan（新 scan_id，
+    与 resume 断点续跑互补）。
+
+    逐项循环调 sm.rerun——rerun 自带状态门（_RERUN_TERMINAL）与重建不可行门
+    （correlation 多仓 yaml / blackbox / 缺仓库记录），ValueError/TemporalUnavailable
+    逐项转 error 不阻断整批（对齐 batch-resume 模式）。有任何成功 → 202；全失败 → 422。
+    """
+    from supernova_web.components.scan_manager import TemporalUnavailable
+    sm = request.app.state.scan_manager
+    results: list[ScanBatchResultItem] = []
+    for scan_id in req.scan_ids:
+        try:
+            await sm.rerun(ws, scan_id)
+            results.append(ScanBatchResultItem(scan_id=scan_id, ok=True))
+        except ValueError as e:
+            results.append(ScanBatchResultItem(scan_id=scan_id, ok=False, error=str(e)))
+        except TemporalUnavailable:
+            results.append(ScanBatchResultItem(
+                scan_id=scan_id, ok=False, error="Temporal 服务未运行，请先 docker-compose up -d"))
+        except Exception as e:  # noqa: BLE001 - 单项失败不阻断整批
+            results.append(ScanBatchResultItem(scan_id=scan_id, ok=False, error=str(e)))
+    submitted = sum(1 for r in results if r.ok)
+    if submitted == 0:
+        return JSONResponse(status_code=422, content=ScanBatchAccepted(
+            workspace=ws, submitted=0, skipped=0,
+            failed=len(results), results=results).model_dump())
+    return ScanBatchAccepted(workspace=ws, submitted=submitted, skipped=0,
+                             failed=len(results) - submitted, results=results)
+
+
 # 批量删除终态门：可删状态集（对齐 workspaces_indexer._TERMINAL_STATUSES + done）。
 # running/queued 拦（queued 单点 delete 只拦 raw=running——排队 workflow 获槽后写
 # 文件会变孤儿；批量门用 effective 口径一并拦）。

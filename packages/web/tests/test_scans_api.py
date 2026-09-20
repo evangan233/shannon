@@ -31,7 +31,8 @@ class FakeSM:
         self.resumed = []
         self.cancelled = []
         self.deleted = []
-        self.rerun = []  # [(ws, scan_id, new_auth), ...]
+        self.rerun_bb = []  # [(ws, scan_id, new_auth), ...]（rerun_blackbox 记录；
+        # 不叫 rerun——批量重跑加了 sm.rerun 方法，实例属性会遮蔽同名方法）
         self.add_run = []  # [(ws, scan_id, req), ...]
         self.deleted_runs = []  # [(ws, scan_id, run_id), ...]
         self.resume_exc = None
@@ -51,6 +52,9 @@ class FakeSM:
         self.delete_exc = None
         self.delete_for_exc: dict[str, Exception] = {}
         self.delete_run_exc = None
+        # 批量重跑（2026-09-20）：sm.rerun 逐项记录 + rerun_for_exc 单项异常隔离。
+        self.rerunned = []  # [(ws, scan_id), ...]
+        self.rerun_for_exc: dict[str, Exception] = {}
 
     async def resume(self, ws, scan_id):
         if scan_id in self.resume_for_exc:
@@ -83,8 +87,14 @@ class FakeSM:
         return None if scan_id == "nope" else {"deleted": scan_id}
 
     async def rerun_blackbox(self, ws, scan_id, new_auth=None):
-        self.rerun.append((ws, scan_id, new_auth))
+        self.rerun_bb.append((ws, scan_id, new_auth))
         return "run-2"  # 新模型：续跑返下一个 run_id（run-K+1）
+
+    async def rerun(self, ws, scan_id):
+        if scan_id in self.rerun_for_exc:
+            raise self.rerun_for_exc[scan_id]
+        self.rerunned.append((ws, scan_id))
+        return (ws, f"new-{scan_id}")
 
     async def _add_blackbox_run(self, ws, scan_id, req=None):
         self.add_run.append((ws, scan_id, req))
@@ -457,7 +467,7 @@ def test_rerun_blackbox_empty_json_body_202(authed_client, app_with_ws, tmp_work
     r = authed_client.post("/api/workspaces/WS/scans/s1/combined/rerun-blackbox",
                            json={}, headers={"X-CSRF-Token": tok})
     assert r.status_code == 202, r.text
-    assert fake.rerun == [("WS", "s1", None)]  # new_auth=None（沿用原认证）
+    assert fake.rerun_bb == [("WS", "s1", None)]  # new_auth=None（沿用原认证）
 
 
 def test_rerun_blackbox_truly_empty_body_202(authed_client, app_with_ws, tmp_workspaces):
@@ -470,7 +480,7 @@ def test_rerun_blackbox_truly_empty_body_202(authed_client, app_with_ws, tmp_wor
     r = authed_client.post("/api/workspaces/WS/scans/s1/combined/rerun-blackbox",
                            headers={"X-CSRF-Token": tok})
     assert r.status_code == 202, r.text
-    assert fake.rerun[-1] == ("WS", "s1", None)
+    assert fake.rerun_bb[-1] == ("WS", "s1", None)
 
 
 def test_rerun_blackbox_invalid_scanrequest_422(authed_client, app_with_ws, tmp_workspaces):
@@ -483,7 +493,7 @@ def test_rerun_blackbox_invalid_scanrequest_422(authed_client, app_with_ws, tmp_
     r = authed_client.post("/api/workspaces/WS/scans/s1/combined/rerun-blackbox",
                            json={"url": "http://t"}, headers={"X-CSRF-Token": tok})
     assert r.status_code == 422
-    assert fake.rerun == []  # 未触 scan_manager（校验在前）
+    assert fake.rerun_bb == []  # 未触 scan_manager（校验在前）
 
 
 def test_resume_unknown_scan_404(authed_client, app_with_ws, tmp_workspaces):
@@ -638,6 +648,75 @@ def test_batch_resume_all_failed_422(authed_client, app_with_ws, tmp_workspaces)
                            json={"scan_ids": ["s1"]}, headers={"X-CSRF-Token": tok})
     assert r.status_code == 422
     assert r.json()["results"][0]["ok"] is False
+
+
+# ── batch-rerun（2026-09-20 批量重跑）────────────────────────────────────────
+
+def test_batch_rerun_mixed(authed_client, app_with_ws, tmp_workspaces):
+    """批量重跑：可重建项逐项调 sm.rerun；rerun 自带状态门（ValueError 逐项转
+    error），有成功 → 202。"""
+    _make_scan(tmp_workspaces, "WS", scan_id="s1", status="cancelled")
+    fake = FakeSM()
+    fake.rerun_for_exc = {
+        "s2": ValueError("跨仓关联扫描的多仓配置不可自动重建，请用单行「重跑」手动配置"),
+        "s3": ValueError("该扫描状态为 running，不可重跑（仅终态可重跑）"),
+    }
+    app_with_ws.state.scan_manager = fake
+    tok = _csrf(authed_client)
+    r = authed_client.post("/api/workspaces/WS/scans/batch-rerun",
+                           json={"scan_ids": ["s1", "s2", "s3"]},
+                           headers={"X-CSRF-Token": tok})
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["submitted"] == 1
+    assert body["failed"] == 2
+    assert fake.rerunned == [("WS", "s1")]
+    by_id = {x["scan_id"]: x for x in body["results"]}
+    assert by_id["s1"]["ok"] is True
+    assert by_id["s2"]["ok"] is False and "跨仓" in by_id["s2"]["error"]
+    assert by_id["s3"]["ok"] is False and "状态" in by_id["s3"]["error"]
+
+
+def test_batch_rerun_all_failed_422(authed_client, app_with_ws, tmp_workspaces):
+    """全失败 → 422（body 顶层同形，对齐 batch-resume 先例）。"""
+    _make_scan(tmp_workspaces, "WS", scan_id="s1", status="cancelled")
+    fake = FakeSM()
+    fake.rerun_for_exc = {"s1": ValueError("该扫描状态为 cancelled，不可重跑（仅终态可重跑）")}
+    app_with_ws.state.scan_manager = fake
+    tok = _csrf(authed_client)
+    r = authed_client.post("/api/workspaces/WS/scans/batch-rerun",
+                           json={"scan_ids": ["s1"]}, headers={"X-CSRF-Token": tok})
+    assert r.status_code == 422
+    assert r.json()["results"][0]["ok"] is False
+
+
+def test_batch_rerun_single_failure_isolated(authed_client, app_with_ws, tmp_workspaces):
+    """单项异常（如 TemporalUnavailable）只计入该行 results，不阻断整批。"""
+    _make_scan(tmp_workspaces, "WS", scan_id="s1", status="failed")
+    fake = FakeSM()
+    fake.rerun_for_exc = {"s1": RuntimeError("boom")}
+    _make_scan(tmp_workspaces, "WS", scan_id="s2", status="failed")
+    app_with_ws.state.scan_manager = fake
+    tok = _csrf(authed_client)
+    r = authed_client.post("/api/workspaces/WS/scans/batch-rerun",
+                           json={"scan_ids": ["s1", "s2"]}, headers={"X-CSRF-Token": tok})
+    assert r.status_code == 202
+    body = r.json()
+    assert body["submitted"] == 1
+    by_id = {x["scan_id"]: x for x in body["results"]}
+    assert by_id["s1"]["ok"] is False and "boom" in by_id["s1"]["error"]
+    assert by_id["s2"]["ok"] is True
+
+
+def test_batch_rerun_empty_ids_422(authed_client, app_with_ws):
+    """空 scan_ids → 422（ScanIdsBatchRequest validator，对齐批量取消）。"""
+    fake = FakeSM()
+    app_with_ws.state.scan_manager = fake
+    tok = _csrf(authed_client)
+    r = authed_client.post("/api/workspaces/WS/scans/batch-rerun",
+                           json={"scan_ids": []}, headers={"X-CSRF-Token": tok})
+    assert r.status_code == 422
+    assert fake.rerunned == []
 
 
 def test_scan_status_real_disk(tmp_path):

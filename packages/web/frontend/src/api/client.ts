@@ -126,6 +126,13 @@ export const batchDeleteScans = (ws: string, scanIds: string[]) =>
   apiPost<import("./types").ScanBatchResponse>(
     `/workspaces/${encWs(ws)}/scans/batch-delete`, { scan_ids: scanIds });
 
+/** 批量重跑（2026-09-20）：终态行读原配置起全新 scan（与 resume 断点续跑互补）。
+ *  rerun 自带状态门 + 重建不可行门（correlation/blackbox ValueError 逐项回显）。
+ *  零成功 422 body 同形。 */
+export const batchRerunScans = (ws: string, scanIds: string[]) =>
+  apiPost<import("./types").ScanBatchResponse>(
+    `/workspaces/${encWs(ws)}/scans/batch-rerun`, { scan_ids: scanIds });
+
 /** 仓库名（可为 group/repo）按段 encode：保留 `/` 作路径分隔，每段安全转义。
  *  /workspaces/<ws>/repos/frontend/foo 直接命中后端 {name:path}，含空格等特殊字符的段也安全。 */
 const encRepo = (name: string) => name.split("/").map(encodeURIComponent).join("/");
