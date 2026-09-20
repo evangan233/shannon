@@ -13,7 +13,6 @@ export interface TopologyNodeDraft {
   reuseScanId: string | null;
   protoRoots?: string[];
   position: { x: number; y: number };
-  referenceOnly?: boolean;
   capabilities?: CorrelationTopologyNode["capabilities"];
 }
 
@@ -176,13 +175,6 @@ export function setTopologyNodeSource(state: TopologyDraftState, repo: string, r
   return semantic(state, (draft) => ({
     ...draft,
     nodes: draft.nodes.map((node) => node.repo === repo ? { ...node, reuseScanId } : node),
-  }));
-}
-
-export function setTopologyReferenceOnly(state: TopologyDraftState, repo: string, referenceOnly: boolean) {
-  return semantic(state, (draft) => ({
-    ...draft,
-    nodes: draft.nodes.map((node) => node.repo === repo ? { ...node, referenceOnly } : node),
   }));
 }
 
@@ -351,7 +343,8 @@ export function validateTopologyDraft(draft: TopologyDraft): TopologyDraftIssue[
   for (const node of draft.nodes) {
     if (node.reuseScanId === "") issues.push({ code: "missing_source", message: `Repository ${node.repo} has no selected source` });
     const connected = enabled.some((edge) => edge.from === node.repo || edge.to === node.repo);
-    if (!connected && !node.referenceOnly)
+    // 孤立节点仍产生警告（编辑器底部红字实时可见，拦「漏连边」手滑），但不再阻塞确认。
+    if (!connected)
       issues.push({ code: "isolated_node", message: `Repository ${node.repo} is isolated` });
   }
   return issues;
@@ -379,7 +372,7 @@ export function topologyDraftToCorrForm(draft: TopologyDraft): CorrFormState {
 
 /** CorrFormState（YAML 解析产物）→ TopologyDraftState：文本→图方向（2026-09-04 拓扑↔YAML
  *  双向同步）。YAML 文本是权威——form 未声明的节点/边不保留；文本不携带的图上下文
- *  （节点位置、referenceOnly、capabilities、同 identity 边的 AI 证据）从 prev 同名/同边
+ *  （节点位置、capabilities、同 identity 边的 AI 证据）从 prev 同名/同边
  *  继承，语义未变（fingerprint 相同，纯排版差异）时原样返回 prev——确认态与历史不受
  *  文本微调惊动。语义有变则推入 undo 历史并重置确认（改错可撤销回文本编辑前的图）。 */
 export function corrFormToTopologyDraft(
@@ -398,7 +391,6 @@ export function corrFormToTopologyDraft(
       reuseScanId: repo.reuseScanId,
       protoRoots: repo.protoRoots,
       position: kept?.position ?? defaultPosition(roles, index),
-      referenceOnly: kept?.referenceOnly,
       capabilities: kept?.capabilities,
     };
   });
@@ -438,8 +430,8 @@ export function corrFormToTopologyDraft(
 
 export function topologyDraftFingerprint(draft: TopologyDraft): string {
   const semanticView = {
-    nodes: draft.nodes.map(({ repo, roles, reuseScanId, referenceOnly }) => ({
-      repo, roles: effectiveRoles({ roles }), reuseScanId, referenceOnly: referenceOnly === true,
+    nodes: draft.nodes.map(({ repo, roles, reuseScanId }) => ({
+      repo, roles: effectiveRoles({ roles }), reuseScanId,
     })).sort((a, b) => a.repo.localeCompare(b.repo)),
     edges: draft.edges.filter((edge) => edge.enabled).map(({ from, to, protocol }) => ({
       from, to, protocol,
@@ -448,10 +440,13 @@ export function topologyDraftFingerprint(draft: TopologyDraft): string {
   return JSON.stringify(semanticView);
 }
 
+/** 确认门禁（2026-09-20 孤立节点降级）：isolated_node 是非阻塞警告——无边仓库允许搭车
+ *  本次跨仓扫描进同一份报告（原「参考仓库」勾选豁免已删，警告在编辑器底部实时可见，
+ *  足以拦「漏连边」手滑）；其余校验（entrypoint / 启用边 / 来源 / 协议 / self-loop…）仍阻塞。 */
 export function confirmTopologyDraft(state: TopologyDraftState): TopologyDraftState {
-  const issues = validateTopologyDraft(state.draft);
-  if (issues.length) {
-    return { ...state, confirmation: { status: "unconfirmed", fingerprint: null, yaml: null, issues } };
+  const blocking = validateTopologyDraft(state.draft).filter((issue) => issue.code !== "isolated_node");
+  if (blocking.length) {
+    return { ...state, confirmation: { status: "unconfirmed", fingerprint: null, yaml: null, issues: blocking } };
   }
   const yaml = formToYaml(topologyDraftToCorrForm(state.draft));
   return {

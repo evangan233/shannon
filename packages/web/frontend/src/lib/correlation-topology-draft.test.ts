@@ -146,7 +146,7 @@ describe("topology draft graph semantics", () => {
     expect(state.history.past.length).toBeGreaterThan(0);
   });
 
-  it("converts only enabled edges, emits roles, and validates isolated/reference policy", () => {
+  it("converts only enabled edges, emits roles, and downgrades isolated nodes to non-blocking warnings", () => {
     let state = createTopologyDraft(analysis.repos, analysis, {});
     state = setTopologyEdgeEnabled(state, state.draft.edges[1].id, false);
     const form = topologyDraftToCorrForm(state.draft);
@@ -163,10 +163,12 @@ describe("topology draft graph semantics", () => {
     state = toggleTopologyRole(state, "web", "entrypoint");
     state = toggleTopologyRole(state, "admin", "entrypoint");
     state = setTopologyEdgeEnabled(state, state.draft.edges[3].id, false);
-    const issues = validateTopologyDraft(state.draft);
-    expect(issues.map((i) => i.code)).toContain("isolated_node");
-    state.draft.nodes.find((n) => n.repo === "user")!.referenceOnly = true;
-    expect(validateTopologyDraft(state.draft).filter((i) => i.code === "isolated_node")).toEqual([]);
+    // 孤立节点仍校验出警告，但不再阻塞确认（2026-09-20 降级，原「参考仓库」勾选豁免已删）：
+    // 无边仓库可搭车本次跨仓扫描进同一份报告。
+    expect(validateTopologyDraft(state.draft).map((i) => i.code)).toContain("isolated_node");
+    const confirmed = confirmTopologyDraft(state);
+    expect(confirmed.confirmation.status).toBe("confirmed");
+    expect(confirmed.confirmation.issues).toEqual([]);
   });
 });
 

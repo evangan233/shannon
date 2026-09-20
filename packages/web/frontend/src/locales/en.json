@@ -642,7 +642,7 @@
         "invalid_protocol": "Protocol must be grpc/http/graphql",
         "duplicate_edge": "Duplicate relationship",
         "missing_source": "Repository has no scan source",
-        "isolated_node": "Isolated repository exists"
+        "isolated_node": "Isolated repositories (no correlation edges) exist and will be scanned as standalone"
       },
       "multihopTitle": "Multi-hop candidate chains",
       "multihopIntro": "Candidate paths assembled from adjacent call edges (structural inference) — review before acting",
@@ -705,7 +705,6 @@
         "redo": "Redo",
         "resetLayout": "Reset layout",
         "connect": "Connect",
-        "referenceOnly": "Reference repository",
         "confirm": "Confirm topology",
         "details": "Evidence and coverage",
         "submit": "Start scan",

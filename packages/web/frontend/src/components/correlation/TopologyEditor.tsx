@@ -10,7 +10,7 @@ import {
 import {
   addTopologyEdge, deleteTopologyEdge, moveTopologyNode, redoTopology, undoTopology,
   resetTopologyLayout, restoreTopologyAiEdge, setTopologyEdgeEnabled, updateTopologyEdge,
-  setTopologyNodeSource, setTopologyReferenceOnly, toggleTopologyRole,
+  setTopologyNodeSource, toggleTopologyRole,
   validateTopologyDraft, type TopologyDraftState,
 } from "@/lib/correlation-topology-draft";
 import { anchorPair, type Box } from "@/lib/topology-anchors";
@@ -190,7 +190,7 @@ function EdgeEvidenceGroup({
 }
 
 /** 节点属性面板（右栏节点模式，2026-09-04 撤 TopologyTables 并轨）：角色 / 来源 /
- *  参考仓库 / 移除——原节点表的编辑能力全部收进这里，点击节点即达。 */
+ *  移除——原节点表的编辑能力全部收进这里，点击节点即达。 */
 function NodePanel({ node, state, onState, scans, onRemove }: {
   node: NonNullable<TopologyDraftState["draft"]["nodes"][number]>;
   state: TopologyDraftState;
@@ -230,11 +230,6 @@ function NodePanel({ node, state, onState, scans, onRemove }: {
               </span>,
             })),
           ]} />
-      </label>
-      <label className="flex items-center gap-2">
-        <Checkbox checked={node.referenceOnly === true} aria-label={`${node.repo} reference only`}
-          onCheckedChange={(v) => onState(setTopologyReferenceOnly(state, node.repo, v === true))} />
-        {t("scan.correlation.topology.referenceOnly")}
       </label>
       {onRemove && (
         <Button type="button" variant="outline" size="sm" aria-label={`${t("scan.correlation.topology.removeNode")} ${node.repo}`}
@@ -517,7 +512,7 @@ export function TopologyEditor({ state, onState, scans: scansUnknown = [], onRem
         </div>
         </div>
         {/* 右栏属性面板（双模式）：选中边=边属性+证据（现状）；选中节点=节点属性
-            （2026-09-04 撤 TopologyTables 并轨——角色/来源/参考仓库/移除的唯一编辑入口）；
+            （2026-09-04 撤 TopologyTables 并轨——角色/来源/移除的唯一编辑入口）；
             与画布等高内部滚动。 */}
         <aside className="space-y-3 rounded-lg border border-border bg-card p-3 xl:max-h-[540px] xl:overflow-y-auto" aria-label={t("scan.correlation.topology.details")}>
           {selectedNode ? (
@@ -614,8 +609,10 @@ export function TopologyEditor({ state, onState, scans: scansUnknown = [], onRem
           </div>
         </aside>
       </div>
+      {/* isolated_node 是非阻塞警告（2026-09-20 降级）：amber 提示可保留扫描，其余仍为错误红。 */}
       {validateTopologyDraft(state.draft).map((issue) => (
-        <p key={issue.code + issue.message} role="alert" className="text-xs text-destructive">
+        <p key={issue.code + issue.message} role="alert"
+          className={`text-xs ${issue.code === "isolated_node" ? "text-amber" : "text-destructive"}`}>
           {t(`scan.correlation.issues.${issue.code}`, { defaultValue: issue.message })}
         </p>
       ))}
