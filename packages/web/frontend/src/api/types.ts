@@ -77,7 +77,8 @@ export interface LogEventEvent {
   // category=levelname 动态值(INFO/WARNING/ERROR/DEBUG), 非 EventCategory 枚举(只有 WARN 无 WARNING)
   category: string;
   type: "LogEvent";
-  logger_name: string;
+  // 可选：corr_writer.raw 直写的跨仓编排日志不带此字段（缺省时渲染省略 logger 段）
+  logger_name?: string;
   level: string;       // "INFO" | "WARNING" | "ERROR" | "DEBUG" | "NOTSET"
   message: string;
   exc_txt?: string;

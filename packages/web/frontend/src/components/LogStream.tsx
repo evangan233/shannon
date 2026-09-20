@@ -173,7 +173,11 @@ function describe(e: NdjsonEvent): RowDesc {
     }
 
     case "LogEvent": {
-      const line = `[${e.level}] ${e.logger_name}: ${e.message}`;
+      // corr_writer.raw 直写的编排日志不带 logger_name（历史事件已落盘改不了），
+      // 缺字段时省略 "logger: " 段，避免渲染出字面量 "undefined:"。
+      const line = e.logger_name
+        ? `[${e.level}] ${e.logger_name}: ${e.message}`
+        : `[${e.level}] ${e.message}`;
       return { icon: "·", tag: "LOG", body: e.exc_txt ? `${line}\n${e.exc_txt}` : line };
     }
 

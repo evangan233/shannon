@@ -429,6 +429,20 @@ describe("LogStream", () => {
     expect(infoRow?.textContent ?? "").toMatch(/mod\.c: hi/);
   });
 
+  it("LogEvent 缺 logger_name（corr_writer.raw 编排日志）不再渲染 undefined:", () => {
+    const ev: NdjsonEvent = {
+      ts: "2026-09-20T07:47:14.000Z", category: "WARNING", type: "LogEvent",
+      level: "WARNING",
+      message: "boundary backend/asset_transfer SRPC:CashTransfer missing "
+               + "reachable_from; defaulted to [] (source undetermined)",
+    } as unknown as NdjsonEvent;
+    const { container } = render(<LogStream events={[ev]} />);
+    const txt = rowText(container, "ev-warn");
+    expect(txt).toMatch(/\[WARNING\]/);
+    expect(txt).toMatch(/boundary backend\/asset_transfer/);
+    expect(txt).not.toContain("undefined");
+  });
+
   // ─── correlation_progress（D6 跨仓关联主行编排事件，CONTROL → trace 色）───
   it("correlation_progress 渲染 node/name/status/detail，不再退化成裸 type 名", () => {
     const evs: NdjsonEvent[] = [
