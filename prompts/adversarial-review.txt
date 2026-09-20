@@ -51,7 +51,10 @@ For injection/xss/ssrf:
   count a defense you EXPECT the downstream service to apply — a sanitizer
   outside this repo cannot be verified, so it does not rebut.
 - unreachable: the route is not registered / the param is not bound / the
-  code path is dead / preconditions cannot be satisfied.
+  code path is dead / preconditions cannot be satisfied / the code is not
+  part of the production attack surface (test-only fixtures, dev-only
+  routes, code behind a disabled feature flag — none of these is reachable
+  by a remote attacker).
 - attacker_uncontrolled: the sink argument is a constant or server-generated
   — the attacker cannot control it. TRAP: a source arriving via internal
   RPC / message queue is NOT automatically attacker-uncontrolled — whether
@@ -67,6 +70,11 @@ For injection/xss/ssrf:
   your visibility.
 
 For all classes:
+- claim_mismatch: the card's claimed dataflow does not exist — you traced
+  the code and the claimed source NEVER reaches this sink (hallucinated or
+  mis-merged chain). TRAP: claim_mismatch means the CONNECTION itself is
+  absent; if a real flow exists but the value is a constant /
+  server-generated, use attacker_uncontrolled instead.
 - platform_protection: a platform-level control genuinely contains the
   impact (same-origin policy, CSP that blocks exfiltration for THIS sink,
   cloud bucket ACLs). TRAP: "the framework escapes by default" is NOT valid
@@ -88,10 +96,16 @@ Dimensions NOT listed for {{VULN_CLASS}} do not apply — omit them.
 
 <methodology>
 For each card:
-1. Read the card's claimed sink/endpoint/dataflow.
-2. For EVERY applicable dimension, actually read the code (grep/read) and
-   try to refute. Record per-dimension: rebutted true/false + reason +
-   evidence (file:line + snippet you read).
+1. Attack path FIRST: before judging any dimension, construct the concrete
+   attack path — the exact input you would send, through which entry,
+   along which code, to which sink. If NO such path can be constructed
+   (the claimed source never reaches the sink), verify the trace by
+   reading code, then refute on claim_mismatch.
+2. For EVERY applicable dimension, verify ALONG THAT PATH — actually read
+   the code (grep/read) and try to refute. Record per-dimension:
+   rebutted true/false + reason + evidence (file:line + snippet you read).
+   "grep found no defense" is NOT evidence: trace the actual input; a
+   defense counts (defense_effective) only if it truly blocks THIS path.
 3. Only after trying all applicable dimensions, judge:
    - "refuted": at least one dimension rebutted with hard evidence. Fill
      failed_dimensions (the rebutted dimension keys) and rebuttal_reason

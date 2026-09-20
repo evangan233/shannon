@@ -84,14 +84,24 @@ safe 卡有兜底丢弃；本阶段反驳掉 both/llm-only 卡属于刻意新增
 | `platform_protection` | 全部 5 类 | 平台级兜底：框架默认转义 / 中间件统一防护 / 同源策略 / 云访问控制 |
 | `authn_enforced` | **auth 专用** | 认证实际存在且该路径不可绕过（authz 卡默认在认证之后，此维度不适用） |
 | `authz_guard` | **authz 专用** | 角色 / owner 检查实际覆盖该操作（对齐 authz judge 现有 rejected 语义 'ownership guard dominates sink via middleware X'） |
+| `claim_mismatch` | 全部 5 类（**2026-09-20 加强**） | 卡片声称的数据流本身不存在：声称的 source 与 sink 无数据流连接（幻觉/错连链，实证 NodeGoat SSRF-GN-02/AUTH-VULN-11 曾借维度表达）。与 `attacker_uncontrolled` 分界：连接**存在**但值不可控 → `attacker_uncontrolled`；连接**不存在** → 本维度 |
 
-适用维度数：taint 三类 5 个（defense_effective/unreachable/attacker_uncontrolled/
-self_impact/platform_protection）、auth 4 个（unreachable/self_impact/
-platform_protection/authn_enforced）、authz 4 个（unreachable/self_impact/
-platform_protection/authz_guard）。
+适用维度数：taint 三类 6 个（defense_effective/unreachable/attacker_uncontrolled/
+self_impact/platform_protection/claim_mismatch）、auth 5 个（unreachable/
+self_impact/platform_protection/authn_enforced/claim_mismatch）、authz 5 个
+（unreachable/self_impact/platform_protection/authz_guard/claim_mismatch）。
 
 **多路径硬约束**（O-3 借鉴）：agent 必须对片内每张卡**逐个尝试全部适用维度**
 才能下 `survived`；不允许只查一两个维度就宣布无法反驳。
+
+**攻击路径先行硬约束（2026-09-20 加强）**：agent 逐卡必须**先构造具体攻击
+路径**（发什么输入、走哪个入口、沿哪条代码路、到哪个 sink）再逐维度检验——
+`defense_effective` 判据从「防御存在」升级为「真的拦得住这条路径」（grep
+不到防御 ≠ 防御不存在，须沿路径追踪实际输入）；路径构造不出来（声称
+source 与 sink 无数据流）→ `claim_mismatch`。`unreachable` 判据含环境性
+子句：非产品攻击面（test-only fixtures / dev-only 路由 / 功能开关关闭）
+算不可达。借鉴 OpenAnt 阶段 5 攻击者模拟——纯纸面推演（读码验证路径），
+非黑盒、不动流程位置。
 
 ## 4. 组件设计
 
@@ -350,6 +360,10 @@ DimensionResult 接口）/ `client.ts`（fetchAdversarialReview）/
   whitespace）后必须能在该文件内容中子串匹配到。任一失败 → 整卡降级
   survived + 拒因记账（对齐 L3 降级语义）。函数签名带
   `repo_root: Path | None`，None 时跳过本层（测试/离线复用友好）。
+  **依赖目录豁免（2026-09-20）**：location 落在 `node_modules` /
+  `site-packages` / `vendor` 且文件不存在 → 跳过该条不判幻觉（扫描环境常
+  不安装依赖，实证 NodeGoat INJ-VULN-05 引用 node_modules/marked 的真驳回
+  被误降级）；文件存在时 snippet 照常校验，仓库自身文件缺失照旧降级。
 
 **降级矩阵**：
 

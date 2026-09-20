@@ -76,5 +76,22 @@ def test_calibration_sentences_present():
     assert "dangerouslySetInnerHTML" in text  # platform_protection 陷阱反例
     for dim in ("defense_effective", "unreachable", "attacker_uncontrolled",
                 "self_impact", "platform_protection", "authn_enforced",
-                "authz_guard"):
+                "authz_guard", "claim_mismatch"):
         assert dim in text, dim
+
+
+def test_attack_path_first_methodology_present():
+    """G2 攻击路径先行（2026-09-20）：逐卡先构造具体攻击路径再沿路径检验——
+    defense_effective 从「防御存在」升级为「拦得住这条路径」；路径构造不出
+    = claim_mismatch。对齐 OpenAnt 阶段 5 攻击者模拟（纸面推演，非黑盒）。"""
+    text = (PROMPTS_DIR / "adversarial-review.txt").read_text(encoding="utf-8")
+    assert "attack path" in text.lower()
+    assert "claim_mismatch" in text  # 构造不出路径 → claim_mismatch 归因
+
+
+def test_unreachable_nonproduction_clause_present():
+    """G4 unreachable 环境性子句（2026-09-20）：非产品攻击面（测试专用/
+    dev-only/功能开关关闭）算不可达成立。"""
+    text = (PROMPTS_DIR / "adversarial-review.txt").read_text(encoding="utf-8")
+    assert "test-only" in text
+    assert "feature flag" in text

@@ -22,7 +22,7 @@ const VERDICTS = ["all", "refuted", "survived", "unreviewed"] as const;
 // 维度展示顺序（对齐 core 对抗审查 7 维）；记录里出现的未知维度尾随在后。
 const DIMENSION_ORDER = [
   "defense_effective", "unreachable", "attacker_uncontrolled", "self_impact",
-  "platform_protection", "authn_enforced", "authz_guard",
+  "platform_protection", "authn_enforced", "authz_guard", "claim_mismatch",
 ];
 
 /** 裁决 → 语义色 token（逐主题校对比，不用 tailwind 原生色阶）：驳回红 / 幸存绿 / 未审成弱化。 */

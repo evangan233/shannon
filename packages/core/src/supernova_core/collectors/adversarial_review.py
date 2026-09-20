@@ -19,18 +19,21 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# 固定 7 维度（spec §3）——代码侧单一事实源，prompt/schema 与此对齐。
+# 固定维度（spec §3）——代码侧单一事实源，prompt/schema 与此对齐。
+# claim_mismatch（2026-09-20 加强，全 5 类）：扫描器声称的数据流本身不存在
+# （source 与 sink 无连接/幻觉链）——与 attacker_uncontrolled 的分界线：
+# 连接存在但值不可控 → attacker_uncontrolled；连接不存在 → claim_mismatch。
 _DIMENSIONS_TAINT = frozenset({
     "defense_effective", "unreachable", "attacker_uncontrolled",
-    "self_impact", "platform_protection"})
+    "self_impact", "platform_protection", "claim_mismatch"})
 REVIEW_DIMENSIONS: dict[str, frozenset[str]] = {
     "injection": _DIMENSIONS_TAINT,
     "xss": _DIMENSIONS_TAINT,
     "ssrf": _DIMENSIONS_TAINT,
     "auth": frozenset({"unreachable", "self_impact", "platform_protection",
-                       "authn_enforced"}),
+                       "authn_enforced", "claim_mismatch"}),
     "authz": frozenset({"unreachable", "self_impact", "platform_protection",
-                        "authz_guard"}),
+                        "authz_guard", "claim_mismatch"}),
 }
 
 # run_gitnexus_verdict_agent 顶层 output schema（宽松 items——GLM 深层嵌套
@@ -104,6 +107,16 @@ def _norm_ws(s: str) -> str:
     return " ".join(s.split())
 
 
+# 依赖目录段（G3 豁免 2026-09-20）：扫描环境常不安装依赖（实证
+# INJ-VULN-05 引用 node_modules/marked 的真驳回被 L4「file not found」
+# 误降级），依赖库路径缺失不判幻觉；文件存在时 snippet 照常校验。
+_DEPENDENCY_DIR_SEGMENTS = frozenset({"node_modules", "site-packages", "vendor"})
+
+
+def _is_dependency_path(fname: str) -> bool:
+    return bool(_DEPENDENCY_DIR_SEGMENTS & set(Path(fname).parts))
+
+
 def _evidence_exists(evidence: list, repo_root: Path) -> list[str]:
     """L4：逐条校验证据真实性，返回失败原因列表（空 = 全过）。
 
@@ -126,6 +139,10 @@ def _evidence_exists(evidence: list, repo_root: Path) -> list[str]:
                 problems.append(f"path escapes repo root: {fname}")
                 continue
             if not fname or not fpath.is_file():
+                # 依赖目录下的文件缺失 = 环境未装依赖，非幻觉证据（G3）；
+                # 仓库自身文件缺失照旧降级
+                if fname and _is_dependency_path(fname):
+                    continue
                 problems.append(f"file not found: {fname}")
                 continue
             if not snippet:

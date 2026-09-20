@@ -56,13 +56,18 @@ def test_schema_is_loose_top_level():
 
 
 def test_dimensions_by_class():
+    # claim_mismatch（2026-09-20 加强）：全 5 类适用——扫描器声称的数据流
+    # 本身不存在（source 与 sink 无连接/幻觉链）是独立于 attacker_uncontrolled
+    # 的误报根因（实证 SSRF-GN-02/AUTH-VULN-11 借维度表达）
     assert REVIEW_DIMENSIONS["injection"] == frozenset({
         "defense_effective", "unreachable", "attacker_uncontrolled",
-        "self_impact", "platform_protection"})
+        "self_impact", "platform_protection", "claim_mismatch"})
     assert REVIEW_DIMENSIONS["auth"] == frozenset({
-        "unreachable", "self_impact", "platform_protection", "authn_enforced"})
+        "unreachable", "self_impact", "platform_protection", "authn_enforced",
+        "claim_mismatch"})
     assert REVIEW_DIMENSIONS["authz"] == frozenset({
-        "unreachable", "self_impact", "platform_protection", "authz_guard"})
+        "unreachable", "self_impact", "platform_protection", "authz_guard",
+        "claim_mismatch"})
 
 
 def test_valid_refuted_passes(tmp_path: Path):
@@ -113,6 +118,40 @@ def test_l4_snippet_not_in_file_degrades(tmp_path: Path):
     repo.mkdir()  # brief 原稿漏建目录：write_text 不会创建父目录
     (repo / "app.js").write_text("console.log(1);\n", encoding="utf-8")
     res = validate_review_cards([_ok_refuted()], valid_ids={"INJ-01"},
+                                vuln_class=TAINT, repo_root=repo)
+    assert res.accepted[0]["review_verdict"] == "survived"
+
+
+@pytest.mark.parametrize("seg", ["node_modules", "site-packages", "vendor"])
+def test_l4_missing_dependency_file_pardoned(tmp_path: Path, seg: str):
+    # G3 豁免（2026-09-20）：依赖库文件在扫描环境未安装是常态（实证
+    # INJ-VULN-05 引用 node_modules/marked 的真驳回被 L4 误降级 survived），
+    # 缺失不判幻觉；与 test_l4_missing_file_degrades（仓库自身文件缺失照降）
+    # 形成对照
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    card = _ok_refuted()
+    card["dimension_results"][0]["evidence"] = [
+        {"location": f"{seg}/marked/lib/marked.js:120",
+         "snippet": "output = output.replace(...)"}]
+    res = validate_review_cards([card], valid_ids={"INJ-01"},
+                                vuln_class=TAINT, repo_root=repo)
+    assert res.accepted[0]["review_verdict"] == "refuted"
+    assert res.accepted[0]["failed_dimensions"] == ["defense_effective"]
+
+
+def test_l4_dependency_file_present_snippet_still_checked(tmp_path: Path):
+    # 豁免只针对「文件不存在」：依赖文件真实存在时 snippet 照常校验，
+    # 防豁免被当造假后门
+    repo = tmp_path / "repo"
+    dep = repo / "node_modules" / "marked" / "lib"
+    dep.mkdir(parents=True)
+    (dep / "marked.js").write_text("module.exports = {};\n", encoding="utf-8")
+    card = _ok_refuted()
+    card["dimension_results"][0]["evidence"] = [
+        {"location": "node_modules/marked/lib/marked.js:1",
+         "snippet": "escape(userInput)"}]
+    res = validate_review_cards([card], valid_ids={"INJ-01"},
                                 vuln_class=TAINT, repo_root=repo)
     assert res.accepted[0]["review_verdict"] == "survived"
 
