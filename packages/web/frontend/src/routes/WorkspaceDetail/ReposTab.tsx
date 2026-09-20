@@ -2,10 +2,10 @@ import { useEffect, useState, useRef, useMemo } from "react";
 import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { deleteRepo, deleteRepos, pullRepo, checkoutRepo, ApiError } from "@/api/client";
+import { deleteRepo, deleteRepos, pullRepo, checkoutRepo, getRepo, ApiError } from "@/api/client";
 import { useRepos } from "@/api/useRepos";
 import { useAuth } from "@/auth/AuthContext";
-import type { Repo, RepoState } from "@/api/types";
+import type { Repo, RepoDetail, RepoState } from "@/api/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatRow, type StatItem } from "@/components/StatRow";
-import { CheckCircle2, XCircle, AlertTriangle, RefreshCw, Trash2, Unlink, FolderX } from "lucide-react";
+import { CheckCircle2, XCircle, AlertTriangle, RefreshCw, Trash2, Unlink, FolderX, FileText } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
@@ -107,6 +107,9 @@ export function ReposTab({ workspace: wsProp }: Props) {
   const [addOpen, setAddOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [pendingBulkDelete, setPendingBulkDelete] = useState(false);
+  const [failureRepo, setFailureRepo] = useState<RepoDetail | null>(null);
+  const [failureLogOpen, setFailureLogOpen] = useState(false);
+  const [failureLogLoading, setFailureLogLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [groupFilter, setGroupFilter] = useState(GROUP_ALL);
@@ -174,6 +177,21 @@ export function ReposTab({ workspace: wsProp }: Props) {
     } finally {
       setBusy(false);
       setPendingBulkDelete(false);
+    }
+  }
+
+  async function showFailureLog(repo: Repo) {
+    setFailureLogOpen(true);
+    setFailureLogLoading(true);
+    setFailureRepo(repo);
+    try {
+      // 列表接口不携带完整 recent_events；点击失败按钮时再拉详情，避免每次刷新
+      // 仓库列表都把大段 git stderr 发给所有行。
+      setFailureRepo(await getRepo(workspace, repo.name));
+    } catch {
+      // 保留列表里的 last_error/source，详情请求失败时仍能看到第一现场摘要。
+    } finally {
+      setFailureLogLoading(false);
     }
   }
 
@@ -441,6 +459,23 @@ export function ReposTab({ workspace: wsProp }: Props) {
                       {/* 操作列统一 icon-only ghost 按钮：clone 行 更新+删除；linked 行 取消关联。 */}
                       <TableCell className="py-2.5 px-3 text-center">
                         <span className="inline-flex justify-center gap-1">
+                          {r.state === "failed" && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="text-red hover:bg-red/10"
+                                  aria-label={t("repos.viewFailureLogAria", { name: r.name })}
+                                  data-testid={`repo-failure-log-${r.name.replace("/", "-")}`}
+                                  onClick={() => void showFailureLog(r)}
+                                >
+                                  <FileText className="size-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>{t("repos.viewFailureLog")}</TooltipContent>
+                            </Tooltip>
+                          )}
                           {/* 空壳目录（empty）无更新入口——pull 对其必报"仓库不存在"；
                               upload 仓是静态快照（后端 405），更新走重新上传；linked
                               共享路径可写但 admin-only（spec 2026-09-04 §6） */}
@@ -485,6 +520,53 @@ export function ReposTab({ workspace: wsProp }: Props) {
         )}
 
         <AddRepoDialog ws={workspace} open={addOpen} onOpenChange={setAddOpen} onCreated={() => void refresh()} />
+
+        <Dialog open={failureLogOpen} onOpenChange={setFailureLogOpen}>
+          <DialogContent className="max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>{t("repos.failureDialog.title", { name: failureRepo?.name ?? "" })}</DialogTitle>
+              <DialogDescription>{t("repos.failureDialog.description")}</DialogDescription>
+            </DialogHeader>
+            {failureLogLoading && <div className="text-sm text-muted-foreground">{t("repos.failureDialog.loading")}</div>}
+            {failureRepo && (
+              <div className="space-y-3 text-sm">
+                <div className="grid gap-2 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-2">
+                  <div className="min-w-0">
+                    <div className="text-xs text-muted-foreground">{t("repos.failureDialog.source")}</div>
+                    <div className="break-all font-mono text-xs">{failureRepo.source?.url ?? "-"}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">{t("repos.failureDialog.branch")}</div>
+                    <div className="font-mono text-xs">{failureRepo.source?.branch ?? t("repos.failureDialog.defaultBranch")}</div>
+                  </div>
+                  {failureRepo.clone_request?.command && (
+                    <div className="min-w-0 sm:col-span-2">
+                      <div className="text-xs text-muted-foreground">{t("repos.failureDialog.command")}</div>
+                      <div className="break-all font-mono text-xs">{failureRepo.clone_request.command}</div>
+                    </div>
+                  )}
+                  <div className="min-w-0 sm:col-span-2">
+                    <div className="text-xs text-muted-foreground">{t("repos.failureDialog.error")}</div>
+                    <div className="whitespace-pre-wrap break-words font-mono text-xs text-destructive">{failureRepo.last_error ?? t("repos.clone.unknownError")}</div>
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-1 text-xs font-medium text-muted-foreground">{t("repos.failureDialog.log")}</div>
+                  <pre className="max-h-80 overflow-auto rounded-md border border-border bg-black/20 p-3 text-xs leading-5 whitespace-pre-wrap break-words">
+                    {(failureRepo.recent_events ?? []).map((event, index) => {
+                      const detail = event.message ?? event.stderr_tail ?? event.error;
+                      const line = detail
+                        ? `${event.ts ? `[${String(event.ts)}] ` : ""}${String(detail)}`
+                        : JSON.stringify(event);
+                      return <div key={`${String(event.ts ?? "event")}-${index}`}>{line}</div>;
+                    })}
+                    {!(failureRepo.recent_events ?? []).length && t("repos.failureDialog.noLog")}
+                  </pre>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
 
         <Dialog open={!!pendingDelete} onOpenChange={(o) => !o && setPendingDelete(null)}>
           <DialogContent>

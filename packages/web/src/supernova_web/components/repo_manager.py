@@ -409,6 +409,14 @@ class RepoManager:
         src = view.get("source")
         if isinstance(src, dict) and src.get("url"):
             view["source"] = {**src, "url": strip_credentials(src["url"])}
+        request = view.get("clone_request")
+        if isinstance(request, dict):
+            safe_request = dict(request)
+            if safe_request.get("url"):
+                safe_request["url"] = strip_credentials(safe_request["url"])
+            if safe_request.get("command"):
+                safe_request["command"] = self._git.redact(safe_request["command"])
+            view["clone_request"] = safe_request
         if self.is_busy(ws, name):
             view["progress"] = self._last_progress(ws, name)
         return view
@@ -581,29 +589,60 @@ class RepoManager:
                           commit: str | None, target: Path) -> None:
         try:
             async with self._sem:
+                # clone 失败时 git 可能会删除 target，不能依赖 target 内预先写日志。
+                # 将请求上下文随任务传入，失败收口时再一次性落盘，确保 URL/分支/
+                # 脱敏后的命令和 stderr 尾部都能保留下来。
+                source = {"kind": "git", "url": strip_credentials(url),
+                          "branch": branch, "commit": commit}
+                clone_context = {
+                    "source": source,
+                    "clone_request": {
+                        "url": source["url"], "branch": branch, "commit": commit,
+                        "command": self._display_clone_command(url, target, branch),
+                    },
+                }
                 ok = await self._run_git_with_progress(
                     ws, name, phase="cloning",
-                    argv=self._build_clone_argv(self._git._inject_auth(url, ws), target, branch))
+                    argv=self._build_clone_argv(self._git._inject_auth(url, ws), target, branch),
+                    failure_context=clone_context)
                 # _mark_failed 已写 state=failed；跳过 ready 收尾，保持 failed 状态
                 if ok:
+                    # 成功路径也把脱敏后的 URL/分支请求写进 clone.ndjson；失败路径
+                    # 则由 _mark_failed 在 target 可能消失后补写同一上下文。
+                    await self._append_event(ws, name, {
+                        "ts": _now_iso(), "type": "clone_request", **clone_context,
+                    })
                     # commit checkout（可选）
                     if commit:
-                        await self._run_git_with_progress(
+                        fetched = await self._run_git_with_progress(
                             ws, name, phase="cloning",
-                            argv=["git", "-C", str(target), "fetch", "--all"])
+                            argv=["git", "-C", str(target), "fetch", "--all"],
+                            failure_context=clone_context)
+                        if not fetched:
+                            return
                         proc = await asyncio.create_subprocess_exec(
                             "git", "-C", str(target), "checkout", commit,
                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                        await proc.wait()
+                        _, checkout_err = await proc.communicate()
                         if proc.returncode != 0:
-                            self._mark_failed(ws, name, f"commit {commit} checkout 失败")
+                            detail = self._git.redact(checkout_err.decode(errors="replace").strip())
+                            msg = f"commit {commit} checkout 失败"
+                            if detail:
+                                msg = f"{msg}：{detail[-4000:]}"
+                            self._mark_failed(
+                                ws, name, msg,
+                                {**clone_context, "stderr_tail": detail[-4000:] if detail else ""},
+                            )
                             return
                     head = await self._head_commit(target)
+                    # branch=None 表示 git 使用远端默认分支；成功后读取实际 checkout
+                    # 分支，避免列表里只显示“未指定”，也与失败日志的请求上下文对应。
+                    actual_branch = await self._current_branch(target) or branch
                     self._write_meta(ws, name, state="ready", last_pull_at=_now_iso(),
                                      cloned_at=_now_iso(),
                                      size_bytes=_dir_size(target),
                                      source={"kind": "git", "url": strip_credentials(url),
-                                             "branch": branch, "commit": head})
+                                             "branch": actual_branch, "commit": head})
                     await self._append_event(ws, name, {"ts": _now_iso(), "type": "clone_end", "status": "ready"})
         finally:
             self._jobs.pop((ws, name), None)
@@ -1108,6 +1147,14 @@ class RepoManager:
         return any(l.get("name") == name for l in read_linked_repos(self._ws_dir(ws)))
 
     # ---- git 子进程 + stderr 进度解析 ----
+    def _display_clone_command(self, url: str, target: Path, branch: str | None) -> str:
+        """返回可展示/落盘的 clone 命令，不包含注入的 Git 凭据。"""
+        args = ["git", "clone", "--progress"]
+        if branch:
+            args += ["--branch", branch]
+        args += [strip_credentials(url) or url, str(target)]
+        return " ".join(self._git.redact(a) for a in args)
+
     def _build_clone_argv(self, authed_url: str, target: Path, branch: str | None) -> list[str]:
         cmd = ["git", "clone", "--progress"]
         if branch:
@@ -1115,8 +1162,15 @@ class RepoManager:
         cmd += [authed_url, str(target)]
         return cmd
 
-    async def _run_git_with_progress(self, ws: str, name: str, phase: str, argv: list[str]) -> bool:
-        """跑 git，异步读 stderr 解析进度写 ndjson。返回 returncode==0。"""
+    async def _run_git_with_progress(self, ws: str, name: str, phase: str, argv: list[str],
+                                     failure_context: dict | None = None) -> bool:
+        """跑 git，异步读 stderr 解析进度写 ndjson。返回 returncode==0。
+
+        stderr 同时保留一个有界尾窗：clone 失败时 target 可能被 git 删除，
+        仅写 target/clone.ndjson 会把最关键的错误一起丢掉，因此失败收口时将
+        尾窗复制进 failed meta 和 clone_end 事件。
+        """
+        stderr_tail: list[str] = []
         proc = await asyncio.create_subprocess_exec(
             *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         assert proc.stderr is not None
@@ -1126,7 +1180,12 @@ class RepoManager:
                 line = await proc.stderr.readline()
                 if not line:
                     break
-                text = line.decode("utf-8", "replace")
+                text = self._git.redact(line.decode("utf-8", "replace"))
+                clean = text.rstrip()
+                if clean:
+                    stderr_tail.append(clean)
+                    if len(stderr_tail) > 40:
+                        del stderr_tail[:-40]
                 m = _PROGRESS_RE.search(text)
                 if m:
                     await self._append_event(ws, name, {
@@ -1146,25 +1205,49 @@ class RepoManager:
         await asyncio.gather(drain_stderr(), drain_stdout())
         rc = await proc.wait()
         if rc != 0:
-            self._mark_failed(ws, name, f"{phase} 失败（rc={rc}）")
+            detail = "\n".join(stderr_tail).strip()
+            msg = f"{phase} 失败（rc={rc}）"
+            if detail:
+                msg = f"{msg}：{detail[-4000:]}"
+            failure = dict(failure_context or {})
+            if detail:
+                failure["stderr_tail"] = detail[-4000:]
+            self._mark_failed(ws, name, msg, failure)
         return rc == 0
 
-    def _mark_failed(self, ws: str, name: str, msg: str) -> None:
+    def _mark_failed(self, ws: str, name: str, msg: str, context: dict | None = None) -> None:
         # 容错：git clone 失败（认证/网络/源不存在）在某些 git 版本下会删除它创建的 target，
         # 此时需重建目录以落 failed meta + clone_end 事件，让失败项可见、可删、可重试。
         repo = self._repo_dir(ws, name)
         repo.mkdir(parents=True, exist_ok=True)
-        self._write_meta(ws, name, state="failed", last_error=msg, last_pull_at=_now_iso())
-        # clone_end 失败事件（同步写，task 内调用）
+        safe_context = dict(context or {})
+        source = safe_context.get("source")
+        if isinstance(source, dict) and source.get("url"):
+            safe_context["source"] = {**source, "url": strip_credentials(source["url"])}
+        request = safe_context.get("clone_request")
+        if isinstance(request, dict) and request.get("url"):
+            safe_context["clone_request"] = {
+                **request, "url": strip_credentials(request["url"]),
+            }
+        self._write_meta(ws, name, state="failed", last_error=msg, last_pull_at=_now_iso(),
+                         **safe_context)
+        # clone_end 失败事件（同步写，task 内调用）。context 里含完整请求上下文，
+        # stderr_tail 为脱敏后的 git 原文尾窗，前端失败日志可直接查看。
         f = self._repo_dir(ws, name) / "clone.ndjson"
+        event = {"ts": _now_iso(), "type": "clone_end",
+                 "status": "failed", "error": msg, **safe_context}
         with open(f, "a") as fh:
-            fh.write(json.dumps({"ts": _now_iso(), "type": "clone_end",
-                                 "status": "failed", "error": msg}, ensure_ascii=False) + "\n")
+            fh.write(json.dumps(event, ensure_ascii=False) + "\n")
 
     async def _append_event(self, ws: str, name: str, payload: dict) -> None:
         f = self._repo_dir(ws, name) / "clone.ndjson"
-        async with aiofiles.open(f, "a") as fh:
-            await fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        try:
+            async with aiofiles.open(f, "a") as fh:
+                await fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except FileNotFoundError:
+            # git 在部分失败路径会清理 target；失败收口 _mark_failed 会重建目录
+            # 并写入 stderr 尾窗，不能让一次进度落盘失败掩盖真正的 clone 错误。
+            return
 
     async def _head_commit(self, target: Path) -> str | None:
         try:

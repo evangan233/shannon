@@ -76,6 +76,38 @@ async def test_clone_failed_writes_failed_state(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_clone_failure_keeps_request_context_and_stderr(tmp_path, monkeypatch):
+    """失败 clone 即使 git 清理 target，也要保留 URL、请求分支、命令和错误尾窗。"""
+    crash = tmp_path / "crash-with-detail.py"
+    crash.write_text(
+        'import sys; sys.stderr.write("fatal: repository not found\\n"); sys.exit(128)'
+    )
+    rm = _rm(tmp_path, monkeypatch)
+    monkeypatch.setattr(rm, "_build_clone_argv",
+                        lambda url, target, branch: [sys.executable, str(crash)])
+    await rm.clone(WS, "https://gitlab.example/team/foo.git", "develop", None, None)
+    await asyncio.sleep(0.3)
+
+    target = _repos_base(tmp_path) / "foo"
+    meta = json.loads((target / ".supernova-repo.json").read_text())
+    assert meta["state"] == "failed"
+    assert meta["source"] == {
+        "kind": "git", "url": "https://gitlab.example/team/foo.git",
+        "branch": "develop", "commit": None,
+    }
+    assert meta["clone_request"]["branch"] == "develop"
+    assert "https://gitlab.example/team/foo.git" in meta["clone_request"]["command"]
+    assert "fatal: repository not found" in meta["last_error"]
+    assert "fatal: repository not found" in meta["stderr_tail"]
+
+    events = [json.loads(line) for line in (target / "clone.ndjson").read_text().splitlines()]
+    failed = events[-1]
+    assert failed["type"] == "clone_end"
+    assert failed["source"]["branch"] == "develop"
+    assert "fatal: repository not found" in failed["stderr_tail"]
+
+
+@pytest.mark.asyncio
 async def test_clone_rejects_path_traversal_name(tmp_path, monkeypatch):
     """name 含路径分隔符/遍历分量必须 ValueError，防止越界 repos_dir mkdir/clone/rmtree
     （final-review I-6）。

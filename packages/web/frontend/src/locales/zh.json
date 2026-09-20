@@ -203,6 +203,20 @@
       "reconnecting": "clone 中… 连接断开，重连中",
       "cloning": "clone 中…",
       "cloningProgress": "clone 中… {{progress}}%"
+    },
+    "viewFailureLogAria": "查看 {{name}} 的失败日志",
+    "viewFailureLog": "查看失败日志",
+    "failureDialog": {
+      "title": "克隆失败：{{name}}",
+      "description": "查看当时使用的 Git 地址、分支、命令和 Git 原始错误输出。",
+      "loading": "正在加载失败日志…",
+      "source": "Git 地址",
+      "branch": "分支",
+      "defaultBranch": "远端默认分支（未显式指定）",
+      "command": "执行命令（已脱敏）",
+      "error": "错误摘要",
+      "log": "失败日志（最近事件）",
+      "noLog": "暂无日志"
     }
   },
   "repoDetail": {

@@ -203,6 +203,20 @@
       "reconnecting": "Cloning… connection lost, reconnecting",
       "cloning": "Cloning…",
       "cloningProgress": "Cloning… {{progress}}%"
+    },
+    "viewFailureLogAria": "View failure log for {{name}}",
+    "viewFailureLog": "View failure log",
+    "failureDialog": {
+      "title": "Clone failed: {{name}}",
+      "description": "Review the Git URL, branch, command, and raw Git error output used for this clone.",
+      "loading": "Loading failure log…",
+      "source": "Git URL",
+      "branch": "Branch",
+      "defaultBranch": "Remote default branch (not explicitly specified)",
+      "command": "Command (redacted)",
+      "error": "Error summary",
+      "log": "Failure log (recent events)",
+      "noLog": "No log available"
     }
   },
   "repoDetail": {
