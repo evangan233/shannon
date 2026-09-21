@@ -289,6 +289,8 @@ async def test_run_correlation_phase_two_stage(tmp_path, monkeypatch):
         relations=[Relation(**{"from": "gateway", "to": "order-svc"})],
         correlation=CorrelationConfig(out_workspace="corr-scan"))
 
+    captured_ctx: dict = {}
+
     async def fake_execute(self, agent_name=None, **kw):
         name = getattr(agent_name, "value", agent_name)
 
@@ -297,6 +299,8 @@ async def test_run_correlation_phase_two_stage(tmp_path, monkeypatch):
                 self.structured_output = payload
 
         if name == "cross-repo-adjudication":
+            captured_ctx.update(
+                _json.loads(kw["prompt_variables"]["correlation_context"]))
             bj = kw["prompt_variables"]["batch_json"]
             if "INJ-D1" in bj:
                 return _R({"cards": [{
@@ -320,7 +324,16 @@ async def test_run_correlation_phase_two_stage(tmp_path, monkeypatch):
         assert "artifacts_guide" in kw_edge["prompt_variables"], (
             "阶段 A prompt_vars 须注入 artifacts_guide")
         return _R({"from": "gateway", "to": "order-svc", "protocol": "grpc",
-                   "calls": [], "status": "ok", "boundaries": [],
+                   "calls": [{"method": "order.v1.OrderService/CreateOrder",
+                              "call_site": {"file": "c.ts", "line": 18,
+                                            "snippet": "x"},
+                              "confidence": "high", "evidence": "client stub"}],
+                   "status": "ok",
+                   "boundaries": [{"service": "order-svc",
+                                   "method": "order.v1.OrderService/CreateOrder",
+                                   "exposure": "external",
+                                   "reachable_from": ["gateway POST /orders"],
+                                   "reason": "r", "confidence": "high"}],
                    "flows": [{"entry": "POST /orders",
                               "method": "order.v1.OrderService/CreateOrder",
                               "call_site": {"file": "c.ts", "line": 1, "snippet": "x"},
@@ -354,6 +367,16 @@ async def test_run_correlation_phase_two_stage(tmp_path, monkeypatch):
     by_vid = {c["finding_ref"]["vuln_id"]: c for c in cards}
     assert by_vid["INJ-001"]["direction"] == "confirm"
     assert by_vid["INJ-D1"]["direction"] == "upgrade"
+    # 2b) correlation_context 下发 inbound_surface（spec 2026-09-21 §3.1：
+    #     dismissed 批翻案原料——谁调用 + 哪个入口可达 + entry_points 指路）
+    surface = captured_ctx["inbound_surface"]["order-svc"]
+    assert surface["inbound_calls"] == [{
+        "from_service": "gateway",
+        "rpc_method": "order.v1.OrderService/CreateOrder",
+        "call_site": "c.ts:18"}]
+    assert surface["reachable_entries"] == [{
+        "rpc_method": "order.v1.OrderService/CreateOrder",
+        "exposure": "external", "via": ["gateway POST /orders"]}]
     # 3) 报告结论章节（成立漏洞 + 翻案候选；全量裁决卡撤出报告改由 json 留档）
     report = (dlv / "correlation-report.md").read_text(encoding="utf-8")
     assert "全量裁决留档" in report
@@ -765,3 +788,153 @@ def test_render_report_unadjudicated_counted():
               "reasoning": "batch failed", "confidence": "low"}]
     md = _render_report(_report_topology(), [], merged, [], cards=cards)
     assert "存疑 1 ｜ 未重审 1（合并漏洞共 2 条）" in md
+
+
+# ---------------------------------------------------------------------------
+# inbound_surface + 防护类否决分桶（spec 2026-09-21 §3.1/§3.3）
+# ---------------------------------------------------------------------------
+
+def test_build_inbound_surface_groups_by_target_service():
+    """纯数据搬运零推断：边 calls → inbound_calls；边界 → reachable_entries；
+    entry_points 指路；空方法/空边界容忍。"""
+    from types import SimpleNamespace
+    from supernova_multi.orchestrator import _build_inbound_surface
+    edges = [{"from": "gw", "to": "order-svc",
+              "calls": [{"method": "order.v1.Svc/Create",
+                         "call_site": {"file": "c.ts", "line": 18},
+                         "confidence": "high"},
+                        {"method": "", "call_site": {}}]},
+             {"from": "gw", "to": "be2", "calls": []}]
+    boundaries = [SimpleNamespace(service="order-svc",
+                                  method="order.v1.Svc/Create",
+                                  exposure="external",
+                                  reachable_from=["gw POST /orders"]),
+                  SimpleNamespace(service="order-svc", method="",
+                                  exposure="internal", reachable_from=[])]
+    arts = {"order-svc": SimpleNamespace(entry_points="/r/be/entry_points.json"),
+            "gw": SimpleNamespace(entry_points=None)}
+    surface = _build_inbound_surface(edges, boundaries, arts)
+    assert surface["order-svc"]["inbound_calls"] == [
+        {"from_service": "gw", "rpc_method": "order.v1.Svc/Create",
+         "call_site": "c.ts:18"}]
+    assert surface["order-svc"]["reachable_entries"] == [
+        {"rpc_method": "order.v1.Svc/Create", "exposure": "external",
+         "via": ["gw POST /orders"]}]
+    assert surface["order-svc"]["entry_points_ref"] == "/r/be/entry_points.json"
+    assert "be2" not in surface          # 无 calls 无边界不建 slot
+    assert "gw" not in surface           # entry_points=None 不建 slot
+
+
+def test_render_report_skipped_dismissed_note():
+    """防护类否决留痕节：报告一句话说明 + 明细指向 json。"""
+    from supernova_multi.orchestrator import _render_report
+    md = _render_report(_report_topology(), [], {}, [],
+                        cards=[],
+                        skipped_dismissed=[{"ID": "D1", "service": "s"}])
+    assert "防护类否决(未进跨仓审查)" in md
+    assert "共 1 条" in md and "skipped_dismissed" in md
+
+
+def test_render_report_cards_empty_with_skip_is_not_pending():
+    """cards=[] + skipped 非空 ≠ 裁决进行中（None 才是进行中）。"""
+    from supernova_multi.orchestrator import _render_report
+    md = _render_report(_report_topology(), [], {}, [],
+                        cards=[], skipped_dismissed=[{"ID": "D1"}])
+    assert "裁决阶段进行中" not in md
+
+
+@pytest.mark.asyncio
+async def test_defensive_dismissed_skipped_with_audit_trail(tmp_path, monkeypatch):
+    """防护类否决不进批（默认开），留痕落 adjudication-log.json + 报告；
+    env 关掉后恢复全量进批（spec 2026-09-21 §3.3）。"""
+    import json as _json
+    from supernova_multi.orchestrator import run_correlation_phase
+
+    gw_ws, be_ws = tmp_path / "gw-scan", tmp_path / "be-scan"
+    for w in (gw_ws, be_ws):
+        (w / "deliverables").mkdir(parents=True)
+    (be_ws / "deliverables" / "injection_exploitation_queue.json").write_text(
+        _json.dumps({"vulnerabilities": [
+            {"ID": "INJ-001", "title": "SQLi", "severity": "high"}]}),
+        encoding="utf-8")
+    (be_ws / "deliverables" / "dismissed_findings.json").write_text(
+        _json.dumps({"dismissed": [
+            {"ID": "INJ-D1", "vuln_class": "injection",
+             "dismiss_reason": "SQL 参数化查询，无拼接"},
+            {"ID": "INJ-D2", "vuln_class": "injection",
+             "dismiss_reason": "internal not reachable from entrypoint"}]}),
+        encoding="utf-8")
+    out_ws = tmp_path / "corr-scan"
+    out_ws.mkdir()
+    event_file = out_ws / "events.ndjson"
+    cfg = MultiRepoConfig(
+        repos={"gateway": RepoSpec(path="/r/gw", role="entrypoint",
+                                   roles=["entrypoint", "backend"]),
+               "order-svc": RepoSpec(path="/r/be", role="backend")},
+        relations=[Relation(**{"from": "gateway", "to": "order-svc"})],
+        correlation=CorrelationConfig(out_workspace="corr-scan"))
+
+    seen_batch_ids: list[str] = []
+
+    async def fake_execute(self, agent_name=None, **kw):
+        name = getattr(agent_name, "value", agent_name)
+
+        class _R:
+            def __init__(self, payload):
+                self.structured_output = payload
+
+        if name == "cross-repo-adjudication":
+            bj = kw["prompt_variables"]["batch_json"]
+            seen_batch_ids.extend(
+                f["ID"] for f in _json.loads(bj))
+            return _R({"cards": []})   # 空卡 → 漏判补位 error 卡，不影响断言
+        return _R({"from": "gateway", "to": "order-svc", "protocol": "grpc",
+                   "calls": [], "status": "ok", "boundaries": [], "flows": []})
+
+    import supernova_core.agents.executor as executor_mod
+    monkeypatch.setattr(executor_mod.AgentExecutor, "execute", fake_execute)
+
+    await run_correlation_phase(
+        cfg, {"gateway": gw_ws, "order-svc": be_ws}, out_ws, event_file,
+        write_scan_end=False)
+    dlv = out_ws / "deliverables"
+    log = _json.loads(
+        (dlv / "adjudication-log.json").read_text(encoding="utf-8"))
+    # 防护类跳过留痕；可达性类照常进批；queue 批不受影响
+    assert [s["ID"] for s in log["skipped_dismissed"]] == ["INJ-D1"]
+    assert log["skipped_dismissed"][0]["matched_defense_hint"]
+    assert "INJ-D2" in seen_batch_ids and "INJ-D1" not in seen_batch_ids
+    assert "INJ-001" in seen_batch_ids
+    report = (dlv / "correlation-report.md").read_text(encoding="utf-8")
+    assert "防护类否决(未进跨仓审查)" in report
+
+    # env 关 → 全量进批，无留痕键
+    out_ws2 = tmp_path / "corr-scan-2"
+    out_ws2.mkdir()
+    monkeypatch.setenv("SUPERNOVA_ADJUDICATION_SKIP_DEFENSIVE", "0")
+    await run_correlation_phase(
+        cfg, {"gateway": gw_ws, "order-svc": be_ws}, out_ws2, event_file,
+        write_scan_end=False)
+    log2 = _json.loads((out_ws2 / "deliverables" / "adjudication-log.json")
+                       .read_text(encoding="utf-8"))
+    assert "INJ-D1" in seen_batch_ids
+    assert log2["skipped_dismissed"] == []
+
+
+def test_render_report_dismissed_uncertain_counted_separately():
+    """maintain 举证门槛拦下的 needs-review 卡不计"维持"，单列存疑
+    （spec 2026-09-21 §3.2 报告口径）。"""
+    from supernova_multi.orchestrator import _render_report
+
+    def _d(direction, conclusion):
+        return {"direction": direction, "conclusion": conclusion,
+                "finding_ref": {"service": "s", "vuln_id": f"D-{direction}",
+                                "origin": "dismissed"},
+                "cross_service_context": "", "analysis_process": [],
+                "verification_evidence": [], "reasoning": "", "confidence": "low"}
+
+    cards = [_d("maintain", "not-vulnerable"),      # 合格维持
+             _d("maintain", "needs-review"),       # 门槛拦截
+             _d("error", "needs-review")]          # 批失败占位
+    md = _render_report(_report_topology(), [], {}, [], cards=cards)
+    assert "单仓已否决复核：维持 1 · 存疑 2（举证不足/裁决失败，待人工）" in md

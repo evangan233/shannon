@@ -173,6 +173,13 @@ def test_consistent_cards_untouched():
              _card("downgrade", "downgraded"),
              _card("downgrade", "not-vulnerable"),
              _card("maintain", "not-vulnerable")]
+    # direction↔origin 合法搭配显式配齐（queue: confirm/downgrade；dismissed:
+    # upgrade/maintain）——helper 默认 origin=queue 会拦 dismissed 方向
+    cards[0]["finding_ref"]["origin"] = "queue"
+    cards[1]["finding_ref"]["origin"] = "dismissed"
+    cards[2]["finding_ref"]["origin"] = "queue"
+    cards[3]["finding_ref"]["origin"] = "queue"
+    cards[4]["finding_ref"]["origin"] = "dismissed"
     out = sanitize_adjudication_cards(cards)
     assert [c["conclusion"] for c in out] == [
         "vulnerable", "vulnerable", "downgraded", "not-vulnerable", "not-vulnerable"]

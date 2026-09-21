@@ -4,9 +4,10 @@
 - dismissed 批：单文件条目按 vuln_class 过滤 → upgrade/maintain；全量进批，
   dismiss_reason 含可达性/暴露面的排批内前部（排序只影响优先级不影响覆盖）
 - 批上限（默认 15）分片
+- 防护类否决分桶（spec 2026-09-21 §3.3）：defensive 不进批（留痕），reviewable 进批
 """
 from supernova_core.correlation.adjudication import (
-    AdjudicationBatch, build_adjudication_batches,
+    AdjudicationBatch, build_adjudication_batches, split_dismissed_by_service,
 )
 
 
@@ -65,3 +66,55 @@ def test_service_without_dismissed_gets_no_dismissed_batch():
     assert all(not (b.service == "gateway" and b.origin == "dismissed")
                for b in batches)
     assert any(b.service == "order-svc" and b.origin == "dismissed" for b in batches)
+
+
+# ---------------------------------------------------------------------------
+# 防护类否决分桶（spec 2026-09-21 §3.3）——defensive 不进批（留痕）
+# ---------------------------------------------------------------------------
+
+def test_defensive_skipped_and_reviewable_kept():
+    dismissed = {"b": [
+        # 防护类：sink 处防护与调用方无关，跨仓视角翻不了 → 跳过
+        {"ID": "D-param", "vuln_class": "injection",
+         "dismiss_reason": "SQL 参数化查询，无拼接"},
+        {"ID": "D-mask", "vuln_class": "auth",
+         "dismiss_reason": "返回值已脱敏（前4+****+后4）"},
+        # 可达性类：跨仓审查的目标客户 → 保留
+        {"ID": "D-reach", "vuln_class": "injection",
+         "dismiss_reason": "内部接口，外部不可达"},
+        # 两类都不沾：宁可多审 → 保留
+        {"ID": "D-other", "vuln_class": "xss", "dismiss_reason": "低置信度误报"},
+        # 两类都沾：保守保留
+        {"ID": "D-both", "vuln_class": "xss",
+         "dismiss_reason": "内部接口且框架统一转义"},
+    ]}
+    kept, skipped = split_dismissed_by_service(dismissed)
+    assert [f["ID"] for f in kept["b"]] == ["D-reach", "D-other", "D-both"]
+    assert [s["ID"] for s in skipped] == ["D-param", "D-mask"]
+
+
+def test_skipped_record_carries_audit_fields():
+    dismissed = {"b": [{"ID": "D1", "vuln_class": "injection",
+                        "dismiss_reason": "prepared statement 全覆盖",
+                        "evidence": "a.go:10"}]}
+    _, skipped = split_dismissed_by_service(dismissed)
+    rec = skipped[0]
+    assert rec["service"] == "b"
+    assert rec["ID"] == "D1"
+    assert rec["vuln_class"] == "injection"
+    assert rec["dismiss_reason"] == "prepared statement 全覆盖"
+    assert rec["evidence"] == "a.go:10"
+    assert rec["matched_defense_hint"]      # 留痕：命中的防护关键词
+
+
+def test_split_keeps_original_entries_unmodified():
+    entry = {"ID": "D1", "vuln_class": "xss", "dismiss_reason": "低置信度"}
+    kept, skipped = split_dismissed_by_service({"b": [entry]})
+    assert kept == {"b": [entry]}
+    assert skipped == []
+
+
+def test_split_empty_inputs():
+    kept, skipped = split_dismissed_by_service({})
+    assert kept == {}
+    assert skipped == []

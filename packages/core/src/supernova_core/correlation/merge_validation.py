@@ -108,14 +108,18 @@ def sanitize_adjudication_cards(cards: list[dict]) -> list[dict]:
     """direction/conclusion 矛盾、direction/origin 不配 → conclusion 改
     needs-review（其余不动）。"""
     for c in cards:
-        allowed = _CONSISTENT_CONCLUSIONS.get(c.get("direction"))
+        direction = c.get("direction")
+        allowed = _CONSISTENT_CONCLUSIONS.get(direction)
         if allowed and c.get("conclusion") not in allowed:
             c["conclusion"] = "needs-review"
             continue    # 已拦的卡无需再查 origin（结论已落人工池）
-        allowed_dirs = _CONSISTENT_DIRECTIONS.get(
-            (c.get("finding_ref") or {}).get("origin"))
-        if allowed_dirs and c.get("direction") not in allowed_dirs:
-            c["conclusion"] = "needs-review"
+        # origin 校验只针对认识的方向（error/未知 direction 宽容放行，
+        # 与 conclusion 检查的宽容语义一致）
+        if allowed:
+            allowed_dirs = _CONSISTENT_DIRECTIONS.get(
+                (c.get("finding_ref") or {}).get("origin"))
+            if allowed_dirs and direction not in allowed_dirs:
+                c["conclusion"] = "needs-review"
     return cards
 
 

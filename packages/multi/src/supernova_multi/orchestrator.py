@@ -696,11 +696,20 @@ def _render_verdict_stats(merged_queues: dict[str, list[dict]], cards: list[dict
     reviewed = [c for c in cards if c.get("finding_ref", {}).get("origin") == "dismissed"]
     if reviewed:
         # 单仓否决的跨仓复核结论一行带过：无翻案时对读者是纯噪音，不展开成清单；
-        # 有翻案时指回成立区。
+        # 有翻案时指回成立区。needs-review 的维持卡（maintain 举证门槛拦截 /
+        # 占位失败，spec 2026-09-21 §3.2）不算"维持"，单列存疑。
+        review_needs = [c for c in reviewed if c.get("conclusion") == "needs-review"]
+        maintained = len(reviewed) - len(upgraded) - len(review_needs)
         lines += [""]
         if upgraded:
-            lines.append(f"单仓已否决复核：维持 {len(reviewed) - len(upgraded)}"
-                         f" · 翻案 {len(upgraded)}（翻案候选见「成立的漏洞」区，待人工确认）")
+            extra = (f" · 存疑 {len(review_needs)}（举证不足/裁决失败，待人工）"
+                     if review_needs else "")
+            lines.append(f"单仓已否决复核：维持 {maintained}"
+                         f" · 翻案 {len(upgraded)}（翻案候选见「成立的漏洞」区，待人工确认）"
+                         + extra)
+        elif review_needs:
+            lines.append(f"单仓已否决复核：维持 {maintained}"
+                         f" · 存疑 {len(review_needs)}（举证不足/裁决失败，待人工）")
         else:
             lines.append(f"单仓已否决复核：{len(reviewed)} 条全部维持原判，无翻案。")
     # 留档指引并入统计节尾（2026-09-21：报告只收结论，全量卡由 json 承担）
