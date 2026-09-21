@@ -216,14 +216,40 @@ describe("LogsTab", () => {
     // 人化 = key=value 形式（path=app/...），非原始 JSON 串
     expect(toolRow?.textContent).toContain("path=app/data/benefits-dao.js");
     expect(toolRow?.textContent).not.toContain("{\"path\":");
-    // LLM 行：首段非空行胜出（多行 content 只显第一行）
+    // LLM 行：压平摘要（2026-09-21 修「Turn N: {」——首行非空行对 JSON/markdown
+    // 回复是结构标记，信息量为零；换行折进单空格后整段可见）
     const llmRow = container.querySelector(".log-row.ev-llm");
     expect(llmRow?.textContent).toContain("Turn 8: Line1");
-    expect(llmRow?.textContent).not.toContain("Line2");
+    expect(llmRow?.textContent).toContain("Line2");
     // banner 头（非 JSON 行）弱化为 muted 文本，不进网格
     expect(screen.getByText("Agent: gn-discovery-sink-001").className).toContain("text-muted-foreground");
     // 行 title 披露完整类型（渐进披露通道在）
     expect(toolRow?.getAttribute("title")).toContain("tool_start");
+  });
+
+  // 2026-09-21 修「Turn N: {」：llm_response 的 JSON 回复（vuln agent 终版输出常态）
+  // 首行是 "{"，firstNonemptyLine 后行内只剩 "{"——压平整段后实际字段可见。
+  it("llm_response content 为 JSON 时行内压平显示实际字段，非光秃首行 {", async () => {
+    const lines = [
+      JSON.stringify({
+        type: "llm_response", timestamp: "2026-09-21T02:35:11.334Z",
+        data: { turn: 4, content: '{\n  "title": "XSS in search",\n  "severity": "high"\n}' },
+      }),
+    ].join("\n");
+    server.use(
+      http.get("/api/workspaces/:ws/scans/:scanId/logs", ({ request }) => {
+        const url = new URL(request.url);
+        if (url.searchParams.has("file")) return HttpResponse.json({ content: lines });
+        return HttpResponse.json({ files: ["agents/x_chain-verdict-injection-01_attempt-1.log"] });
+      }),
+    );
+    const { container } = renderAt("/p/ws/scans/scan1/logs");
+    fireEvent.click(await screen.findByText(/chain-verdict-injection-01_attempt-1\.log/));
+    await waitFor(() => expect(container.querySelectorAll(".log-row").length).toBe(1));
+    const llmRow = container.querySelector(".log-row.ev-llm");
+    expect(llmRow?.textContent).toContain("Turn 4");
+    expect(llmRow?.textContent).toContain('"title": "XSS in search"');
+    expect(llmRow?.textContent).toContain('"severity": "high"');
   });
 
   it("events.ndjson 走 LogStream 渲染（与 live 页同组件同视觉，非 pre 原样文本）", async () => {

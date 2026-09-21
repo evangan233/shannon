@@ -9,7 +9,7 @@ import { Empty } from "../../components/Empty";
 import { Skeleton } from "../../components/ui/skeleton";
 import { LogStream } from "../../components/LogStream";
 import type { NdjsonEvent } from "../../api/types";
-import { humanizeToolCall, firstNonemptyLine } from "../../state/formatters";
+import { humanizeToolCall, summarizeTurnContent } from "../../state/formatters";
 import { parseEventTs, fmtClock, fmtLocalFull } from "../../utils/eventTs";
 
 // 按行数（而非字符数）判阈值：spec/log-prose 谈论的是行计数，大日志=多行。
@@ -37,7 +37,7 @@ type LogEv = {
 // 2026-09-03 重做：旧版「[完整datetime] type + 原始JSON参数/2000字符result」三段
 // 拼接 + 满屏 cyan 底块 = 用户实测「乱」——改 log-row 网格（HH:MM:SS|图标|TAG|body），
 // tool 参数走 humanizeToolCall 人化、snippet 收紧 160（完整内容行 title 披露）。
-type AgentRow = { icon: string; tag: string; cls: string; body: string; metrics?: string };
+type AgentRow = { icon: string; tag: string; cls: string; body: string; metrics?: string; full?: string };
 
 const SNIPPET_LIMIT = 160;
 
@@ -72,9 +72,15 @@ function describeAgentEvent(ev: LogEv): AgentRow {
         body: failed ? "failed" : "Completed", metrics: ms != null ? fmtDur(ms) : undefined };
     }
     case "llm_response": {
-      const line = firstNonemptyLine(typeof d.content === "string" ? d.content : "");
+      // 压平整段再截断（2026-09-21 修「Turn N: {」，对齐 live 页 LogStream）：
+      // JSON/markdown 回复首行是结构标记（{ / ```json），firstNonemptyLine
+      // 信息量为零；full 进行 title 披露 2000 字符全文。
+      const raw = typeof d.content === "string" ? d.content : "";
+      const turn = String(d.turn ?? "?");
+      const full = raw ? summarizeTurnContent(raw, 2000) : "";
       return { icon: "›", tag: "LLM", cls: "ev-llm",
-        body: `Turn ${String(d.turn ?? "?")}${line ? `: ${snippet(line)}` : ""}` };
+        body: `Turn ${turn}${raw ? `: ${summarizeTurnContent(raw)}` : ""}`,
+        full: full ? `Turn ${turn}: ${full}` : undefined };
     }
     case "tool_start": {
       const toolName = String(d.toolName ?? "tool");
@@ -114,7 +120,8 @@ function renderLine(l: string, key: number) {
   const row = describeAgentEvent(ev);
   const ts = ev.ts ?? ev.timestamp ?? "";
   const ms = parseEventTs(ts);
-  const title = [fmtEvTs(ts), ev.type, row.body].filter(Boolean).join("  ");
+  // title 正文优先 full（llm_response 压平 2000 字符全文 > 截断 body），与 live 页同语义。
+  const title = [fmtEvTs(ts), ev.type, row.full ?? row.body].filter(Boolean).join("  ");
   return (
     <div key={key} className={`log-row ${row.cls}`} data-type={ev.type} title={title}>
       <span className="log-gutter" aria-hidden />

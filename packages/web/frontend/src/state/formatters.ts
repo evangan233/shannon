@@ -11,6 +11,16 @@ export function firstNonemptyLine(text: string | null | undefined): string {
   return "";
 }
 
+/** LLM turn 单行摘要：压平整段（空白→单空格）再截断。web 专属增强（非 py 对齐，
+ *  CLI 终端单行无需此道）。修「Turn 14: {」（2026-09-21）：vuln agent 回复多为
+ *  JSON / markdown 代码块，firstNonemptyLine 取到的首行是结构标记（{ / ```json），
+ *  信息量为零；压平整段后实际字段内容（"vulns": [ { "title": ...）直接可见。
+ *  调用方配 title 渐进披露更长全文（建议 limit 2000，防原生 tooltip 过长卡顿）。 */
+export function summarizeTurnContent(text: string | null | undefined, limit = 160): string {
+  const flat = (text ?? "").replace(/\s+/g, " ").trim();
+  return flat.length > limit ? flat.slice(0, limit) + " …" : flat;
+}
+
 // 对齐 formatters.py:103 default_tool_params —— tool_name -> 关键参数名映射 + 截断。
 const TOOL_KEY_MAP: Record<string, string> = {
   Bash: "command",

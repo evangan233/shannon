@@ -154,6 +154,36 @@ describe("LogStream", () => {
     expect(title).toContain("[SSRF] ssrf-vuln");  // 渐进披露：悬停才见归属
   });
 
+  // ── 2026-09-21 修「Turn 14: {」：vuln agent 回复多为 JSON/markdown，首行是
+  // 结构标记（{ / ```json），firstNonemptyLine 信息量为零。摘要改为压平整段
+  // （空白→单空格）再截断，行内直接可见实际字段内容。──
+  it("LlmTurnEvent content 为 JSON 时行内压平显示实际内容，不再只有首行 {", () => {
+    const ev: NdjsonEvent = {
+      ts: "2026-09-21T10:02:00.000Z", category: "LLM", type: "LlmTurnEvent",
+      agent_name: "injection-vuln", turn: 14,
+      content: '{\n  "vulns": [\n    { "title": "SQL injection in login" }\n  ]\n}',
+    };
+    const { container } = render(<LogStream events={[ev]} />);
+    const txt = rowText(container, "ev-llm");
+    expect(txt).toMatch(/Turn 14/);
+    expect(txt).toContain('"vulns"');          // 压平后字段可见
+    expect(txt).toContain("SQL injection in login");
+  });
+
+  it("LlmTurnEvent 长内容：行内截断省略，title 披露截断段之后的全文", () => {
+    const tail = "TAIL-SECTION-ONLY-IN-TITLE";
+    const ev: NdjsonEvent = {
+      ts: "2026-09-21T10:02:01.000Z", category: "LLM", type: "LlmTurnEvent",
+      agent_name: "xss-vuln", turn: 15,
+      content: `${"x".repeat(300)}\n${tail}`,
+    };
+    const { container } = render(<LogStream events={[ev]} />);
+    const txt = rowText(container, "ev-llm");
+    expect(txt).not.toContain(tail);           // 行内 160 截断，后段不进 body
+    const title = container.querySelector(".ev-llm")?.getAttribute("title") ?? "";
+    expect(title).toContain(tail);             // hover 全文（2000 上限内）
+  });
+
   // ── GitnexusLlmEvent progress ──
   it("GitnexusLlmEvent progress 行含 phase + done/total + hits", () => {
     const ev: NdjsonEvent = {

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { FixedSizeList } from "react-window";
 import type { NdjsonEvent, EventCategory } from "../api/types";
-import { humanizeToolCall, firstNonemptyLine } from "../state/formatters";
+import { humanizeToolCall, summarizeTurnContent } from "../state/formatters";
 import { fmtCost } from "../utils/currency";
 import { parseEventTs, fmtClock } from "../utils/eventTs";
 
@@ -86,8 +86,10 @@ function fmtTokens(input?: number, output?: number): string {
 /** 单行结构化描述：icon/tag 放固定列对齐，body 是主体，metrics 右对齐拆出。
  *  取代旧版 summarize() 的「图标+type+全文」挤一个 nowrap 串导致的列参差。
  *  AGENT start/end 行 body 带全名（段落锚点，gutter 色带的图例）；TOOL/LLM 行
- *  body 纯内容不重复名字（归属=左缘指纹色带 + hover title，见 agentScopeKey）。 */
-type RowDesc = { icon: string; tag: string; body: string; metrics?: string };
+ *  body 纯内容不重复名字（归属=左缘指纹色带 + hover title，见 agentScopeKey）。
+ *  full：title 用的更长全文（如 LLM turn 压平 2000 字符），缺省回退 body——
+ *  body 截断后完整内容仍可经 hover 渐进披露。 */
+type RowDesc = { icon: string; tag: string; body: string; metrics?: string; full?: string };
 
 function describe(e: NdjsonEvent): RowDesc {
   switch (e.type) {
@@ -128,8 +130,15 @@ function describe(e: NdjsonEvent): RowDesc {
     }
 
     case "LlmTurnEvent": {
-      const line = firstNonemptyLine(e.content);
-      return { icon: "›", tag: "LLM", body: `Turn ${e.turn}${line ? `: ${line}` : ""}` };
+      // 压平整段再截断（2026-09-21 修「Turn 14: {」）：JSON/markdown 回复首行是
+      // 结构标记，firstNonemptyLine 信息量为零；title 披露 2000 字符全文。
+      const line = summarizeTurnContent(e.content);
+      const full = summarizeTurnContent(e.content, 2000);
+      return {
+        icon: "›", tag: "LLM",
+        body: `Turn ${e.turn}${line ? `: ${line}` : ""}`,
+        full: full ? `Turn ${e.turn}: ${full}` : undefined,
+      };
     }
 
     case "GitnexusLlmEvent": {
@@ -233,14 +242,16 @@ const VIRTUAL_THRESHOLD = 500;
 function LogRow({ e, agentColor, style }: {
   e: NdjsonEvent; agentColor?: string; style?: CSSProperties;
 }) {
-  const { icon, tag, body: rawBody, metrics } = describe(e);
+  const { icon, tag, body: rawBody, metrics, full } = describe(e);
   // 子仓源归属前缀（2026-09-10 主行 live）：归并流注入 service（src=c-<scan_id>），
   // 前缀 [svc]——多子仓同名 agent（vuln-*）混流可辨归属；主行/黑盒行无此前缀。
   const body = e.service ? `[${e.service}] ${rawBody}` : rawBody;
   // hover title 带完整 ts + agent 名：窄列只显 HH:MM:SS，悬停看完整
   // "2026-07-31 10:53:53" 与归属（TOOL/LLM 行 body 不含名字）。
+  // title 正文优先 full（LLM turn 压平 2000 字符全文 > 截断 body）。
   const who = agentScopeKey(e);
-  const title = [e.ts, who ? `${who} · ${body}` : body, metrics].filter(Boolean).join("  ");
+  const titleBody = full ?? body;
+  const title = [e.ts, who ? `${who} · ${titleBody}` : titleBody, metrics].filter(Boolean).join("  ");
   return (
     <div style={style} className={`log-row ${rowClass(e)}`} data-type={e.type} title={title}>
       <span className={`log-gutter${agentColor ? ` ${agentColor}` : ""}`} aria-hidden />
