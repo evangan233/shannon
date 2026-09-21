@@ -260,19 +260,25 @@ def http_route_label(
     """Join a chain's entry_point_id to its parsed HTTP route → "METHOD /path".
 
     entry_points maps EntryPoint.func_block_id → EntryPoint（route-bearing，
-    由 pipeline activity 从 code_index.json 构建）。join miss / http_method
-    未知时返回 None——调用方保持原字段值，PoC gap-fill LLM 兜底。与 authz 轨
-    _endpoint_label 同构，但更严格：缺真实 method 的 label 匹配不上 PoC 的
-    derive_method_path 正则，索性不发。
+    由 pipeline activity 从 code_index.json 构建）。join miss / route 缺失
+    返回 None——调用方保持原字段值，PoC gap-fill LLM 兜底。与 authz 轨
+    _endpoint_label 同构，但更严格：缺真实 method 的 HTTP label 匹配不上
+    PoC 的 derive_method_path 正则，不发 METHOD 前缀形态。
+
+    RPC 接口关联（spec 2026-09-21 §3.2）：route 有 + http_method 无（proto
+    join 后的 grpc_service entry）→ 返回裸 route（如 /Service/Method，无
+    METHOD 前缀）——RPC label 不参与 PoC method 推导，旧保守理由不适用。
     """
     if not entry_point_id or not entry_points:
         return None
     ep = entry_points.get(entry_point_id)
-    if ep is None or not ep.route or not ep.http_method:
+    if ep is None or not ep.route:
         return None
     route = ep.route.strip()
     if not route.startswith("/"):
         route = f"/{route}"
+    if not ep.http_method:
+        return route
     return f"{ep.http_method.strip().upper()} {route}"
 
 

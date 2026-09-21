@@ -530,9 +530,10 @@ def test_parse_verdict_json_rejects_invalid_values():
 # O2 前半：http_route_label（builder 路由 join 的共享 helper）。
 # --------------------------------------------------------------------------- #
 
-def _route_ep(func_block_id="app.py:h:1", route="/search", http_method="POST"):
+def _route_ep(func_block_id="app.py:h:1", route="/search", http_method="POST",
+              entry_type="http_route"):
     return EntryPoint(
-        func_block_id=func_block_id, entry_type="http_route", route=route,
+        func_block_id=func_block_id, entry_type=entry_type, route=route,
         http_method=http_method, confidence=1.0, evidence="annot",
         needs_llm_review=False,
     )
@@ -554,9 +555,23 @@ def test_http_route_label_miss_variants():
     assert http_route_label(
         "app.py:h:1", {"app.py:h:1": _route_ep(route=None)}) is None        # 无路由
     assert http_route_label(
-        "app.py:h:1", {"app.py:h:1": _route_ep(http_method=None)}) is None  # 无 method
-    assert http_route_label(
         "app.py:x:9", {"app.py:h:1": _route_ep()}) is None                  # join miss
+
+
+def test_http_route_label_rpc_bare_route():
+    """RPC 接口关联 spec §3.2：route 有 + http_method 无（join 后的
+    grpc_service entry）→ 返回裸 route（无 METHOD 前缀）。RPC label 不参与
+    PoC method 推导，旧「缺 method 不发」的保守理由不适用。"""
+    ep = _route_ep(entry_type="grpc_service",
+                   route="/SetupOrder/SetupOrderCreate", http_method=None)
+    assert http_route_label(
+        "app.py:h:1", {"app.py:h:1": ep}) == "/SetupOrder/SetupOrderCreate"
+
+
+def test_http_route_label_route_without_method_bare():
+    """route 有 + method 无（不限 entry_type）→ 裸 route（行为变更点）。"""
+    ep = _route_ep(http_method=None)
+    assert http_route_label("app.py:h:1", {"app.py:h:1": ep}) == "/search"
 
 
 # ===== spec 2026-08-21 修复点 D 配套: xss_server_render render_context =====

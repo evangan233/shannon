@@ -69,31 +69,58 @@ def index_entries(entries: list[dict]) -> dict[tuple[str, str], list[dict]]:
     return index
 
 
+def _rpc_short_shape(route: str) -> str | None:
+    """RPC 两段式且段内含 `.`（如 /pkg.Service/Method）→ 去包名后的 shape key。
+
+    尾两段各取最后一个 `.` 之后的名字（gRPC 全路径惯例 package.Service +
+    Method）。非两段式 / 无 `.`（普通 HTTP path）返回 None 不触发回退。
+    与 _shape_key 同为 join 过的 str 形态（index_entries 的桶 key）。
+    """
+    segs = normalize_route(route).split("/")[1:]
+    if len(segs) != 2 or not any("." in s for s in segs):
+        return None
+    return "/".join(s.rsplit(".", 1)[-1] for s in segs)
+
+
+def _bucket_for(index: dict[tuple[str, str], list[dict]],
+                method: str | None, shape: str) -> list[dict]:
+    if method is not None:
+        return index.get((str(method).upper(), shape), [])
+    return [e for (m, s), bucket in index.items() if s == shape for e in bucket]
+
+
+def _resolve_bucket(index: dict[tuple[str, str], list[dict]],
+                    method: str | None, route: str) -> tuple[list[dict], bool]:
+    """主 shape 查桶，miss 且 route 是 RPC 两段式带包名 → 尾两段重查一次
+    （spec §3.3 D4 互认）。返回 (判定用桶, 是否唯一命中)。"""
+    shape = _shape_key(route)
+    bucket = _bucket_for(index, method, shape)
+    if len(bucket) == 1:
+        return bucket, True
+    short = _rpc_short_shape(route)
+    if short is not None and short != shape:
+        short_bucket = _bucket_for(index, method, short)
+        if short_bucket:
+            return short_bucket, len(short_bucket) == 1
+    return bucket, False
+
+
 def match_entry(index: dict[tuple[str, str], list[dict]],
                 method: str | None, route: str) -> dict | None:
-    """唯一命中才返回（spec §5.3 歧义→None 不硬凑）。method=None 跨桶唯一才挂。"""
-    shape = _shape_key(route)
-    if method is not None:
-        bucket = index.get((str(method).upper(), shape), [])
-        return bucket[0] if len(bucket) == 1 else None
-    hits = [e for (m, s), bucket in index.items() if s == shape for e in bucket]
-    return hits[0] if len(hits) == 1 else None
+    """唯一命中才返回（spec §5.3 歧义→None 不硬凑）。method=None 跨桶唯一才挂；
+    RPC 全路径 query 走尾两段回退（spec 2026-09-21 §3.3）。"""
+    bucket, hit = _resolve_bucket(index, method, route)
+    return bucket[0] if hit else None
 
 
 def match_entry_reason(index: dict[tuple[str, str], list[dict]],
                        method: str | None, route: str) -> str | None:
     """匹配失败原因（v2 unmatched reason 细化）：多命中 "ambiguous"、
-    桶空 "no-match"、命中 None。与 match_entry 同一判定逻辑。"""
-    shape = _shape_key(route)
-    if method is not None:
-        bucket = index.get((str(method).upper(), shape), [])
-        if len(bucket) == 1:
-            return None
-        return "ambiguous" if bucket else "no-match"
-    hits = [e for (m, s), bucket in index.items() if s == shape for e in bucket]
-    if len(hits) == 1:
+    桶空 "no-match"、命中 None。与 match_entry 同一判定逻辑（含 RPC 回退）。"""
+    bucket, hit = _resolve_bucket(index, method, route)
+    if hit:
         return None
-    return "ambiguous" if hits else "no-match"
+    return "ambiguous" if bucket else "no-match"
 
 
 def extract_endpoint_texts(text: str) -> list[tuple[str | None, str]]:

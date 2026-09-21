@@ -12,6 +12,7 @@ from supernova_core.services.api_evidence_matrix import (
     extract_endpoint_texts,
     index_entries,
     match_entry,
+    match_entry_reason,
     normalize_route,
     route_shape,
 )
@@ -661,3 +662,37 @@ class TestUnmatchedFirstClass:
         assert um["source_track"] == "llm"
         assert um["sink_call"] == "db.Query"
         assert um["source"] == "AddQuery map"
+
+
+class TestRpcTwoSegmentFallback:
+    """RPC 接口关联 spec §3.3 D4：miss 后 RPC 两段式（段内含 .）尾两段回退——
+    底册存短形态 /Service/Method，LLM 写 gRPC 全路径 /pkg.Service/Method 互认。
+    HTTP path（段不含 .）不触发回退。"""
+
+    def test_pkg_qualified_rpc_route_falls_back_to_short(self):
+        idx = _idx(("", "/SetupOrder/SetupOrderCreate"))
+        hit = match_entry(idx, None, "/customer.web.SetupOrder/SetupOrderCreate")
+        assert hit is not None and hit["raw_route"] == "/SetupOrder/SetupOrderCreate"
+
+    def test_short_form_hits_directly(self):
+        idx = _idx(("", "/SetupOrder/SetupOrderCreate"))
+        assert match_entry(idx, None, "/SetupOrder/SetupOrderCreate") is not None
+
+    def test_http_path_unaffected(self):
+        """HTTP path 无 . 不触发回退；无关 RPC 也不误挂。"""
+        idx = _idx(("GET", "/api/v2/items"))
+        assert match_entry(idx, "GET", "/api/v3/items") is None
+
+    def test_fallback_ambiguity_still_none(self):
+        """回退后多命中仍歧义不硬凑。"""
+        idx = _idx(("", "/S/M"), ("", "/S/M"))
+        assert match_entry(idx, None, "/pkg.S/M") is None
+
+    def test_match_entry_reason_consistent_with_fallback(self):
+        idx = _idx(("", "/SetupOrder/SetupOrderCreate"))
+        assert match_entry_reason(
+            idx, None, "/customer.web.SetupOrder/SetupOrderCreate") is None
+        assert match_entry_reason(
+            idx, None, "/customer.web.Nope/M") == "no-match"
+        idx_amb = _idx(("", "/S/M"), ("", "/S/M"))
+        assert match_entry_reason(idx_amb, None, "/pkg.S/M") == "ambiguous"

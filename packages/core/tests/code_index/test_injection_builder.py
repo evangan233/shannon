@@ -267,7 +267,10 @@ async def test_build_injection_entry_points_miss_keeps_path():
             '{"verdict":"vulnerable","witness_payload":"\'","evidence_chain":'
             '"q->db.exec","mismatch_reason":null,"confidence":"high"}'),
         entry_points={"app.py:handler:1": _ep(http_method=None)})
-    assert findings[0].path == "q->db.exec"
+    # RPC 接口关联 spec §3.2：route 有 + method 无 → 裸 route label（行为变更，
+    # 旧行为不发 label）
+    assert findings[0].path == "/search → q->db.exec"
+    assert findings[0].endpoint == "/search"
 
 
 @pytest.mark.asyncio

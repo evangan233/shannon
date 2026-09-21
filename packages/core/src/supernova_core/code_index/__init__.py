@@ -669,6 +669,18 @@ def run_entry_point_fusion(
         "total_entry_points": len(merged_entries),
     })
 
+    # RPC 接口关联（spec 2026-09-21 §3.1 单元 2）：repo_path 给定时解析 proto
+    # service/rpc 表，对 grpc_service 入口做同名 join 填 route（proto-only 不进
+    # 底册）。join 结果随融合版本一并写回 code_index.json。
+    if repo_path:
+        from supernova_core.code_index.proto_entry_parser import (
+            join_proto_routes,
+            parse_proto_services,
+        )
+        proto_table = parse_proto_services(repo_path)
+        if proto_table:
+            updated = join_proto_routes(updated, proto_table)
+
     # Write updated code_index.json（写回 intermediate/，与写侧一致；下游
     # resolve_intermediate 优先读它，保证读到的始终是融合后版本）
     _write_back = intermediate_path(out, "code_index.json")

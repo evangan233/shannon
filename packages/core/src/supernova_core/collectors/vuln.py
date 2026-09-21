@@ -402,6 +402,15 @@ _DATAFLOW_STEPS_FIELD: dict = {
 # accessible_routes（此前不在 schema，模型按 prompt 交出后 pydantic 静默丢弃）。
 # prompt 字段表（vuln-*.txt <finding_submission>）是契约权威——schema 与其一致性
 # 由 tests/prompts/test_vuln_prompt_schema_contract.py 锁定，漂移即红。
+# RPC 接口关联（spec 2026-09-21 §3.4）：RPC/gRPC 服务的接口标识方法论指引，
+# injection/xss/auth（ssrf 继承 auth）三处 endpoints description 共享。
+# 方法论指引——源由 agent 自行 grep 派生，不注入确定性产物（双轨铁律不涉及）。
+_RPC_ENDPOINT_GUIDANCE = (
+    " 对 RPC/gRPC 服务（无 HTTP 路由），产出 RPC 接口标识 /Service/Method"
+    "（可带 proto 包名，如 /pkg.Service/Method）——自行 grep .proto 的 "
+    "service/rpc 定义或 Go 方法实现（receiver 类型=service 名、方法名=rpc 名）得出。"
+)
+
 _INJECTION_FINDING_PROPS: dict = {
     "source": _str_field(
         "Tainted input param name & file:line — a SINGLE source per finding."),
@@ -433,7 +442,7 @@ _INJECTION_FINDING_PROPS: dict = {
         "description": (
             "该漏洞涉及的全部接口（METHOD /path）；写入与触发分开列（如存储型 XSS "
             "的写入口与渲染触发口），可带角色注记，如 'POST /memos (write)'、"
-            "'GET /memos (trigger)'。"),
+            "'GET /memos (trigger)'。" + _RPC_ENDPOINT_GUIDANCE),
     },
     "affected_parameters": {
         "type": "array",
@@ -470,7 +479,7 @@ _XSS_FINDING_PROPS: dict = {
         "description": (
             "该漏洞涉及的全部接口（METHOD /path）；写入与触发分开列（如存储型 XSS "
             "的写入口与渲染触发口），可带角色注记，如 'POST /memos (write)'、"
-            "'GET /memos (trigger)'。"),
+            "'GET /memos (trigger)'。" + _RPC_ENDPOINT_GUIDANCE),
     },
     "affected_parameters": {
         "type": "array",
@@ -505,7 +514,7 @@ _SSRF_FINDING_PROPS: dict = {
         "description": (
             "该漏洞涉及的全部接口（METHOD /path）；写入与触发分开列（如存储型 XSS "
             "的写入口与渲染触发口），可带角色注记，如 'POST /memos (write)'、"
-            "'GET /memos (trigger)'。"),
+            "'GET /memos (trigger)'。" + _RPC_ENDPOINT_GUIDANCE),
     },
     "affected_parameters": {
         "type": "array",
