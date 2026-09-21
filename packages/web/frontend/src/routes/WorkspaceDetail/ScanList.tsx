@@ -806,10 +806,13 @@ function ScanRow({ ws, scan, scansById, onChanged, checked, onToggleSelect, sele
   const label = scan.workflow_id ?? scan.scan_id;
   // 默认进 scan 详情的 tab：完成 -> report（看结果），其余 -> live（看实时）。
   // 与 router.tsx DefaultScanTab 一致；此处据 scan.status 直定，免走 DefaultScanTab 多一次 getScan + 空白闪烁。
-  // correlation 主行例外（D6）：tab 组为 概览|跨仓关联|产物|日志（无 report/live），
-  // 运行中/完成统一落「概览」（简版 CorrelationOverview）。
-  const defaultTab = isCorr ? "overview"
-    : scan.status === "completed" || scan.status === "done" ? "report" : "live";
+  // correlation 主行（2026-09-10 tab 组增 live 后对齐 DefaultScanTab 语义）：
+  // 运行中 -> live（段②编排 + 段③黑盒验证实时日志），完成 -> 跨仓关联（结果页
+  // 替代 report）。旧版（D6 当 tab 组尚无 live）统一落「概览」——点进行中任务
+  // 看不到实时进度，2026-09-20 修复对齐。
+  const isDone = scan.status === "completed" || scan.status === "done";
+  const defaultTab = isCorr ? (isDone ? "correlation" : "live")
+    : isDone ? "report" : "live";
 
   // 运行中行按需建 SSE 推实时阶段（粗粒度：段标签后缀）；终态/非运行中不建（url=""）。
   // 列表页粗粒度——精确步级/Agent 在扫描详情页顶部。scan_end → 刷新列表拿终态（漏洞数/状态）。
@@ -915,7 +918,7 @@ function ScanRow({ ws, scan, scansById, onChanged, checked, onToggleSelect, sele
         await resumeScan(ws, scan.scan_id);
         toast.success(t("workspaceDetail.scans.resumed"));
         setPending(null);
-        // 续跑后落默认 tab（correlation 行无 live tab——落概览，D6）
+        // 续跑后落默认 tab（correlation 行运行中 -> live，对齐 defaultTab 语义）
         nav(`${scanPath}/${defaultTab}`);
       } else {
         await deleteScan(ws, scan.scan_id);

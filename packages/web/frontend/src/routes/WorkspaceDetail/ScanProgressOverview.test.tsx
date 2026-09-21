@@ -243,3 +243,55 @@ describe("ScanProgressOverview 子仓源分流", () => {
     expect(strip.querySelector('[data-unit="gateway->order"]')).toHaveAttribute("data-status", "running");
   });
 });
+
+// === 进度详情浮层长网格修复（2026-09-21 用户截图）：correlation 40+ 长名单元
+// （边 A->B / 批 service/class）在旧 320px 浮层行内折成 3-4 行碎片——浮层加宽 +
+// 行结构两段式（名可断行独占列 / intent 右对齐独立列）+ 已完成行折叠。
+describe("ScanProgressOverview 进度详情浮层长网格", () => {
+  const corrEvent = (name: string, status: string, detail?: string) => ({
+    ts: TS, category: "CONTROL", type: "correlation_progress", node: "edge", name, status, detail,
+  });
+
+  it("行结构：名与 intent 分列（各自独立 span，不再同行折行碎片化）", () => {
+    eventsState.events = [
+      corrEvent("stock-internal-transfer->backend/asset_transfer", "completed", "raw=ok"),
+    ];
+    render(<ScanProgressOverview ws="ws" scanId="s1" scanType="correlation" />);
+    fireEvent.click(screen.getByTestId("progress-details-trigger"));
+    expect(screen.getByText("stock-internal-transfer->backend/asset_transfer")).toBeInTheDocument();
+    expect(screen.getByText("- raw=ok")).toBeInTheDocument();
+  });
+
+  it("短列表（≤10 单元）全平铺，不出现已完成折叠块", () => {
+    eventsState.events = [
+      phaseStart("recon", ["a", "b"], ["侦察", "路由图"]),
+      stepComplete("a", "recon"),
+    ];
+    render(<ScanProgressOverview ws="ws" scanId="s1" />);
+    fireEvent.click(screen.getByTestId("progress-details-trigger"));
+    expect(screen.getByText("- 侦察")).toBeInTheDocument();
+    expect(screen.queryByTestId("progress-done-details")).not.toBeInTheDocument();
+  });
+
+  it("长网格（>10 单元）：未完成行平铺，已完成折叠进「已完成 N 项」可展开", () => {
+    const events = [
+      ...Array.from({ length: 10 }, (_, i) => corrEvent(`svc-${i}`, "completed", "reused")),
+      corrEvent("edge-a->b", "running"),
+      corrEvent("svc-9/authz", "running", "12/40 · 8 findings"),
+    ];
+    eventsState.events = events;
+    render(<ScanProgressOverview ws="ws" scanId="s1" scanType="correlation" />);
+    fireEvent.click(screen.getByTestId("progress-details-trigger"));
+    const details = screen.getByTestId("progress-details");
+    // 未完成行（running）直接可见——浮层聚焦进行中现场
+    expect(details.textContent).toContain("edge-a->b");
+    expect(details.textContent).toContain("svc-9/authz");
+    // 已完成折叠：<details> 默认收起（jsdom 里内容仍在 DOM，用 open 属性断言），summary 显计数
+    const done = screen.getByTestId("progress-done-details");
+    expect(done).not.toHaveAttribute("open");
+    expect(done).toHaveTextContent("已完成 10 项");
+    // 展开后已完成行可见
+    fireEvent.click(done.querySelector("summary")!);
+    expect(screen.getByTestId("progress-details").textContent).toContain("svc-0");
+  });
+});

@@ -1359,6 +1359,7 @@
       "statusError": "Reconnecting",
       "statusClosed": "Ended",
       "progressDetails": "Progress details",
+      "doneUnits": "{{count}} done",
       "gnVerdict": "GitNexus verdict",
       "gnHits": "hits",
       "endFailed": "Scan failed",

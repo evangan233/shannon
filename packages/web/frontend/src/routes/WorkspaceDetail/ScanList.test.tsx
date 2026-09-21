@@ -854,6 +854,25 @@ describe("ScanList correlation 主行 + 嵌套子行（D4）", () => {
     expect(screen.getByText("跨仓关联")).toBeInTheDocument();
   });
 
+  it("默认跳转 tab 对齐 DefaultScanTab：运行中 -> live，完成 -> 跨仓关联（2026-09-20 修复）", async () => {
+    // 旧 bug：correlation 行 defaultTab 恒「overview」（D6 当 tab 组无 live 时的旧
+    // 语义）——列表点进行中任务落概览，看不到实时进度。修后与 router.tsx
+    // DefaultScanTab 同口径：运行中 live、完成 correlation。
+    const corrRun = {
+      scan_id: "corr-r", scan_type: "correlation", status: "running", created_at: 1000,
+      completed_at: null, vuln_count: 0, total_cost_usd: 0, cost_currency: "USD",
+      is_running: true, progress_pct: 5, workflow_id: "ws-corr-r",
+    } as const;
+    server.use(http.get("/api/workspaces/:ws/scans",
+      () => HttpResponse.json([corrRun, corrMain])));
+    renderList();
+    await waitFor(() => expect(screen.getByText("ws-corr-r")).toBeInTheDocument());
+    expect(screen.getByRole("link", { name: "ws-corr-r" })).toHaveAttribute(
+      "href", "/p/ws/scans/corr-r/live");
+    expect(screen.getByRole("link", { name: "ws-corr-1" })).toHaveAttribute(
+      "href", "/p/ws/scans/corr-1/correlation");
+  });
+
   it("类型过滤「跨仓关联」档：关联行入选；combined=True 也不漏进「组合」档", async () => {
     server.use(http.get("/api/workspaces/:ws/scans",
       () => HttpResponse.json([running, corrMain])));

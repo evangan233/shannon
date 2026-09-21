@@ -228,7 +228,11 @@ export function ScanProgressOverview({
               <ChevronDown className="size-4" />
             </Button>
           </PopoverTrigger>
-          <PopoverContent align="end" className="w-80 p-3" data-testid="progress-details">
+          <PopoverContent
+            align="end"
+            className="max-h-[min(70vh,600px)] w-[min(92vw,560px)] overflow-y-auto p-3"
+            data-testid="progress-details"
+          >
             <div className="flex items-center justify-between gap-2">
               <span className="font-sans text-sm font-semibold text-primary">
                 {state.current_phase ?? "—"}
@@ -238,24 +242,55 @@ export function ScanProgressOverview({
               )}
             </div>
 
-            {/* 当前阶段的步级列表（✓/○/✗ + intent，与旧版一致） */}
+            {/* 当前阶段的步级列表（✓/○/✗ + intent）。行结构两段式：名（可换行，长
+                token 断行不断列）+ intent 右对齐独立列——correlation 网格的边/批名
+                （stock-internal-transfer->backend/...）与批 detail 在旧 320px 行内
+                折成 3-4 行碎片，2026-09-21 修复（浮层加宽 + 限高滚动 + 行重构）。 */}
             {state.phase_units.length > 0 && (
               <div className="mt-2 space-y-0.5 text-xs">
-                {state.phase_units.map((unit) => {
-                  const raw = state.unit_status[unit];
-                  const st = halted && raw === "running" ? "halted" : raw;
-                  return (
-                    <div key={unit} className="flex gap-2">
-                      <span className={UNIT_STATUS_CLS[st ?? ""] ?? "text-muted-foreground"}>
-                        {unitGlyph(st)}
+                {(() => {
+                  const mark = (unit: string) => {
+                    const raw = state.unit_status[unit];
+                    return halted && raw === "running" ? "halted" : raw;
+                  };
+                  const row = (unit: string) => (
+                    <div key={unit} className="flex items-baseline gap-2">
+                      <span
+                        className={`shrink-0 ${UNIT_STATUS_CLS[mark(unit) ?? ""] ?? "text-muted-foreground"}`}
+                      >
+                        {unitGlyph(mark(unit))}
                       </span>
-                      <span className="text-foreground">{unit}</span>
+                      <span className="min-w-0 flex-1 text-foreground [overflow-wrap:anywhere]">
+                        {unit}
+                      </span>
                       {state.unit_intent[unit] && (
-                        <span className="text-muted-foreground">- {state.unit_intent[unit]}</span>
+                        <span className="shrink-0 whitespace-nowrap text-right text-muted-foreground">
+                          - {state.unit_intent[unit]}
+                        </span>
                       )}
                     </div>
                   );
-                })}
+                  // 长网格（correlation 40+ 单元）已完成行折叠——浮层聚焦未完成/失败
+                  // 现场；短列表（白盒 7 步/黑盒 4 步）保持全平铺，行为零变化。
+                  if (state.phase_units.length <= 10) {
+                    return state.phase_units.map(row);
+                  }
+                  const active = state.phase_units.filter((u) => mark(u) !== "done");
+                  const done = state.phase_units.filter((u) => mark(u) === "done");
+                  return (
+                    <>
+                      {active.map(row)}
+                      {done.length > 0 && (
+                        <details data-testid="progress-done-details" className="pt-1">
+                          <summary className="cursor-pointer text-muted-foreground">
+                            ✓ {t("workspaceDetail.live.doneUnits", { count: done.length })}
+                          </summary>
+                          <div className="mt-1 space-y-0.5">{done.map(row)}</div>
+                        </details>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             )}
 

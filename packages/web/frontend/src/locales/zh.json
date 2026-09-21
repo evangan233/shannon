@@ -1372,7 +1372,8 @@
       "viewReport": "查看报告",
       "viewCorrelation": "查看关联结果",
       "phaseWhitebox": "白盒阶段",
-      "phaseBlackbox": "黑盒 · {{run}}"
+      "phaseBlackbox": "黑盒 · {{run}}",
+      "doneUnits": "已完成 {{count}} 项"
     },
     "adversarialReview": {
       "emptyHint": "该扫描无对抗审查记录（未开启或未生成）",
