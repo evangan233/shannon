@@ -46,10 +46,16 @@ def write_adjudication_deliverables(
     out_deliverables: Path,
     cards: list[dict],
     report_md: str,
+    skipped_dismissed: list[dict] | None = None,
 ) -> None:
-    """阶段 B 落盘：adjudication-log.json + 重渲染 correlation-report.md（裁决章节）。"""
+    """阶段 B 落盘：adjudication-log.json（全量卡机器留档 + 防护类否决分桶留痕
+    skipped_dismissed，spec 2026-09-21 §3.3）+ 重渲染 correlation-report.md
+    （报告只收结论章节：成立全文/消掉清单/裁决失败占位——2026-09-21 全量卡不再进报告）。"""
     out_deliverables.mkdir(parents=True, exist_ok=True)
+    log_payload: dict = {"cards": cards}
+    if skipped_dismissed is not None:
+        log_payload["skipped_dismissed"] = skipped_dismissed
     (out_deliverables / "adjudication-log.json").write_text(
-        json.dumps({"cards": cards}, ensure_ascii=False, indent=2),
+        json.dumps(log_payload, ensure_ascii=False, indent=2),
         encoding="utf-8")
     (out_deliverables / "correlation-report.md").write_text(report_md, encoding="utf-8")

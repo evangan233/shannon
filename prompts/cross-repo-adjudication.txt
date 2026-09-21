@@ -25,6 +25,19 @@ must carry the full analysis trail (analysis_process + verification_evidence
 {{CORRELATION_CONTEXT}}
 </correlation-context>
 
+How to read the correlation context:
+- "edges" / "flows" / "multi_hop_chains" only describe chains of ALREADY-REPORTED
+  findings. Absence of a finding's method there is NOT evidence that the method
+  is unreachable — dismissed findings are never in these chains.
+- "inbound_surface" is per-service deterministic data (spec 2026-09-21):
+  "inbound_calls" = which services call this service's RPC methods and where
+  (call_site); "reachable_entries" = which of those methods are reachable from
+  which entry routes (exposure external/internal + via); "entry_points_ref" =
+  path to the service repo's entry_points.json for your own lookup.
+  An empty inbound_surface for a service means: the deterministic correlation
+  layer found NO cross-service callers for that service — cite this fact when
+  you rely on it.
+
 <finding-batch>
 {{BATCH_JSON}}
 </finding-batch>
@@ -33,13 +46,46 @@ must carry the full analysis trail (analysis_process + verification_evidence
 Work through these steps for EACH finding:
 1. Read the finding's original verdict and reason (queue entry, or dismissed
    archive entry including its dismiss_reason).
-2. Check cross-service reachability: is the finding's method / location
-   reachable from an entrypoint via the correlation topology / flows /
-   multi-hop chains in <correlation-context>?
+2. Check cross-service reachability for the finding's method / location.
+   First look it up in correlation_context.inbound_surface (its service's
+   inbound_calls + reachable_entries): is the method called by another
+   service, and does that caller chain back to an entry route?
+   Do NOT conclude "unreachable" from flows / multi_hop_chains absence —
+   they only cover already-reported findings. When inbound_surface gives
+   nothing on the method, grep the source yourself for callers of it
+   (client stubs, RPC clients) before deciding.
 3. When needed, read both repos' source (guided by the artifacts-guide) to
    verify reachability, or remote-side defenses (prepared statements,
    allowlists, validation, type coercion ...).
-4. Emit one card per finding — including findings you keep as-is.
+4. For confirm/upgrade findings, reconstruct the concrete exploit path end to
+   end (see exploit_path below): which ENTRY endpoint of which entrypoint
+   service receives user input, which RPC hop(s) carry it toward the finding's
+   service, and what the attacker controls along the way. Anchor the entry
+   endpoint on the entrypoint repo's entry_points.json / route table and the
+   RPC hops on the flows/calls in <correlation-context> — cross-verify in
+   source before writing them. Do NOT invent endpoints: if a hop cannot be
+   verified, say so in user_controlled instead of fabricating it.
+5. For confirm/upgrade findings, REWRITE the PoC from the entry endpoint:
+   the original single-repo PoC targets the backend's internal port and is
+   NOT reachable by an external user. The cross-repo PoC (exploit_path.poc)
+   must send the crafted input to the ENTRY endpoint (with the fields that
+   propagate through the RPC hops to the sink), state preconditions honestly
+   (e.g. a valid session on the entrypoint if its routes require auth), and
+   walk through observable effects step by step. Reuse the original PoC's
+   payload ideas but re-target the request; if the entry route requires
+   authentication you cannot bypass, say so explicitly in notes.
+6. For cards whose cross-service analysis CHANGES how the finding reads
+   (impact framing, root-cause nuance, severity), emit refined_finding with
+   ONLY the fields worth updating — leave out fields the single-repo text
+   already states correctly. Do not restate unchanged text.
+   - impact: the consequence re-framed for the cross-repo reality (e.g. who
+     can reach it now: external users via the entry route vs internal-only).
+   - cause: root-cause clarification that only shows up when reading both
+     repos (e.g. the sink trusts client-controlled metadata forwarded by the
+     caller).
+   - severity: cross-repo severity suggestion (critical|high|medium|low) when
+     reachability materially raises/lowers it — say why in reasoning.
+7. Emit one card per finding — including findings you keep as-is.
 </methodology>
 
 <output-format>
@@ -49,6 +95,22 @@ Respond with ONE JSON object (no prose outside it):
   "finding_ref":{"service":"<service>","vuln_id":"<ID or empty>","origin":"queue|dismissed"},
   "conclusion":"vulnerable|not-vulnerable|downgraded|needs-review",
   "cross_service_context":"which entry → which RPC method reaches (or defends) this finding",
+  "exploit_path":{
+    "entry_service":"<entrypoint service name>",
+    "entry_endpoint":"METHOD /path (real route from the entry repo)",
+    "hops":[{"from":"<service>","to":"<service>","rpc":"pkg.Svc/Method","call_site":"file.ts:46"}],
+    "sink":"<file:line of the finding's vulnerable code>",
+    "user_controlled":"what input fields the attacker controls end to end; or why the path could NOT be reconstructed",
+    "poc":{
+      "preconditions":"e.g. valid session on the entrypoint; network reachability",
+      "steps":["1. ...","2. ..."],
+      "curl":"curl -X POST 'http://ENTRY/path' -H '...' -d '{...}'",
+      "raw_http":"POST /path HTTP/1.1\\nHost: ENTRY\\n\\n{...}",
+      "notes":"what response proves the vuln fired; caveats (auth, field naming, encoding)"},
+  "refined_finding":{
+    "impact":"<cross-repo consequence, ONLY if it changed>",
+    "cause":"<root-cause nuance from reading both repos, ONLY if changed>",
+    "severity":"critical|high|medium|low, ONLY if reachability changes the rating"},
   "analysis_process":["step 1 ...","step 2 ..."],
   "verification_evidence":[{"repo":"<repo>","location":"file.go:88","snippet":"...","note":"..."}],
   "reasoning":"full argument: why upgraded / why not vulnerable / why confirmed",
@@ -57,6 +119,24 @@ Rules:
 - EVERY finding in the batch gets exactly one card. Do not skip or merge.
 - direction=upgrade requires concrete cross-service reachability evidence;
   downgrade requires concrete remote-side defense evidence (file:line).
+- confirm and upgrade cards MUST include exploit_path with a rewritten poc
+  targeted at the ENTRY endpoint. Omit hops (empty array) only when the
+  finding lives in the entrypoint service itself (the entry endpoint IS the
+  attack surface — put it in entry_endpoint, leave hops empty; the poc may
+  then reuse the original single-repo PoC as-is).
+- refined_finding is OPTIONAL and sparing: fill a field only when the
+  cross-repo analysis genuinely changes it — never copy the single-repo text
+  verbatim.
 - not-vulnerable conclusions need the same rigor as vulnerable ones: cite
   file:line evidence for the defense you found.
+- maintain cards (dismissed origin) MUST ground the dismissal in cross-service
+  terms — in verification_evidence cite at least ONE of:
+  (a) evidence from a repo OTHER than the finding's service (how the callers
+      consume the finding's output and why that is not a new attack surface);
+  (b) a correlation-context reference — location starting with
+      "correlation-context:" (e.g. "correlation-context: inbound_surface has
+      no caller for <method>" or a reachable_entries mapping you verified).
+  A maintain card that only restates the original dismiss_reason with
+  same-repo evidence fails the evidence bar and will be redirected to
+  needs-review by deterministic validation.
 </output-format>

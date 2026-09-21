@@ -43,3 +43,7 @@ export const SEV_EDGE: Record<string, string> = {
   Medium: "border-l-2 border-l-yellow/70 [border-left-style:dashed]",
   Low: "border-l-2 border-l-muted-foreground/40 [border-left-style:dotted]",
 };
+
+/** 展示档位序（小写键）：统计/排序消费方单源（此前 StatsRow/CorrStatsHeader 各持本地副本）。 */
+export const SEV_ORDER = ["critical", "high", "medium", "low"] as const;
+export type SevKey = (typeof SEV_ORDER)[number];

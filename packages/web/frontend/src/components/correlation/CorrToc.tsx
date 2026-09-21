@@ -1,24 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { CorrVerdictGroup } from "@/lib/correlation-verdict";
 import { focusAnchor, stickyHeaderOffset } from "@/utils/focusAnchor";
 
 /**
- * 跨仓结果页目录（2026-09-20 结论优先批次）：区块级 sticky 目录镜像页面结构——
- * 结论摘要 / 漏洞（按结论分组，条目 = severity 状态点 + ID + 服务小字）/ 攻击链 /
- * 多跳 / 拓扑 / 已否决 / 信任边界 / 报告。点击 → focusAnchor 精准落点；
+ * 跨仓结果页目录（2026-09-20 结论优先批次；09-20 去重 / 09-21 静默批次逐轮收窄）：
+ * 区块级 sticky 目录镜像页面结构——漏洞（主区，按结论分组，条目 = severity 状态点 +
+ * ID + 服务小字）/ 拓扑 / 多跳。结论摘要、攻击链、信任边界、单仓已否决、关联报告
+ * 章节均已撤（内容分别并入漏洞区紧凑行 / 漏洞卡「所在跨服链」/ md 报告附录 /
+ * 复核一行 / 总览头下载按钮），目录不再单列。点击 → focusAnchor 精准落点；
  * scrollspy 高亮当前区块（同族模式独立实现：ReportToc / dataflow TocSideBar 先例——
  * 仓内惯例「同族视觉、各自实现」，props 不绑 ReportData）。
  */
 
-export const CORR_SEC_VERDICT = "corr-sec-verdict";
 export const CORR_SEC_VULNS = "corr-sec-vulns";
-export const CORR_SEC_FLOWS = "corr-sec-flows";
 export const CORR_SEC_MULTIHOP = "corr-sec-multihop";
 export const CORR_SEC_TOPOLOGY = "corr-sec-topology";
-export const CORR_SEC_DISMISSED = "corr-sec-dismissed";
-export const CORR_SEC_BOUNDARIES = "corr-sec-boundaries";
-export const CORR_SEC_REPORT = "corr-sec-report";
 
 /** severity（小写）→ 状态点色（--c-* 语义 channel，与 ReportToc 同源）。 */
 const SEV_DOT_C: Record<string, string> = {
@@ -38,24 +35,16 @@ export interface CorrTocVuln {
 }
 
 export interface CorrTocSections {
-  flows: boolean;
   multihop: boolean;
   topology: boolean;
-  dismissed: boolean;
-  boundaries: boolean;
-  report: boolean;
 }
 
-/** 区块条目定义（anchor id + i18n label key），presence 由父级按数据有无决定。 */
-const SECTIONS: { key: keyof CorrTocSections | "verdict" | "vulns"; id: string; labelKey: string }[] = [
-  { key: "verdict", id: CORR_SEC_VERDICT, labelKey: "scan.correlation.verdict.title" },
+/** 区块条目定义（anchor id + i18n label key），presence 由父级按数据有无决定；
+ *  顺序镜像页面（漏洞主区在最前，恒在）。 */
+const SECTIONS: { key: keyof CorrTocSections | "vulns"; id: string; labelKey: string }[] = [
   { key: "vulns", id: CORR_SEC_VULNS, labelKey: "scan.correlation.tocVulns" },
-  { key: "flows", id: CORR_SEC_FLOWS, labelKey: "scan.correlation.flowsTitle" },
-  { key: "multihop", id: CORR_SEC_MULTIHOP, labelKey: "scan.correlation.multihopTitle" },
   { key: "topology", id: CORR_SEC_TOPOLOGY, labelKey: "scan.correlation.topologyTitle" },
-  { key: "dismissed", id: CORR_SEC_DISMISSED, labelKey: "scan.correlation.dismissedTitle" },
-  { key: "boundaries", id: CORR_SEC_BOUNDARIES, labelKey: "scan.correlation.boundariesTitle" },
-  { key: "report", id: CORR_SEC_REPORT, labelKey: "scan.correlation.reportTitle" },
+  { key: "multihop", id: CORR_SEC_MULTIHOP, labelKey: "scan.correlation.multihopTitle" },
 ];
 
 /** 结论组在 TOC 的分组顺序与标签 key（成立在前）。 */
@@ -74,10 +63,13 @@ export function CorrToc({ vulns, sections, onLocateSection, onLocateVuln }: {
   const [activeId, setActiveId] = useState<string | null>(null);
   const visibleRef = useRef<Set<string>>(new Set());
 
+  // 目录条目序 = 页面文档序（漏洞区块 → 其漏洞条目 → 其余区块）——scrollspy 高亮
+  // 与视觉顺序一致；漏洞条目穿插错位会让点击「往上跳」（2026-09-21 修复）。
   const anchorIds = useMemo(
     () => [
-      ...SECTIONS.filter((s) => s.key === "verdict" || s.key === "vulns" || sections[s.key as keyof CorrTocSections]).map((s) => s.id),
+      ...(SECTIONS[0] ? [SECTIONS[0].id] : []),
       ...vulns.map((v) => v.anchorId),
+      ...SECTIONS.slice(1).filter((s) => sections[s.key as keyof CorrTocSections]).map((s) => s.id),
     ],
     [sections, vulns],
   );
@@ -127,58 +119,63 @@ export function CorrToc({ vulns, sections, onLocateSection, onLocateVuln }: {
     }`;
 
   const present = (key: typeof SECTIONS[number]["key"]) =>
-    key === "verdict" || key === "vulns" || sections[key as keyof CorrTocSections];
+    key === "vulns" || sections[key as keyof CorrTocSections];
+
+  /** 漏洞条目组块（按结论分组，成立在前）。 */
+  const vulnGroupBlocks = GROUP_ORDER.map((group) => {
+    const list = vulns.filter((v) => v.group === group);
+    if (list.length === 0) return null;
+    return (
+      <div key={group} className="space-y-1">
+        <p className="px-1.5 text-xs font-medium text-muted-foreground">
+          {t(`scan.correlation.verdict.${group}`)} ({list.length})
+        </p>
+        {list.map((v) => (
+          <button
+            key={v.anchorId}
+            type="button"
+            data-toc-id={v.anchorId}
+            data-severity={v.severity ?? ""}
+            aria-current={activeId === v.anchorId ? "true" : undefined}
+            onClick={() => locateVuln(v)}
+            className={itemCls(v.anchorId)}
+          >
+            <span
+              aria-hidden
+              className="mt-1 size-1.5 shrink-0 rounded-full"
+              style={{
+                background: SEV_DOT_C[(v.severity ?? "").toLowerCase()] ?? "hsl(var(--muted-foreground))",
+              }}
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-mono text-[11.5px] font-medium text-foreground/90">{v.id}</span>
+              {v.service && (
+                <span className="block truncate text-[11px] text-muted-foreground">{v.service}</span>
+              )}
+            </span>
+          </button>
+        ))}
+      </div>
+    );
+  });
 
   return (
     <nav aria-label={t("scan.correlation.tocAria")} data-testid="corr-toc" className="space-y-3 text-sm">
-      {SECTIONS.filter((s) => present(s.key)).map((s) => (
-        <button
-          key={s.id}
-          type="button"
-          data-toc-id={s.id}
-          aria-current={activeId === s.id ? "true" : undefined}
-          onClick={() => locateSection(s.id)}
-          className={`${itemCls(s.id)} truncate text-[13px] font-medium`}
-        >
-          {t(s.labelKey)}
-        </button>
+      {/* 漏洞区块条目 + 其漏洞条目紧随其后（文档序；其余区块垫后） */}
+      {SECTIONS.filter((s) => present(s.key)).map((s, i) => (
+        <Fragment key={s.id}>
+          <button
+            type="button"
+            data-toc-id={s.id}
+            aria-current={activeId === s.id ? "true" : undefined}
+            onClick={() => locateSection(s.id)}
+            className={`${itemCls(s.id)} truncate text-[13px] font-medium`}
+          >
+            {t(s.labelKey)}
+          </button>
+          {i === 0 && vulnGroupBlocks}
+        </Fragment>
       ))}
-      {GROUP_ORDER.map((group) => {
-        const list = vulns.filter((v) => v.group === group);
-        if (list.length === 0) return null;
-        return (
-          <div key={group} className="space-y-1">
-            <p className="px-1.5 text-xs font-medium text-muted-foreground">
-              {t(`scan.correlation.verdict.${group}`)} ({list.length})
-            </p>
-            {list.map((v) => (
-              <button
-                key={v.anchorId}
-                type="button"
-                data-toc-id={v.anchorId}
-                data-severity={v.severity ?? ""}
-                aria-current={activeId === v.anchorId ? "true" : undefined}
-                onClick={() => locateVuln(v)}
-                className={itemCls(v.anchorId)}
-              >
-                <span
-                  aria-hidden
-                  className="mt-1 size-1.5 shrink-0 rounded-full"
-                  style={{
-                    background: SEV_DOT_C[(v.severity ?? "").toLowerCase()] ?? "hsl(var(--muted-foreground))",
-                  }}
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-mono text-[11.5px] font-medium text-foreground/90">{v.id}</span>
-                  {v.service && (
-                    <span className="block truncate text-[11px] text-muted-foreground">{v.service}</span>
-                  )}
-                </span>
-              </button>
-            ))}
-          </div>
-        );
-      })}
     </nav>
   );
 }

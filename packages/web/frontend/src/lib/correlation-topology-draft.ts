@@ -5,7 +5,16 @@ import {
   type CorrRole,
   formToYaml,
 } from "./correlation-yaml";
-import type { CorrelationTopologyAnalysis, CorrelationTopologyEdge, CorrelationTopologyEvidence, CorrelationTopologyNode } from "@/api/types";
+import type { CorrCall, CorrelationDetail, CorrelationTopologyAnalysis, CorrelationTopologyEdge, CorrelationTopologyEvidence, CorrelationTopologyNode } from "@/api/types";
+import { layout } from "./topology-layout";
+
+/** 节点盒尺寸与画布 viewBox（TopologyEditor 与本 lib 布局/换算共用同一口径）。 */
+export const NODE_W = 105;
+export const NODE_H = 48;
+export const CANVAS_W = 800;
+export const CANVAS_H = 600;
+/** 拖动时节点离画布边缘的最小留白。 */
+export const EDGE_MARGIN = 6;
 
 export interface TopologyNodeDraft {
   repo: string;
@@ -31,6 +40,11 @@ export interface TopologyEdgeDraft {
   method?: string | null;
   client_evidence?: CorrelationTopologyEvidence[];
   handler_evidence?: CorrelationTopologyEvidence[];
+  /** 扫描产物边专有（2026-09-21 结果页只读画布透传；编辑器写入路径不产此字段）：
+   *  status = 跨仓拓扑验证结论（ok/low/unverified/error/declared-missing），
+   *  calls = 该边跨服务调用证据列表。 */
+  status?: string;
+  calls?: CorrCall[];
 }
 
 export interface TopologyDraft {
@@ -453,6 +467,73 @@ export function confirmTopologyDraft(state: TopologyDraftState): TopologyDraftSt
     ...state,
     confirmation: {
       status: "confirmed", fingerprint: topologyDraftFingerprint(state.draft), yaml, issues: [],
+    },
+  };
+}
+
+/* ===== 结果页只读画布适配（2026-09-21）=====
+ * 跨仓扫描产物（assemble_correlation_detail.topology）→ 编辑器 draft 状态：
+ * 结果页复用 TopologyEditor 的画布渲染（readonly 模式），本函数补齐 draft 形状
+ * ——布局坐标由 lib/topology-layout 的调用层级分层算出（入口第 0 层在左，被调
+ * 方按深度右移），等比映射进画布世界坐标。 */
+
+const PROTOCOLS: CorrProtocol[] = ["grpc", "http", "graphql"];
+
+/** 扫描产物拓扑 → 只读 draft 状态（纯函数）。services.role 非 entrypoint/backend
+ *  的未知值按无角色处理（显示 —）；protocol 越界回落 http（防御脏数据）。 */
+export function crossServiceTopologyToDraft(
+  topology: NonNullable<CorrelationDetail["topology"]>,
+): TopologyDraftState {
+  const placed = layout(topology.services, topology.edges);
+  const byName = new Map(placed.nodes.map((n) => [n.name, n]));
+  // 内容包围盒 → 等比（≤1）居中映射进画布，留 40 边距
+  const xs = placed.nodes.map((n) => n.x);
+  const ys = placed.nodes.map((n) => n.y);
+  const minX = Math.min(...xs, 0);
+  const maxX = Math.max(...xs, 1);
+  const minY = Math.min(...ys, 0);
+  const maxY = Math.max(...ys, 1);
+  const scale = Math.min(
+    1,
+    (CANVAS_W - 80) / Math.max(maxX - minX, 1),
+    (CANVAS_H - 80) / Math.max(maxY - minY, 1),
+  );
+  const offX = (CANVAS_W - (maxX - minX) * scale) / 2 - minX * scale;
+  const offY = (CANVAS_H - (maxY - minY) * scale) / 2 - minY * scale;
+  const positionOf = (name: string) => {
+    const n = byName.get(name);
+    const cx = (n ? n.x : CANVAS_W / 2) * scale + offX;
+    const cy = (n ? n.y : CANVAS_H / 2) * scale + offY;
+    return { x: cx - NODE_W / 2, y: cy - NODE_H / 2 };
+  };
+  return {
+    selectedRepos: [],
+    analysis: null,
+    history: { past: [], future: [] },
+    confirmation: { status: "unconfirmed", fingerprint: null, yaml: null, issues: [] },
+    draft: {
+      nodes: topology.services.map((s) => ({
+        repo: s.name,
+        roles: (s.role === "entrypoint" || s.role === "backend" ? [s.role] : []) as CorrRole[],
+        reuseScanId: null,
+        position: positionOf(s.name),
+      })),
+      edges: topology.edges.map((e) => {
+        const protocol = (PROTOCOLS as string[]).includes(e.protocol)
+          ? (e.protocol as CorrProtocol) : "http";
+        return {
+          id: `scan:${e.from}->${e.to}:${e.protocol}`,
+          from: e.from,
+          to: e.to,
+          protocol,
+          enabled: true,
+          origin: "ai" as const,
+          status: e.status,
+          calls: e.calls,
+        };
+      }),
+      uncertain: [],
+      coverage: [],
     },
   };
 }

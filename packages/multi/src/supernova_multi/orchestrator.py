@@ -49,7 +49,9 @@ from supernova_core.correlation.artifacts_guide import (  # noqa: E402
 from supernova_core.correlation.merge_validation import (  # noqa: E402
     assemble_multi_hop_chains, validate_vuln_refs,
 )
-from supernova_core.correlation.adjudication import build_adjudication_batches  # noqa: E402
+from supernova_core.correlation.adjudication import (  # noqa: E402
+    build_adjudication_batches, split_dismissed_by_service,
+)
 from supernova_core.utils.paths import (  # noqa: E402
     INTERMEDIATE_SUBDIR, WHITEBOX_SUBDIR, resolve_track_deliverable,
 )
@@ -383,6 +385,7 @@ async def run_correlation_phase(
     #    批级容错在 run_adjudication_phase 内(error 占位卡);此处整体异常
     #    隔离:阶段 A 产物照常交付,scan 终态不受影响(spec §10)。
     adjudication_cards: list[dict] = []
+    skipped_dismissed: list[dict] = []
     try:
         # 批大小可调（SUPERNOVA_ADJUDICATION_BATCH_LIMIT，默认 15）：更小的批 ×
         # 批间并发（run_adjudication_phase 内部，独立 env 上限）→ 单批 prompt 更小、
@@ -391,6 +394,12 @@ async def run_correlation_phase(
             batch_limit = max(1, int(os.getenv("SUPERNOVA_ADJUDICATION_BATCH_LIMIT", "15")))
         except ValueError:
             batch_limit = 15
+        # 防护类否决分桶（spec 2026-09-21 §3.3）：dismiss_reason 为 sink 处防护
+        # （参数化/脱敏/转义…）的条目与调用方无关，跨仓视角翻不了——不进批不占
+        # 预算，留痕落 adjudication-log.json（可人工复核分类错杀）。env 可关。
+        if os.getenv("SUPERNOVA_ADJUDICATION_SKIP_DEFENSIVE", "1") != "0":
+            dismissed_by_service, skipped_dismissed = split_dismissed_by_service(
+                dismissed_by_service)
         batches = build_adjudication_batches(findings_by_service,
                                              dismissed_by_service,
                                              batch_limit=batch_limit)
@@ -401,13 +410,27 @@ async def run_correlation_phase(
                 batches=batches,
                 artifacts_by_service=artifacts_by_service,
                 correlation_context={
+                    # edges 带 calls 明细（2026-09-21：此前只给 from/to/protocol/status，
+                    # 裁决 agent 看不到 RPC 调用点，重构 exploit_path 只能重查源码；
+                    # 精简版不带 snippet/evidence 大字段，细节按 artifacts_guide 自查）
                     "edges": [{"from": e["from"], "to": e["to"],
                                "protocol": e.get("protocol", "grpc"),
-                               "status": e.get("status", "ok")}
+                               "status": e.get("status", "ok"),
+                               "calls": [{"method": c.get("method", ""),
+                                          "call_site": f"{c.get('call_site', {}).get('file', '')}:"
+                                                       f"{c.get('call_site', {}).get('line', '')}",
+                                          "confidence": c.get("confidence", "")}
+                                         for c in (e.get("calls") or [])]}
                               for e in validated_edges],
                     "flows": [f for e in validated_edges
                               for f in e.get("flows", [])],
-                    "multi_hop_chains": multi_hop_chains},
+                    "multi_hop_chains": multi_hop_chains,
+                    # 入站调用面（spec 2026-09-21 §3.1）：按 to 服务聚合"谁调用本
+                    # 服务哪些 RPC 方法 + 哪些入口路由可达"。dismissed 批的翻案原料
+                    # ——此前 agent 只能查只覆盖已报漏洞链的 flows 判可达性
+                    # （循环论证，0/143 翻案的结构性根因）。
+                    "inbound_surface": _build_inbound_surface(
+                        validated_edges, boundaries, artifacts_by_service)},
                 executor=executor,
                 # sem 不传：adjudication 批是大 prompt，独立并发上限
                 # （SUPERNOVA_ADJUDICATION_MAX_CONCURRENT，默认 3），不随
@@ -421,12 +444,16 @@ async def run_correlation_phase(
         logger.warning("adjudication phase failed (phase A deliverables kept): %s", e)
         await corr_writer.phase("adjudication", "failed")
         (out_dlv / "adjudication-log.json").write_text(
-            json.dumps({"error": str(e)}, ensure_ascii=False), encoding="utf-8")
-    if adjudication_cards:
+            json.dumps({"error": str(e),
+                        "skipped_dismissed": skipped_dismissed},
+                       ensure_ascii=False), encoding="utf-8")
+    if adjudication_cards or skipped_dismissed:
         from supernova_core.correlation.report import write_adjudication_deliverables
         report_md = _render_report(topology, boundaries, merged_queues,
-                                   drift_warnings, cards=adjudication_cards)
-        write_adjudication_deliverables(out_dlv, adjudication_cards, report_md)
+                                   drift_warnings, cards=adjudication_cards,
+                                   skipped_dismissed=skipped_dismissed)
+        write_adjudication_deliverables(out_dlv, adjudication_cards, report_md,
+                                        skipped_dismissed=skipped_dismissed)
 
     # 扫描失败不上探到本函数(现扫异常在 run_cross_repo 已 raise),scan_end 恒 completed;
     # write_scan_end=False 时收尾事件交由调用方写(web 编排收尾)。heartbeat 两分支都清理。
@@ -503,123 +530,261 @@ def _group_by_service(entries: list[dict]) -> dict[str, list[dict]]:
     return g
 
 
+def _build_inbound_surface(validated_edges: list[dict], boundaries: list,
+                           artifacts_by_service: dict) -> dict:
+    """按 to 服务聚合"入站调用面"（spec 2026-09-21 §3.1）——dismissed 批的翻案原料。
+
+    - inbound_calls：谁调用本服务的哪些 RPC 方法、调用点在哪（边 calls）；
+    - reachable_entries：这些方法哪些从入口路由可达（边界 reachable_from，
+      阶段 A edge agent 已打通"入口 HTTP 路由 → RPC 方法"映射）；
+    - entry_points_ref：本仓 entry_points.json 路径（agent 自查暴露面的指路）。
+
+    纯数据搬运、零推断：数据全部来自阶段 A 既有产物。此前这些数据不进裁决
+    context，agent 判 dismissed 可达性只能查只覆盖已报漏洞链的 flows——
+    循环论证、0/143 翻案的结构性根因（2026-09-20 cross-repo-20260920-092147 实测）。
+    """
+    surface: dict[str, dict] = {}
+
+    def _slot(svc: str) -> dict:
+        return surface.setdefault(svc, {"inbound_calls": [],
+                                        "reachable_entries": []})
+
+    for e in validated_edges:
+        for c in (e.get("calls") or []):
+            method = c.get("method") or ""
+            if not method:
+                continue
+            cs = c.get("call_site") or {}
+            _slot(e["to"])["inbound_calls"].append({
+                "from_service": e["from"],
+                "rpc_method": method,
+                "call_site": f"{cs.get('file', '')}:{cs.get('line', '')}"})
+    for b in boundaries:
+        if not b.method:
+            continue
+        _slot(b.service)["reachable_entries"].append({
+            "rpc_method": b.method,
+            "exposure": b.exposure,
+            "via": list(b.reachable_from or [])})
+    for svc, art in artifacts_by_service.items():
+        if art.entry_points:
+            _slot(svc)["entry_points_ref"] = str(art.entry_points)
+    return surface
+
+
 def _render_report(topology, boundaries, merged_queues, drift_warnings,
-                   cards: list[dict] | None = None) -> str:
-    lines = ["# Cross-Repo Correlation Report", ""]
+                   cards: list[dict] | None = None,
+                   skipped_dismissed: list[dict] | None = None) -> str:
+    # 章节序（2026-09-21 目录优化）：结论区（统计→成立→消掉→失败占位）在前，
+    # 背景区（拓扑→边界）垫底——读者从结论读起不必滚过背景。
+    lines = ["# 跨仓关联扫描报告", ""]
     if cards:
         lines += _render_verdict_stats(merged_queues, cards)
+    if drift_warnings:
+        # 漂移警告 = 结论数字可信度的注脚（复用产物可能过时），紧跟统计
+        lines += ["## 版本漂移警告", ""]
+        lines += [f"- {w}" for w in drift_warnings] + [""]
+    if cards:
+        # 结论优先章节（2026-09-20 口径对齐结果页；09-21 加速览表）：per-vuln
+        # 结论统计 + 成立漏洞全文 + 消掉/存疑清单——人工复核直接从结论读起。
+        classified = _classify_merged_verdicts(merged_queues, cards)
+        lines += _render_confirmed_vulns(classified, _dismissed_upgrade_cards(cards))
+        lines += _render_refuted_list(classified)
+        # 裁决失败占位（故障信号必见）单独留档；其余全量裁决卡不再进报告——
+        # 确认卡已融入成立全文、消掉论证已在清单 reasoning、维持是纯噪音
+        # （2026-09-21 精简），机器留档由 adjudication-log.json 承担。
+        error_cards = [c for c in cards if c.get("direction") == "error"]
+        if error_cards:
+            lines += ["", "## 裁决失败(占位留档)", ""]
+            for c in error_cards:
+                ref = c.get("finding_ref", {})
+                lines.append(f"- [{ref.get('vuln_id', '?')}] {ref.get('service', '?')}"
+                             f"({ref.get('origin', '?')}) — {c.get('reasoning', '')}")
+            lines.append("")
+    else:
+        # cards=[] 且 skipped 非空（全部防护类跳过）≠ 进行中——只有 None（阶段 B
+        # 未跑/未回）才是"进行中"。
+        if cards is None:
+            lines += ["## 跨仓裁决", "",
+                      "- 裁决阶段进行中，完成后本报告将补充跨仓结论章节。", ""]
+    if skipped_dismissed:
+        # 防护类否决留痕说明（spec 2026-09-21 §3.3）：跳过必须可审计。
+        lines += ["", "## 防护类否决(未进跨仓审查)", "",
+                  f"- 共 {len(skipped_dismissed)} 条防护类否决未占用跨仓审查预算"
+                  "（sink 处防护与调用方无关，跨仓视角不可翻案）；"
+                  "明细见 adjudication-log.json 的 skipped_dismissed 段。", ""]
+    # ── 背景区（垫底）──
     lines += ["## 服务拓扑", ""]
     for e in topology.edges:
         lines.append(f"- {e.from_} → {e.to} ({e.protocol}) [{e.status}]")
-    lines += ["", "## 未验证/低置信/失败项(透明单列)", ""]
-    for e in topology.edges:
-        if e.status in ("low", "unverified", "error", "declared-missing"):
+    # 未验证/低置信边（透明单列）——空则不输出标题
+    bad_edges = [e for e in topology.edges
+                 if e.status in ("low", "unverified", "error", "declared-missing")]
+    if bad_edges:
+        lines += ["", "### 未验证/低置信/失败项", ""]
+        for e in bad_edges:
             lines.append(f"- {e.from_}→{e.to}: {e.status} {e.error or ''}")
-    if drift_warnings:
-        lines += ["", "## 版本漂移警告(A2)", ""]
-        lines += [f"- {w}" for w in drift_warnings]
-    if cards:
-        # 结论优先章节（2026-09-20）：成立漏洞全文 + 消掉/存疑清单——人工复核
-        # 直接从结论读起，不必翻全量裁决列表。
-        vuln_by_ref = _vuln_index(merged_queues)
-        lines += _render_confirmed_vulns(cards, vuln_by_ref)
-        lines += _render_refuted_list(cards, vuln_by_ref)
-        # spec 2026-08-27 §8:跨仓裁决章节——漏洞与非漏洞同表留证(分析过程+证据+论证)
-        lines += ["", "## 跨仓裁决(阶段 B)", ""]
-        groups = [("upgrade", "翻案候选(非漏洞→跨仓可达,待人工复核)"),
-                  ("downgrade", "降级/证伪(跨仓防护)"),
-                  ("confirm", "确认(跨仓可达性留证)"),
-                  ("maintain", "维持(非漏洞维持)"),
-                  ("error", "裁决失败(占位留档)")]
-        for direction, title in groups:
-            dc = [c for c in cards if c.get("direction") == direction]
-            if not dc:
-                continue
-            lines += [f"### {title}", ""]
-            for c in dc:
-                ref = c.get("finding_ref", {})
-                lines.append(
-                    f"- [{ref.get('vuln_id', '?')}] {ref.get('service', '?')}"
-                    f"({ref.get('origin', '?')}) → {c.get('conclusion', '?')}"
-                    f"(confidence: {c.get('confidence', '?')})")
-                if c.get("cross_service_context"):
-                    lines.append(f"  - 跨仓上下文: {c['cross_service_context']}")
-                for step in c.get("analysis_process", [])[:5]:
-                    lines.append(f"  - 过程: {step}")
-                for ev in c.get("verification_evidence", [])[:5]:
-                    lines.append(f"  - 证据: {ev.get('location', '?')}"
-                                 f" — {ev.get('note', '')}")
-                if c.get("reasoning"):
-                    lines.append(f"  - 论证: {c['reasoning']}")
-            lines.append("")
-    else:
-        lines += ["", "## 跨仓裁决(阶段 B)", "",
-                  "- 裁决阶段进行中，完成后本报告将补充跨仓结论章节。"]
+    # 信任边界附录（2026-09-21 页面撤章后信息落位：结果页不再渲染，导出物保留）
+    if boundaries:
+        lines += ["", "## 信任边界", ""]
+        for b in boundaries:
+            reach = ", ".join(b.reachable_from) or "—"
+            lines.append(f"- {b.service} · {b.method}（{b.confidence}）— "
+                         f"{b.exposure}，可达来源: {reach} · {b.reason}")
     return "\n".join(lines)
 
 
-def _verdict_split(cards: list[dict]) -> tuple[list[dict], list[dict], list[dict], list[dict], list[dict]]:
-    """裁决卡五分类：(确认, 消掉, 存疑, 翻案, 维持)。error 卡按存疑计。"""
-    confirmed = [c for c in cards if c.get("direction") == "confirm"]
-    downgraded = [c for c in cards if c.get("direction") == "downgrade"]
-    uncertain = [c for c in cards
-                 if c.get("conclusion") == "needs-review" or c.get("direction") == "error"]
-    upgraded = [c for c in cards if c.get("direction") == "upgrade"]
-    maintained = [c for c in cards if c.get("direction") == "maintain"]
-    return confirmed, downgraded, uncertain, upgraded, maintained
+def _classify_merged_verdicts(
+    merged_queues: dict[str, list[dict]], cards: list[dict],
+) -> dict[str, list[tuple[dict, dict | None]]]:
+    """合并漏洞 × 裁决卡 per-vuln 四分类——与前端 correlation-verdict.ts 同口径
+    （2026-09-20 报告口径对齐：报告数字必须等于结果页数字）。
+
+    卡索引按 (service, vuln_id) last-wins（同前端 Map 行为，重复卡后写覆盖）；
+    归类只认 origin=queue 的卡：confirm→成立、downgrade→消掉、
+    conclusion=needs-review 或 queue 卡异常方向（upgrade/maintain/error）→存疑、
+    无卡（或键命中 dismissed 卡）→未重审。
+    返回 {组: [(漏洞条目, 裁决卡|None)]}，组内保持合并序。
+    """
+    idx: dict[tuple[str, str], dict] = {}
+    for c in cards:
+        ref = c.get("finding_ref", {})
+        svc, vid = ref.get("service"), ref.get("vuln_id")
+        if isinstance(svc, str) and isinstance(vid, str) and vid:
+            idx[(svc, vid)] = c
+
+    def group_of(entry: dict) -> tuple[str, dict | None]:
+        card = idx.get((entry.get("service"), entry.get("ID")))
+        if card is None or card.get("finding_ref", {}).get("origin") != "queue":
+            return "unadjudicated", None
+        if card.get("conclusion") == "needs-review":
+            return "uncertain", card
+        direction = card.get("direction")
+        if direction == "confirm":
+            return "confirmed", card
+        if direction == "downgrade":
+            return "refuted", card
+        return "uncertain", card  # upgrade/maintain/error 等 queue 批异常方向
+
+    out: dict[str, list[tuple[dict, dict | None]]] = {
+        "confirmed": [], "refuted": [], "uncertain": [], "unadjudicated": []}
+    for entries in merged_queues.values():
+        for e in entries:
+            if not (isinstance(e, dict) and e.get("ID")):
+                continue
+            group, card = group_of(e)
+            out[group].append((e, card))
+    return out
+
+
+def _dismissed_upgrade_cards(cards: list[dict]) -> list[dict]:
+    """翻案卡：origin=dismissed 且 direction=upgrade（单仓判非漏洞、跨仓认为可达成立）。"""
+    return [c for c in cards
+            if c.get("direction") == "upgrade"
+            and c.get("finding_ref", {}).get("origin") == "dismissed"]
 
 
 def _render_verdict_stats(merged_queues: dict[str, list[dict]], cards: list[dict]) -> list[str]:
-    """结论统计头：成立/翻案/消掉/存疑/未重审 一行计数（总目录，给报告定调）。"""
-    confirmed, downgraded, uncertain, upgraded, _ = _verdict_split(cards)
-    covered = {(c.get("finding_ref", {}).get("service"),
-                c.get("finding_ref", {}).get("vuln_id"))
-               for c in cards if c.get("finding_ref", {}).get("origin") == "queue"}
+    """结论统计头：per-vuln 口径（与结果页一致）+ 单仓已否决复核一行。"""
+    classified = _classify_merged_verdicts(merged_queues, cards)
+    upgraded = _dismissed_upgrade_cards(cards)
     total = sum(len(v) for v in merged_queues.values())
-    unadjudicated = sum(
-        1 for entries in merged_queues.values() for e in entries
-        if (e.get("service"), e.get("ID")) not in covered)
-    return ["## 结论统计", "",
-            f"成立 {len(confirmed)} ｜ 翻案 {len(upgraded)} ｜ 消掉 {len(downgraded)}"
-            f" ｜ 存疑 {len(uncertain)} ｜ 未重审 {unadjudicated}（合并漏洞共 {total} 条）", ""]
-
-
-def _vuln_index(merged_queues: dict[str, list[dict]]) -> dict[tuple[str, str], dict]:
-    idx: dict[tuple[str, str], dict] = {}
-    for entries in merged_queues.values():
-        for e in entries:
-            if isinstance(e, dict) and e.get("ID"):
-                idx[(e.get("service"), e.get("ID"))] = e
-    return idx
+    lines = ["## 结论统计", "",
+             f"成立 {len(classified['confirmed'])} ｜ 翻案 {len(upgraded)} ｜ "
+             f"消掉 {len(classified['refuted'])} ｜ 存疑 {len(classified['uncertain'])}"
+             f" ｜ 未重审 {len(classified['unadjudicated'])}（合并漏洞共 {total} 条）"]
+    reviewed = [c for c in cards if c.get("finding_ref", {}).get("origin") == "dismissed"]
+    if reviewed:
+        # 单仓否决的跨仓复核结论一行带过：无翻案时对读者是纯噪音，不展开成清单；
+        # 有翻案时指回成立区。
+        lines += [""]
+        if upgraded:
+            lines.append(f"单仓已否决复核：维持 {len(reviewed) - len(upgraded)}"
+                         f" · 翻案 {len(upgraded)}（翻案候选见「成立的漏洞」区，待人工确认）")
+        else:
+            lines.append(f"单仓已否决复核：{len(reviewed)} 条全部维持原判，无翻案。")
+    # 留档指引并入统计节尾（2026-09-21：报告只收结论，全量卡由 json 承担）
+    lines += ["", f"> 全量裁决留档：{len(cards)} 张卡见 adjudication-log.json。", ""]
+    return lines
 
 
 def _render_vuln_detail(entry: dict, card: dict) -> list[str]:
-    """成立的单条漏洞全文（接口/问题点/POC/危害/修复），供报告直接交付复核。"""
+    """成立的单条漏洞全文（接口/问题点/POC/危害/修复），供报告直接交付复核。
+
+    2026-09-21：confirm 卡带 exploit_path 时，前置渲染「跨仓触发路径」（入口接口
+    → 逐跳 RPC → 触达点 + 用户可控性）与「跨仓 PoC」（以入口接口为起点重写）；
+    单仓接口/POC 同步降级标注——单仓接口是后端内部面（内网端口/直连），跨仓场景
+    下不可达，避免复核者拿错 PoC 打错接口。"""
     ref = card.get("finding_ref", {})
+    # 跨仓修订（2026-09-21，按需）：危害重述/成因补充/定级建议——跨仓分析
+    # 改变了表述时才由裁决卡给出；展示层修订版优先、单仓原文保留可审计
+    refined = card.get("refined_finding")
+    refined = refined if isinstance(refined, dict) and refined else {}
+    sev_line = entry.get("severity", "?")
+    if refined.get("severity"):
+        sev_line = f"{sev_line}，跨仓定级建议: {refined['severity']}"
     lines = [f"### [{entry.get('ID', '?')}] {entry.get('service', '?')} — "
-             f"{entry.get('title', '')}（{entry.get('severity', '?')}）"]
+             f"{entry.get('title', '')}（{sev_line}）"]
+    ep = card.get("exploit_path")
+    has_path = isinstance(ep, dict) and bool(ep)
+    if has_path:
+        lines.append("- 跨仓触发路径:")
+        if ep.get("entry_endpoint"):
+            lines.append(f"  - 入口: {ep.get('entry_service', '')}"
+                         f" `{ep['entry_endpoint']}`".rstrip())
+        for h in ep.get("hops") or []:
+            lines.append(f"  - RPC: {h.get('from', '?')} → {h.get('to', '?')}"
+                         f" · {h.get('rpc', '?')}（{h.get('call_site', '?')}）")
+        if ep.get("sink"):
+            lines.append(f"  - 触达点: {ep['sink']}")
+        if ep.get("user_controlled"):
+            lines.append(f"  - 用户可控性: {ep['user_controlled']}")
+        xpoc = ep.get("poc")
+        if isinstance(xpoc, dict) and xpoc:
+            lines.append("- 跨仓 PoC（从入口接口触发）:")
+            if xpoc.get("preconditions"):
+                lines.append(f"  - 前置: {xpoc['preconditions']}")
+            for s in xpoc.get("steps") or []:
+                lines.append(f"  - 步骤: {s}")
+            if xpoc.get("curl"):
+                lines.append(f"  ```bash\n  {xpoc['curl']}\n  ```")
+            if xpoc.get("raw_http"):
+                lines.append(f"  ```http\n  {xpoc['raw_http']}\n  ```")
+            if xpoc.get("notes"):
+                lines.append(f"  - 说明: {xpoc['notes']}")
     eps = entry.get("report_endpoints") or []
-    for ep in eps[:5]:
-        head = f"- 接口: {ep.get('method', '')} {ep.get('path', '')}".strip()
+    # 入口自证（exploit_path 无 hops）：单仓接口即对外入口，不降级标注
+    entry_self = has_path and not (ep.get("hops") or [])
+    iface_label = ("- 单仓接口（后端内部面，非公网入口）:"
+                   if has_path and not entry_self and eps else "- 接口:")
+    for ep_row in eps[:5]:
+        head = f"{iface_label} {ep_row.get('method', '')} {ep_row.get('path', '')}".strip()
         meta = " · ".join(x for x in (
-            f"auth: {ep['auth']}" if ep.get("auth") else "",
-            f"route: {ep['route_registered_at']}" if ep.get("route_registered_at") else "",
-            f"source: {ep['source_location']}" if ep.get("source_location") else "",
+            f"auth: {ep_row['auth']}" if ep_row.get("auth") else "",
+            f"route: {ep_row['route_registered_at']}" if ep_row.get("route_registered_at") else "",
+            f"source: {ep_row['source_location']}" if ep_row.get("source_location") else "",
         ) if x)
         lines.append(f"{head}（{meta}）" if meta else head)
-        if ep.get("params"):
-            lines.append(f"  - 参数: {'; '.join(ep['params'])}")
+        if ep_row.get("params"):
+            lines.append(f"  - 参数: {'; '.join(ep_row['params'])}")
     if entry.get("location") or entry.get("vulnerable_code_location"):
         lines.append(f"- 位置: {entry.get('vulnerable_code_location') or entry.get('location')}")
+    if refined.get("cause"):
+        lines.append(f"- 成因补充（跨仓）: {refined['cause']}")
     if entry.get("impact"):
-        lines.append(f"- 危害: {entry['impact']}")
+        if refined.get("impact"):
+            lines.append(f"- 危害: {refined['impact']}（跨仓修订；单仓原表述: {entry['impact']}）")
+        else:
+            lines.append(f"- 危害: {entry['impact']}")
     for p in (entry.get("report_problem_points") or [])[:5]:
         lines.append(f"- 问题点: {p.get('location', '?')} — {p.get('description', '')}")
         if p.get("snippet"):
             lines.append(f"  ```\n  {p['snippet']}\n  ```")
     poc = entry.get("report_poc") or {}
     if isinstance(poc, dict) and poc:
-        lines.append("- POC:")
+        poc_label = ("- 单仓 PoC（直连后端内部接口；跨仓场景请用上方跨仓 PoC）:"
+                     if has_path and not entry_self else "- POC:")
+        lines.append(poc_label)
         if poc.get("preconditions"):
             lines.append(f"  - 前置: {poc['preconditions']}")
         if poc.get("expected_response"):
@@ -632,29 +797,43 @@ def _render_vuln_detail(entry: dict, card: dict) -> list[str]:
             lines.append(f"  ```http\n  {poc['raw_http']}\n  ```")
     if entry.get("remediation"):
         lines.append(f"- 修复建议: {entry['remediation']}")
-    if card.get("cross_service_context"):
+    # 跨仓上下文散文行：无结构化路径（旧卡）时保留；有 exploit_path 时同信息已
+    # 由「跨仓触发路径」结构化表达，不再重复（2026-09-21 精简）
+    if card.get("cross_service_context") and not has_path:
         lines.append(f"- 跨仓上下文: {card['cross_service_context']}")
     lines.append("")
     return lines
 
 
-def _render_confirmed_vulns(cards: list[dict],
-                            vuln_by_ref: dict[tuple[str, str], dict]) -> list[str]:
-    """成立漏洞全文：queue confirm（关联 queue 条目）+ dismissed upgrade（裁决卡全文）。"""
-    confirmed, _, _, upgraded, _ = _verdict_split(cards)
+def _render_confirmed_vulns(classified: dict[str, list[tuple[dict, dict | None]]],
+                            upgraded: list[dict]) -> list[str]:
+    """成立漏洞全文：per-vuln confirmed（queue 条目全文 + 裁决卡跨仓上下文）
+    + dismissed upgrade 翻案卡全文。章首附速览表（2026-09-21 目录优化）——
+    ID/服务/严重度/定级建议/标题 一览，当目录兼摘要，免滚全文找条目。"""
+    confirmed = classified["confirmed"]
     if not confirmed and not upgraded:
         return []
     lines = ["", "## 成立的漏洞（跨仓确认 + 翻案）", ""]
-    for c in confirmed:
-        ref = c.get("finding_ref", {})
-        entry = vuln_by_ref.get((ref.get("service"), ref.get("vuln_id")))
-        if isinstance(entry, dict):
-            lines += _render_vuln_detail(entry, c)
-        else:
-            lines.append(f"### [{ref.get('vuln_id', '?')}] {ref.get('service', '?')}（条目缺席，见裁决明细）")
-            if c.get("reasoning"):
-                lines.append(f"- 论证: {c['reasoning']}")
-            lines.append("")
+
+    def _sev_rank(s: str) -> int:
+        order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        return order.get((s or "").lower(), 4)
+
+    rows = [(e.get("severity", ""), e.get("ID", "?"), e.get("service", "?"),
+             ((c or {}).get("refined_finding") or {}).get("severity", ""),
+             e.get("title", "")) for e, c in confirmed]
+    rows.sort(key=lambda r: (_sev_rank(r[0]), r[1], r[2]))
+    if upgraded:
+        for c in upgraded:
+            ref = c.get("finding_ref", {})
+            rows.append(("—", ref.get("vuln_id", "?"), ref.get("service", "?"),
+                         "", f"翻案：{(c.get('cross_service_context') or '')[:40]}"))
+    lines += ["| ID | 服务 | 严重度 | 定级建议 | 标题 |", "|---|---|---|---|---|"]
+    for sev, vid, svc, refined_sev, title in rows:
+        lines.append(f"| {vid} | {svc} | {sev} | {refined_sev or '—'} | {title} |")
+    lines.append("")
+    for entry, card in confirmed:
+        lines += _render_vuln_detail(entry, card or {})
     if upgraded:
         lines += ["### 翻案候选（单仓已否决 → 跨仓可达，待人工复核）", ""]
         for c in upgraded:
@@ -673,24 +852,21 @@ def _render_confirmed_vulns(cards: list[dict],
     return lines
 
 
-def _render_refuted_list(cards: list[dict],
-                         vuln_by_ref: dict[tuple[str, str], dict]) -> list[str]:
-    """消掉/存疑清单：一行一条（ID + service + 结论 + reasoning 摘句）。"""
-    _, downgraded, uncertain, _, maintained = _verdict_split(cards)
-    if not downgraded and not uncertain and not maintained:
+def _render_refuted_list(
+    classified: dict[str, list[tuple[dict, dict | None]]],
+) -> list[str]:
+    """消掉/存疑清单：per-vuln 一行一条（ID + service + 结论 + reasoning），与结果页
+    紧凑行同口径。dismissed 维持卡不进本清单（结论文案见结论统计的复核行；
+    留档全文在「跨仓裁决(阶段 B)」章节）。"""
+    rows = [("消掉", classified["refuted"]), ("存疑", classified["uncertain"])]
+    if not any(items for _, items in rows):
         return []
     lines = ["", "## 消掉/存疑清单", ""]
-    for c in downgraded:
-        ref = c.get("finding_ref", {})
-        lines.append(f"- [{ref.get('vuln_id', '?')}] {ref.get('service', '?')}（消掉, "
-                     f"confidence: {c.get('confidence', '?')}）— {c.get('reasoning', '')}")
-    for c in uncertain:
-        ref = c.get("finding_ref", {})
-        lines.append(f"- [{ref.get('vuln_id', '?')}] {ref.get('service', '?')}（存疑, "
-                     f"confidence: {c.get('confidence', '?')}）— {c.get('reasoning', '')}")
-    for c in maintained:
-        ref = c.get("finding_ref", {})
-        lines.append(f"- [{ref.get('vuln_id', '?')}] {ref.get('service', '?')}（维持否决）— "
-                     f"{c.get('reasoning', '')}")
+    for label, items in rows:
+        for entry, card in items:
+            c = card or {}
+            lines.append(f"- [{entry.get('ID', '?')}] {entry.get('service', '?')}（{label}, "
+                         f"confidence: {c.get('confidence', '-') if c else '-'}）"
+                         f"— {c.get('reasoning', '') if c else '无裁决卡'}")
     lines.append("")
     return lines

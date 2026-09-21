@@ -5,6 +5,9 @@ import type { CorrelationTopologyEvidence } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
+import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
@@ -12,8 +15,10 @@ import {
   resetTopologyLayout, restoreTopologyAiEdge, setTopologyEdgeEnabled, updateTopologyEdge,
   setTopologyNodeSource, toggleTopologyRole,
   validateTopologyDraft, type TopologyDraftState,
+  CANVAS_H, CANVAS_W, EDGE_MARGIN, NODE_H, NODE_W,
 } from "@/lib/correlation-topology-draft";
 import { anchorPair, type Box } from "@/lib/topology-anchors";
+import { statusClass } from "@/lib/topology-layout";
 
 interface Props {
   state: TopologyDraftState;
@@ -21,16 +26,25 @@ interface Props {
   /** 复用候选数据源（属性面板节点模式「来源」下拉；原 TopologyTables 通道，2026-09-04 撤表并轨）。 */
   scans?: unknown[];
   onRemoveNode?: (repo: string) => void;
+  /** 只读画布（2026-09-21 结果页复用）：隐藏编辑工具（undo/redo/重排、拖动布局、
+   *  连线手柄、属性面板编辑控件、校验告警），保留 pan/zoom/fit 与点选查看——
+   *  选中边在右栏透传 calls 表，边线按扫描产物 status 上语义色。 */
+  readonly?: boolean;
 }
 
-/** 节点盒尺寸（viewBox 坐标）——lib 侧 clamp 与此处共用同一口径。 */
-const NODE_W = 105;
-const NODE_H = 48;
-/** 画布 viewBox（与 svg viewBox 硬编码一致）。 */
-const CANVAS_W = 800;
-const CANVAS_H = 600;
-/** 拖动时节点离画布边缘的最小留白。 */
-const EDGE_MARGIN = 6;
+/** 结果页扫描产物边 status → 右栏徽标语义色（statusClass 同源，边线已着同色）。 */
+function statusBadgeClass(status: string): string {
+  switch (status) {
+    case "ok":
+      return "border-green/40 text-green";
+    case "low":
+      return "border-amber/40 text-amber";
+    case "error":
+      return "border-red/40 text-red";
+    default:
+      return "border-border text-muted-foreground";
+  }
+}
 /** repo 名截断阈值：11px mono 下 105px 盒内可容 ~14 字符，超出截断 + title 悬停看全名。 */
 const NAME_MAX = 14;
 
@@ -241,7 +255,7 @@ function NodePanel({ node, state, onState, scans, onRemove }: {
   );
 }
 
-export function TopologyEditor({ state, onState, scans: scansUnknown = [], onRemoveNode }: Props) {
+export function TopologyEditor({ state, onState, scans: scansUnknown = [], onRemoveNode, readonly = false }: Props) {
   const { t } = useTranslation();
   // 复用候选（属性面板「来源」下拉数据源）：原 TopologyTables 的窄化透传，撤表并轨后收进编辑器。
   const scans = scansUnknown as Array<{ scan_id?: string; id?: string; repo?: string; scan_type?: string; status?: string }>;
@@ -334,13 +348,17 @@ export function TopologyEditor({ state, onState, scans: scansUnknown = [], onRem
   return (
     <section className="space-y-3" aria-label={t("scan.correlation.topology.editor")}>
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="outline" size="sm" disabled={!state.history.past.length}
-          onClick={() => onState(undoTopology(state))}><Undo2 className="h-3.5 w-3.5" />{t("scan.correlation.topology.undo")}</Button>
-        <Button type="button" variant="outline" size="sm" disabled={!state.history.future.length}
-          onClick={() => onState(redoTopology(state))}><Redo2 className="h-3.5 w-3.5" />{t("scan.correlation.topology.redo")}</Button>
-        <Button type="button" variant="outline" size="sm" onClick={() => onState(resetTopologyLayout(state))}>
-          <LayoutGrid className="h-3.5 w-3.5" />{t("scan.correlation.topology.resetLayout")}
-        </Button>
+        {!readonly && (
+          <>
+            <Button type="button" variant="outline" size="sm" disabled={!state.history.past.length}
+              onClick={() => onState(undoTopology(state))}><Undo2 className="h-3.5 w-3.5" />{t("scan.correlation.topology.undo")}</Button>
+            <Button type="button" variant="outline" size="sm" disabled={!state.history.future.length}
+              onClick={() => onState(redoTopology(state))}><Redo2 className="h-3.5 w-3.5" />{t("scan.correlation.topology.redo")}</Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => onState(resetTopologyLayout(state))}>
+              <LayoutGrid className="h-3.5 w-3.5" />{t("scan.correlation.topology.resetLayout")}
+            </Button>
+          </>
+        )}
         <span className="ml-auto flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
           <Info className="h-3.5 w-3.5 flex-shrink-0" aria-hidden />
           <span className="truncate" title={t("scan.correlation.topology.canvasHint")}>
@@ -402,8 +420,12 @@ export function TopologyEditor({ state, onState, scans: scansUnknown = [], onRem
             // 垫一条 14px 透明实线兜住命中（TopologyGraph 同款手法；disabled 边的虚线
             // 间隙 visiblePainted 不响应指针，也由它兜住）。命中线在前 = 垫在可见线下层。
             const tid = edge.id.replace(/[^A-Za-z0-9_-]/g, "_");
+            // 只读画布：扫描产物边按 status 上语义色（declared-missing 虚线）——
+            // 验证结论是结果页的信息，不能像编辑器一样全灰。
+            const statusTone = readonly && edge.status ? statusClass(edge.status) : "";
+            const dashed = !edge.enabled || (readonly && edge.status === "declared-missing");
             return (
-              <g key={edge.id} className="cursor-pointer" tabIndex={0} role="button"
+              <g key={edge.id} className={`cursor-pointer ${statusTone}`} tabIndex={0} role="button"
                 aria-label={`${edge.from} ${edge.protocol} ${edge.to}`}
                 onPointerDown={() => { setSelectedEdgeId(edge.id); setSelectedNodeRepo(null); }}
                 onClick={() => { setSelectedEdgeId(edge.id); setSelectedNodeRepo(null); }}
@@ -414,8 +436,13 @@ export function TopologyEditor({ state, onState, scans: scansUnknown = [], onRem
                   stroke="transparent" strokeWidth={14} />
                 <line data-testid={`topology-edge-${tid}`}
                   x1={anchors.from.x} y1={anchors.from.y} x2={anchors.to.x} y2={anchors.to.y}
-                  className={edge.enabled ? (selectedEdgeId === edge.id ? "stroke-primary" : "stroke-muted-foreground") : "stroke-border"}
-                  strokeWidth={selectedEdgeId === edge.id ? 2.5 : 1.5} strokeDasharray={edge.enabled ? undefined : "4 4"}
+                  className={edge.enabled
+                    ? (selectedEdgeId === edge.id
+                        ? "stroke-primary"
+                        : statusTone ? "stroke-current" : "stroke-muted-foreground")
+                    : "stroke-border"}
+                  strokeWidth={selectedEdgeId === edge.id ? 2.5 : 1.5}
+                  strokeDasharray={dashed ? "4 4" : undefined}
                   markerEnd="url(#topology-arrow)" pointerEvents="none" />
               </g>
             );
@@ -431,10 +458,16 @@ export function TopologyEditor({ state, onState, scans: scansUnknown = [], onRem
             const nodeSelected = selectedNodeRepo === node.repo;
             return (
             <g key={node.repo} data-testid={`topology-node-${node.repo}`} data-node={node.repo}
-              className="cursor-move" tabIndex={0} role="group"
+              className={readonly ? "cursor-pointer" : "cursor-move"} tabIndex={0} role="group"
               aria-label={`${node.repo} ${node.roles.join(", ")}`}
-              onPointerDown={() => { dragRepo.current = node.repo; dragMoved.current = false; }}
+              onPointerDown={() => { if (readonly) return; dragRepo.current = node.repo; dragMoved.current = false; }}
               onPointerUp={() => {
+                // 只读画布：无拖动布局/成边，但保留点选查看（右栏只读面板）
+                if (readonly) {
+                  setSelectedNodeRepo(node.repo);
+                  setSelectedEdgeId(null);
+                  return;
+                }
                 // 拖线式成边：按住起点手柄拖到目标节点上松手（自身松手 = 取消选中态重置）
                 if (connectFrom && connectFrom !== node.repo) {
                   onState(addTopologyEdge(state, { from: connectFrom, to: node.repo, protocol: "grpc" }));
@@ -464,19 +497,24 @@ export function TopologyEditor({ state, onState, scans: scansUnknown = [], onRem
                 {node.repo.length > NAME_MAX ? `${node.repo.slice(0, NAME_MAX - 1)}…` : node.repo}
               </text>
               <text x={node.position.x + 10} y={node.position.y + 37} className="fill-muted-foreground text-[10px]">{node.roles.join(" · ") || "—"}</text>
-              {/* 连接柄：环+点（可拉出连线的「手柄」形态，悬停原生 tooltip 补操作说明） */}
-              <circle cx={node.position.x + NODE_W + 7} cy={node.position.y + NODE_H / 2} r={6.5}
-                className={connectFrom === node.repo ? "fill-primary/20 stroke-primary" : "fill-none stroke-primary/45"}
-                aria-label={`${t("scan.correlation.topology.connect")} ${node.repo}`} role="button" tabIndex={0}
-                onPointerDown={(e) => {
-                  e.stopPropagation();
-                  if (connectFrom === node.repo) { cancelConnect(); return; }
-                  setConnectFrom(node.repo);
-                  setConnectPos({ x: node.position.x + NODE_W + 7, y: node.position.y + NODE_H / 2 });
-                }}>
-                <title>{t("scan.correlation.topology.connectHandle")}</title>
-              </circle>
-              <circle cx={node.position.x + NODE_W + 7} cy={node.position.y + NODE_H / 2} r={2.5} className="fill-primary pointer-events-none" />
+              {/* 连接柄：环+点（可拉出连线的「手柄」形态，悬停原生 tooltip 补操作说明）；
+                  只读画布无成边能力，不渲染 */}
+              {!readonly && (
+                <>
+                  <circle cx={node.position.x + NODE_W + 7} cy={node.position.y + NODE_H / 2} r={6.5}
+                    className={connectFrom === node.repo ? "fill-primary/20 stroke-primary" : "fill-none stroke-primary/45"}
+                    aria-label={`${t("scan.correlation.topology.connect")} ${node.repo}`} role="button" tabIndex={0}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      if (connectFrom === node.repo) { cancelConnect(); return; }
+                      setConnectFrom(node.repo);
+                      setConnectPos({ x: node.position.x + NODE_W + 7, y: node.position.y + NODE_H / 2 });
+                    }}>
+                    <title>{t("scan.correlation.topology.connectHandle")}</title>
+                  </circle>
+                  <circle cx={node.position.x + NODE_W + 7} cy={node.position.y + NODE_H / 2} r={2.5} className="fill-primary pointer-events-none" />
+                </>
+              )}
             </g>
             );
           })}
@@ -513,11 +551,90 @@ export function TopologyEditor({ state, onState, scans: scansUnknown = [], onRem
         </div>
         {/* 右栏属性面板（双模式）：选中边=边属性+证据（现状）；选中节点=节点属性
             （2026-09-04 撤 TopologyTables 并轨——角色/来源/移除的唯一编辑入口）；
-            与画布等高内部滚动。 */}
+            与画布等高内部滚动。只读画布（结果页）：节点=名称+角色，边=叙述句+
+            status 徽标+该边 calls 表——查看而非编辑。 */}
         <aside className="space-y-3 rounded-lg border border-border bg-card p-3 xl:max-h-[540px] xl:overflow-y-auto" aria-label={t("scan.correlation.topology.details")}>
           {selectedNode ? (
-            <NodePanel node={selectedNode} state={state} onState={onState} scans={scans} onRemove={onRemoveNode} />
+            readonly ? (
+              <div className="space-y-2 text-xs" data-testid="topology-node-panel">
+                <div className="text-sm font-semibold font-mono">{selectedNode.repo}</div>
+                <div className="text-muted-foreground">
+                  {selectedNode.roles.includes("entrypoint")
+                    ? t("scan.correlation.roleEntrypoint")
+                    : selectedNode.roles.includes("backend")
+                      ? t("scan.correlation.roleBackend")
+                      : "—"}
+                </div>
+              </div>
+            ) : (
+              <NodePanel node={selectedNode} state={state} onState={onState} scans={scans} onRemove={onRemoveNode} />
+            )
           ) : selectedEdge ? (
+            readonly ? (
+              <div className="space-y-3 text-xs">
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold leading-snug">
+                    {t("scan.correlation.topology.edgeCall", {
+                      from: selectedEdge.from, protocol: selectedEdge.protocol, to: selectedEdge.to,
+                    })}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                    {selectedEdge.status && (
+                      <span data-testid="topology-edge-status"
+                        className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${statusBadgeClass(selectedEdge.status)}`}>
+                        {selectedEdge.status}
+                      </span>
+                    )}
+                    {(selectedEdge.service || selectedEdge.method) && (
+                      <span className="font-mono text-[11px]">
+                        {[selectedEdge.service, selectedEdge.method].filter(Boolean).join(".")}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {/* 该边跨服务调用证据（扫描产物）：与结果页原「点边展开 calls 表」同内容，
+                    升级为右栏面板承载 */}
+                {(selectedEdge.calls?.length ?? 0) > 0 && (
+                  <div className="space-y-1 border-t border-border pt-2" data-testid="topo-calls">
+                    <div className="font-mono text-[11px] text-muted-foreground">
+                      {t("scan.correlation.edgeCalls")} · {selectedEdge.calls!.length}
+                    </div>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>{t("scan.correlation.colMethod")}</TableHead>
+                          <TableHead>{t("scan.correlation.colCallSite")}</TableHead>
+                          <TableHead>{t("scan.correlation.colEvidence")}</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {selectedEdge.calls!.map((c, ci) => (
+                          <TableRow key={ci}>
+                            <TableCell className="font-mono text-xs">{c.method}</TableCell>
+                            <TableCell className="font-mono text-xs">
+                              {c.call_site.file}:{c.call_site.line}
+                            </TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{c.evidence}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+                {/* 拓扑预分析证据（编辑器数据才有；结果页产物无此数据不渲染空组） */}
+                {((selectedEdge.client_evidence?.length ?? 0) > 0
+                  || (selectedEdge.handler_evidence?.length ?? 0) > 0) && (
+                  <div className="space-y-2 border-t border-border pt-2">
+                    <EdgeEvidenceGroup dir="client" label={t("scan.correlation.topology.clientEvidence")}
+                      repo={selectedEdge.from} evidence={selectedEdge.client_evidence ?? []}
+                      emptyText={t("scan.correlation.topology.noClientEvidence")} />
+                    <EdgeEvidenceGroup dir="handler" label={t("scan.correlation.topology.handlerEvidence")}
+                      repo={selectedEdge.to} evidence={selectedEdge.handler_evidence ?? []}
+                      emptyText={t("scan.correlation.topology.noHandlerEvidence")} />
+                  </div>
+                )}
+              </div>
+            ) : (
             <div className="space-y-3 text-xs">
               {/* 叙述句：数据里已有的语义字段拼成人话（谁通过什么调谁），代替裸 from→to + 散落小字 */}
               <div className="space-y-1">
@@ -569,7 +686,9 @@ export function TopologyEditor({ state, onState, scans: scansUnknown = [], onRem
                   emptyText={t("scan.correlation.topology.noHandlerEvidence")} />
               </div>
             </div>
+            )
           ) : <p className="text-xs text-muted-foreground">{t("scan.correlation.topology.selectHint")}</p>}
+          {!readonly && (
           <div className="space-y-1 border-t border-border pt-2 text-[11px] text-muted-foreground">
             {state.draft.nodes.flatMap((node) => (node.capabilities ?? []).flatMap((capability) =>
               capability.evidence.map((ev, index) => (
@@ -607,10 +726,12 @@ export function TopologyEditor({ state, onState, scans: scansUnknown = [], onRem
             {state.draft.coverage.map((c) => <div key={c.repo}>{c.repo}: {c.complete ? "✓" : "○"} {c.reason}</div>)}
             {state.draft.uncertain.map((u, i) => <div key={`${u.repo}-${i}`}>? {u.repo}: {u.message}{u.protocol_hint ? ` (${u.protocol_hint})` : ""}</div>)}
           </div>
+          )}
         </aside>
       </div>
-      {/* isolated_node 是非阻塞警告（2026-09-20 降级）：amber 提示可保留扫描，其余仍为错误红。 */}
-      {validateTopologyDraft(state.draft).map((issue) => (
+      {/* isolated_node 是非阻塞警告（2026-09-20 降级）：amber 提示可保留扫描，其余仍为错误红。
+          只读画布（结果页扫描产物）不渲染校验告警——校验只属于编辑提交链路。 */}
+      {!readonly && validateTopologyDraft(state.draft).map((issue) => (
         <p key={issue.code + issue.message} role="alert"
           className={`text-xs ${issue.code === "isolated_node" ? "text-amber" : "text-destructive"}`}>
           {t(`scan.correlation.issues.${issue.code}`, { defaultValue: issue.message })}

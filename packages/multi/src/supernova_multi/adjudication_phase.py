@@ -13,7 +13,9 @@ import os
 
 from supernova_core.correlation.adjudication import AdjudicationBatch
 from supernova_core.correlation.artifacts_guide import build_full_artifacts_guide
-from supernova_core.correlation.merge_validation import sanitize_adjudication_cards
+from supernova_core.correlation.merge_validation import (
+    enforce_maintain_evidence, sanitize_adjudication_cards,
+)
 from supernova_core.models.agents import AgentName
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,25 @@ _CARD_SCHEMA = {
                     "verification_evidence": {"type": "array"},
                     "reasoning": {"type": "string"},
                     "confidence": {"type": "string"},
+                    # 结构化跨仓触发路径（2026-09-21）：confirm/upgrade 卡必给
+                    # （prompt 强要求；schema 不进 required——宽松防旧引擎炸整批），
+                    # 回答「入口接口 → 逐跳 RPC → 漏洞点，用户如何可控触发」。
+                    "exploit_path": {
+                        "type": "object",
+                        "properties": {
+                            "entry_service": {"type": "string"},
+                            "entry_endpoint": {"type": "string"},
+                            "hops": {"type": "array"},
+                            "sink": {"type": "string"},
+                            "user_controlled": {"type": "string"},
+                            # 跨仓 PoC（2026-09-21）：以入口接口为起点重写——单仓
+                            # PoC 打的是后端内部端口，跨仓场景不可达
+                            "poc": {"type": "object"},
+                        },
+                    },
+                    # 跨仓修订（2026-09-21，按需）：跨仓分析改变了表述时才填——
+                    # 危害重述/成因补充/定级建议；不复读单仓原文
+                    "refined_finding": {"type": "object"},
                 },
                 "required": ["direction", "finding_ref", "conclusion"],
             },
@@ -190,4 +211,11 @@ async def run_adjudication_phase(
         for batch_cards in results:
             cards.extend(c for c in batch_cards if isinstance(c, dict))
 
-    return sanitize_adjudication_cards(cards)
+    cards = sanitize_adjudication_cards(cards)
+    # maintain 举证门槛（spec 2026-09-21 §3.2）：dismissed 维持卡无跨仓证据、
+    # 也无 correlation-context 调用面引用（纯本仓复读 dismiss 理由）→ needs-review。
+    # 前提 inbound_surface 已随 correlation_context 下发（改动一供料）。
+    # env 可关（首轮观察 needs-review 比例用）。
+    if os.getenv("SUPERNOVA_ADJUDICATION_MAINTAIN_GATE", "1") != "0":
+        cards = enforce_maintain_evidence(cards)
+    return cards

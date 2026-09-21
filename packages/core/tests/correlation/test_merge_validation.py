@@ -2,12 +2,16 @@
 
 - validate_vuln_refs：vuln_id 不在对应 service queue 的 ID 集 → 标 invalid_ref（不删）
 - assemble_multi_hop_chains：边邻接启发拼多跳链（basis/confidence 显式标注）
-- sanitize_adjudication_cards：direction 与 conclusion 矛盾 → 拦下标 needs-review
+- sanitize_adjudication_cards：direction 与 conclusion 矛盾 → 拦下标 needs-review；
+  direction 与 origin 不配（queue 批只许 confirm/downgrade 等）→ 同上
+- enforce_maintain_evidence：dismissed 的维持卡无跨仓证据也无 correlation-context
+  引用 → needs-review（spec 2026-09-21 §3.2 举证门槛）
 """
 import copy
 
 from supernova_core.correlation.merge_validation import (
-    assemble_multi_hop_chains, sanitize_adjudication_cards, validate_vuln_refs,
+    assemble_multi_hop_chains, enforce_maintain_evidence,
+    sanitize_adjudication_cards, validate_vuln_refs,
 )
 
 
@@ -78,6 +82,39 @@ def test_two_hop_chain_assembled_with_basis_labels():
     assert c["confidence"] == "structural"
 
 
+def test_multi_hop_hops_carry_entry_rpc_vuln_refs():
+    """逐跳上下文（2026-09-21）：首跳带种子边 flow 的 entry + vuln_refs（去重保序），
+    每跳带该边 calls 的 rpc method 列表——回答「多跳怎么走」而非只给服务名骨架。"""
+    edges = [
+        _edge("gateway", "order", flows=[
+            _flow(entry="POST /orders", method="order/Create", vuln_refs=[
+                {"vuln_id": "INJ-001", "service": "order", "source": "queue"},
+                {"vuln_id": "INJ-001", "service": "order", "source": "queue"},  # 重复 → 去重
+            ]),
+        ], calls=[{"method": "order/Create",
+                   "call_site": {"file": "g.ts", "line": 9, "snippet": "s"},
+                   "confidence": "high", "evidence": "e"}]),
+        _edge("order", "payment", calls=[
+            {"method": "pay/Charge", "call_site": {"file": "o.go", "line": 2, "snippet": "c"},
+             "confidence": "high", "evidence": "e"},
+            {"method": "pay/Refund", "call_site": {"file": "o.go", "line": 7, "snippet": "c"},
+             "confidence": "low", "evidence": "e"},
+        ]),
+    ]
+    chains = assemble_multi_hop_chains(edges)
+    assert len(chains) == 1
+    hops = chains[0]["hops"]
+    assert [h["from"] for h in hops] == ["gateway", "order"]
+    assert [h["to"] for h in hops] == ["order", "payment"]
+    # 首跳：entry + rpc + vuln_refs（去重保序）
+    assert hops[0]["entry"] == "POST /orders"
+    assert hops[0]["rpc"] == ["order/Create"]
+    assert hops[0]["vuln_refs"] == [{"vuln_id": "INJ-001", "service": "order", "source": "queue"}]
+    # 后续跳：rpc = 该边 calls method 列表
+    assert hops[1]["rpc"] == ["pay/Charge", "pay/Refund"]
+    assert "entry" not in hops[1] and "vuln_refs" not in hops[1]
+
+
 def test_no_flow_no_chain():
     """首边无 flows（无攻击链到达 to）→ 不成多跳链。"""
     edges = [
@@ -144,3 +181,93 @@ def test_consistent_cards_untouched():
 def test_unknown_direction_tolerated():
     out = sanitize_adjudication_cards([_card("weird", "vulnerable")])
     assert out[0]["conclusion"] == "vulnerable"
+
+
+# ---------------------------------------------------------------------------
+# sanitize_adjudication_cards：direction↔origin 一致性（spec 2026-09-21 §3.4）
+# ---------------------------------------------------------------------------
+
+def test_direction_origin_mismatch_intercepted():
+    cards = [_card("upgrade", "vulnerable"),     # queue 批只能 confirm/downgrade
+             _card("maintain", "not-vulnerable"),  # queue 批不能 maintain
+             _card("confirm", "vulnerable"),      # dismissed 批不能 confirm
+             _card("downgrade", "downgraded")]    # dismissed 批不能 downgrade
+    cards[0]["finding_ref"]["origin"] = "queue"
+    cards[1]["finding_ref"]["origin"] = "queue"
+    cards[2]["finding_ref"]["origin"] = "dismissed"
+    cards[3]["finding_ref"]["origin"] = "dismissed"
+    out = sanitize_adjudication_cards(cards)
+    assert all(c["conclusion"] == "needs-review" for c in out)
+
+
+def test_direction_origin_consistent_untouched():
+    cards = [_card("confirm", "vulnerable"),
+             _card("downgrade", "downgraded"),
+             _card("upgrade", "vulnerable"),
+             _card("maintain", "not-vulnerable")]
+    cards[0]["finding_ref"]["origin"] = "queue"
+    cards[1]["finding_ref"]["origin"] = "queue"
+    cards[2]["finding_ref"]["origin"] = "dismissed"
+    cards[3]["finding_ref"]["origin"] = "dismissed"
+    out = sanitize_adjudication_cards(cards)
+    assert [c["conclusion"] for c in out] == [
+        "vulnerable", "downgraded", "vulnerable", "not-vulnerable"]
+
+
+def test_error_direction_bypasses_origin_check():
+    card = _card("error", "needs-review")   # 占位卡 direction 不在校验表内
+    out = sanitize_adjudication_cards([card])
+    assert out[0]["conclusion"] == "needs-review"   # 原样保留
+
+
+# ---------------------------------------------------------------------------
+# enforce_maintain_evidence：maintain 举证门槛（spec 2026-09-21 §3.2）
+# ---------------------------------------------------------------------------
+
+def _maintain_card(evidence, origin="dismissed"):
+    c = _card("maintain", "not-vulnerable")
+    c["finding_ref"]["origin"] = origin
+    c["finding_ref"]["service"] = "svc-a"
+    c["verification_evidence"] = evidence
+    return c
+
+
+def test_maintain_without_cross_evidence_redirected():
+    """纯本仓证据的维持卡（复读 dismiss 理由）→ needs-review。"""
+    card = _maintain_card([{"repo": "svc-a", "location": "a.go:10",
+                            "snippet": "...", "note": "..."}])
+    out = enforce_maintain_evidence([card])
+    assert out[0]["conclusion"] == "needs-review"
+
+
+def test_maintain_with_cross_repo_evidence_kept():
+    card = _maintain_card([
+        {"repo": "svc-a", "location": "a.go:10", "snippet": "", "note": ""},
+        {"repo": "svc-b", "location": "b.go:20", "snippet": "", "note": "调用方以结构化方式消费"}])
+    out = enforce_maintain_evidence([card])
+    assert out[0]["conclusion"] == "not-vulnerable"
+
+
+def test_maintain_with_correlation_context_ref_kept():
+    """引用调用面数据（确定性层查无调用记录/引用映射）是合法维持依据。"""
+    card = _maintain_card([
+        {"repo": "svc-a", "location": "a.go:10", "snippet": "", "note": ""},
+        {"repo": "svc-a", "location": "correlation-context:inbound_surface 空",
+         "snippet": "", "note": "确定性层未发现指向本方法的跨仓调用"}])
+    out = enforce_maintain_evidence([card])
+    assert out[0]["conclusion"] == "not-vulnerable"
+
+
+def test_enforce_leaves_non_maintain_cards_alone():
+    cards = [_card("confirm", "vulnerable"),
+             _card("upgrade", "vulnerable"),
+             _maintain_card([], origin="queue"),        # queue 无 maintain 语义
+             _maintain_card([{"repo": "svc-a", "location": "a.go:1",
+                              "snippet": "", "note": ""}],
+                            origin="dismissed")]
+    cards[0]["finding_ref"]["origin"] = "queue"
+    cards[1]["finding_ref"]["origin"] = "dismissed"
+    cards[2]["conclusion"] = "needs-review"   # 已被前道拦的卡不再动
+    out = enforce_maintain_evidence(cards)
+    assert [c["conclusion"] for c in out] == [
+        "vulnerable", "vulnerable", "needs-review", "needs-review"]

@@ -4,61 +4,64 @@ import useSWR from "swr";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, Download, ListCollapse, ListTree } from "lucide-react";
 import { ApiError, getCorrelationDetail } from "@/api/client";
-import type { AdjudicationCard, CorrelationDetail, CorrDismissed, CorrVuln } from "@/api/types";
+import type { AdjudicationCard, CorrelationDetail, CorrVuln } from "@/api/types";
 import { focusAnchor } from "@/utils/focusAnchor";
 import { downloadTextFile } from "@/lib/download";
 import {
-  adjudicationCoverage, buildVerdictIndex, collectUpgraded, countVerdictGroups,
-  findChainsForVuln, splitVulnsByVerdict, verdictGroupFromCard, verdictKey,
+  adjudicationCoverage, buildVerdictIndex, collectUpgraded, findChainsForVuln,
+  findMultiHopsForVuln, splitVulnsByVerdict, verdictGroupFromCard, verdictKey,
   type CorrVerdictGroup,
 } from "@/lib/correlation-verdict";
 import { Empty } from "@/components/Empty";
 import { ErrorState } from "@/components/ErrorState";
-import { MarkdownView } from "@/components/MarkdownView";
-import { TopologyGraph } from "@/components/correlation/TopologyGraph";
+import { TopologyResultView } from "@/components/correlation/TopologyResultView";
 import { AttackChainCard } from "@/components/correlation/AttackChainCard";
-import { CorrStatsHeader, type SevKey } from "@/components/correlation/CorrStatsHeader";
+import { CorrStatsHeader } from "@/components/correlation/CorrStatsHeader";
 import {
   CorrVulnCard, corrVulnAnchorId, toCorrVulnView,
   VERDICT_BADGE_CLS, type CorrVerdictView,
 } from "@/components/correlation/CorrVulnCard";
-import { CorrVerdictSummary, type VerdictEntry } from "@/components/correlation/CorrVerdictSummary";
+import type { CorrStatGroup } from "@/components/correlation/CorrStatsHeader";
 import {
-  CorrToc, CORR_SEC_BOUNDARIES, CORR_SEC_DISMISSED, CORR_SEC_FLOWS,
-  CORR_SEC_MULTIHOP, CORR_SEC_REPORT, CORR_SEC_TOPOLOGY, CORR_SEC_VERDICT,
-  CORR_SEC_VULNS, type CorrTocVuln,
+  CorrToc, CORR_SEC_MULTIHOP, CORR_SEC_TOPOLOGY, CORR_SEC_VULNS,
+  type CorrTocVuln,
 } from "@/components/correlation/CorrToc";
-import { AdjudicationCardView, ADJ_DIRECTION_KEY, DIRECTION_ORDER } from "@/components/correlation/AdjudicationCardView";
+import { AdjudicationCardView } from "@/components/correlation/AdjudicationCardView";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
 
 export { AdjudicationCardView };
 
 /**
- * 跨仓关联结果 tab（D5，spec 2026-08-24；2026-09-20 结论优先批次重构）：
- * 左 sticky 目录（CorrToc，lg 起两栏）+ 右内容——总览头（数字卡 + severity 药丸）
- * → 跨仓结论摘要（五向结论卡 + 可展开清单，回答「哪些成立/消掉/为什么」）→
- * 漏洞（按裁决结论分组：成立展开、消掉/存疑/未重审折叠）→ 跨服务攻击链（漏洞
- * 引用可点定位）→ 多跳候选链 → 服务拓扑图 → 单仓已否决（跨仓重审）→ 信任边界
- * 表 → 报告 md（details 默认收起 + 下载）。漂移警告横幅接线 drift-warnings.json。
+ * 跨仓关联结果 tab（D5，spec 2026-08-24；2026-09-20 去重 + 09-21 静默/设计批次）：
+ * 左 sticky 目录（CorrToc，lg 起两栏）+ 右内容——总览头（结论四件套大数字 +
+ * 成立口径 severity 药丸 + 过程量脚注 + 报告下载挂点，2026-09-21 由过程量数字卡
+ * 改结论优先）→ 漏洞（唯一主区，按裁决结论分组：翻案置顶 → 成立展开完整卡 →
+ * 消掉/存疑/未重审紧凑行【原因一句话直接铺出，点行展开完整卡】）→ 裁决状态横幅
+ * （仅进行中/失败/error 占位卡时出现，正常完成零占位）→ 服务拓扑图 → 多跳候选链 →
+ * 未关联漏洞的调用链（有才显示）。信任边界/单仓已否决/关联报告全文不再上页面——
+ * 信息落位：边界进 md 报告附录，否决复核一行进 md，全文经下载按钮获取。
  *
- * 结论 join 纯函数在 lib/correlation-verdict.ts（verdictIndex/split/counts/
- * chains 反查），组件保持编排 + 渲染。定位体系对齐 ReportView 的 locateVuln：
- * 结论清单 / 攻击链 vuln_refs / 总览 severity 药丸 / 目录点击 → 目标漏洞卡折叠
- * 时先展开再 focusAnchor（coral 描边闪烁）；卡锚点 id 由 corrVulnAnchorId 单源。
+ * 去重/静默两轮（2026-09-20 八问 + 09-21 四章复核）：①结论摘要独立章撤除（清单
+ * 并入漏洞区紧凑行）；②攻击链独立章撤除（链只在漏洞卡「所在跨服链」，孤链降级
+ * 附录）；③裁决卡平铺撤除；④单仓已否决静默（翻案置顶漏洞区，复核行留 md）；
+ * ⑤多跳移到拓扑后；⑥信任边界/已否决/关联报告章节撤除（09-21）。
+ *
+ * 结论 join 纯函数在 lib/correlation-verdict.ts（verdictIndex/split/chains 反查），
+ * 组件保持编排 + 渲染。定位体系对齐 ReportView 的 locateVuln：行/卡点击 / 总览
+ * severity 药丸 / 目录点击 → 目标组与行先展开再 focusAnchor（coral 描边闪烁）；
+ * 卡锚点 id 由 corrVulnAnchorId 单源。
  *
  * SWR 15s 轮询仅在「未完成」开（拓扑未出 = 关联跑着 / 裁决 running）；终态停
- * 轮询——completed 后继续打点无意义。topology === null → 阶段占位（「关联阶段
- * 进行中/未开始」+ corr_children 子仓状态）。props 收 ws/scanId（由挂载方 D6
- * 传入，对齐 brief；tab 内不经 useParams）。
+ * 轮询。topology === null → 阶段占位。props 收 ws/scanId（由挂载方 D6 传入）。
  */
 
 /** 漏洞结论组展示顺序（成立在前；默认仅第一组展开，见 openGroups 初始化）。 */
 const VERDICT_GROUP_ORDER: CorrVerdictGroup[] = ["confirmed", "refuted", "uncertain", "unadjudicated"];
+/** 紧凑行结论组（成立组走完整卡，其余组折叠成行）。 */
+const ROW_GROUPS: CorrVerdictGroup[] = ["refuted", "uncertain", "unadjudicated"];
+
 export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
   const { t } = useTranslation();
   const { data, error, isLoading } = useSWR(
@@ -72,24 +75,23 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
     },
   );
 
-  // 漏洞卡集中折叠 state（ReportView 模式）：空 set = 全展开（对齐单仓报告默认态）。
+  // 漏洞卡集中折叠 state（ReportView 模式）：空 set = 全展开（成立组默认态）。
   const [collapsedVulns, setCollapsedVulns] = useState<Set<string>>(new Set());
-  // 裁决卡折叠：null = 默认态（非 error 收起、error 卡故障信号必见）；用户首次
-  // 交互后物化为显式 set（不然轮询重渲染会把默认态重算，用户展开被覆盖）。
-  const [collapsedAdj, setCollapsedAdj] = useState<Set<string> | null>(null);
   // 结论组折叠（受控）：默认仅成立组展开（消掉/存疑/未重审折叠 + 计数徽标）；
   // locateVuln 定位时联动展开目标组。
   const [openGroups, setOpenGroups] = useState<Set<CorrVerdictGroup>>(
     () => new Set([VERDICT_GROUP_ORDER[0]]),
   );
+  // 紧凑行展开 state（消掉/存疑/未重审组）：默认全收，点行展开完整卡。
+  const [openRows, setOpenRows] = useState<Set<string>>(new Set());
   // 漏洞 ID → 结论组（locateVuln 联动用；每次渲染同步，回调解耦 data 时序）。
   const groupOfIdRef = useRef<Map<string, CorrVerdictGroup>>(new Map());
   const openGroupsRef = useRef(openGroups);
   openGroupsRef.current = openGroups;
 
   /** 定位漏洞卡（折叠联动，对齐 ReportView.locateVuln）：目标结论组先展开；
-   *  组折叠或卡折叠 → 先展开，等重渲染（卡身挂载）后再 focusAnchor（异步），
-   *  否则量到的 rect 是折叠卡头位置；全展开时同步定位（无重渲染等待）。 */
+   *  紧凑行组的行先展开；组折叠或卡折叠 → 先展开，等重渲染（卡身挂载）后再
+   *  focusAnchor（异步），否则量到的 rect 是折叠卡头位置；全展开时同步定位。 */
   const locateVuln = useCallback((id: string) => {
     const group = groupOfIdRef.current.get(id);
     const needExpandGroup = !!group && !openGroupsRef.current.has(group);
@@ -101,6 +103,22 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
         return next;
       });
     }
+    // 紧凑行组：行默认收起——先开行（卡体才挂载），并保证卡身展开。
+    const needOpenRow = !!group && (ROW_GROUPS as string[]).includes(group);
+    if (needOpenRow) {
+      setOpenRows((prev) => {
+        if (prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.add(id);
+        return next;
+      });
+      setCollapsedVulns((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
     let wasCollapsed = false;
     setCollapsedVulns((prev) => {
       if (!prev.has(id)) return prev;
@@ -109,22 +127,12 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
       next.delete(id);
       return next;
     });
-    if (wasCollapsed || needExpandGroup) setTimeout(() => focusAnchor(corrVulnAnchorId(id)), 0);
-    else focusAnchor(corrVulnAnchorId(id));
-  }, []);
-
-  // severity → 该等级第一条漏洞 ID（扁平序）：总览 severity 药丸点击定位目标。
-  const firstVulnIdBySev = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const list of Object.values(data?.merged_vulns ?? {})) {
-      for (const v of list) {
-        const id = typeof v.ID === "string" ? v.ID : undefined;
-        const sev = typeof v.severity === "string" ? v.severity.toLowerCase() : "";
-        if (id && sev && !map.has(sev)) map.set(sev, id);
-      }
+    if (wasCollapsed || needExpandGroup || needOpenRow) {
+      setTimeout(() => focusAnchor(corrVulnAnchorId(id)), 0);
+    } else {
+      focusAnchor(corrVulnAnchorId(id));
     }
-    return map;
-  }, [data]);
+  }, []);
 
   // 漏洞区全部收起/展开的目标集（宽松 dict：ID 非字符串跳过）。
   const vulnIds = useMemo(
@@ -138,13 +146,10 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
 
   // ── 结论 join（lib/correlation-verdict 纯函数）：裁决卡 × merged_vulns × flows ──
   const adjCards = useMemo(() => data?.adjudication?.cards ?? [], [data]);
-  const verdictCounts = useMemo(
-    () => countVerdictGroups(data?.merged_vulns ?? {}, adjCards),
-    [data, adjCards],
-  );
+  const verdictIndex = useMemo(() => buildVerdictIndex(adjCards), [adjCards]);
   const verdictSplit = useMemo(
-    () => splitVulnsByVerdict(data?.merged_vulns ?? {}, buildVerdictIndex(adjCards)),
-    [data, adjCards],
+    () => splitVulnsByVerdict(data?.merged_vulns ?? {}, verdictIndex),
+    [data, verdictIndex],
   );
   // 漏洞 ID → 结论组（locateVuln 联动展开目标组）；渲染期同步到 ref。
   const groupOfId = useMemo(() => {
@@ -157,35 +162,64 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
     return m;
   }, [verdictSplit]);
   groupOfIdRef.current = groupOfId;
-  // 结论摘要清单条目（四组）：ID + 标题 + severity + reasoning 一句话。
-  const verdictEntries = useMemo(() => {
-    const index = buildVerdictIndex(adjCards);
-    const out: Record<CorrVerdictGroup, VerdictEntry[]> = {
-      confirmed: [], refuted: [], uncertain: [], unadjudicated: [],
-    };
-    for (const [group, list] of Object.entries(verdictSplit)) {
-      out[group as CorrVerdictGroup] = list.map(({ vuln }) => {
-        const id = typeof vuln.ID === "string" ? vuln.ID : "";
-        const card = index.get(
-          `${typeof vuln.service === "string" ? vuln.service : ""}|${id}`,
-        );
-        return {
-          id,
-          title: typeof vuln.title === "string" ? vuln.title : undefined,
-          severity: typeof vuln.severity === "string" ? vuln.severity.toLowerCase() : undefined,
-          service: typeof vuln.service === "string" ? vuln.service : undefined,
-          reason: card?.reasoning,
-          confidence: card?.confidence,
-        };
-      });
-    }
-    return out;
-  }, [adjCards, verdictSplit]);
-  const upgradedCards = useMemo(() => collectUpgraded(adjCards), [adjCards]);
+  // 裁决覆盖进度（running 横幅：已出/总数）。
   const coverage = useMemo(
     () => adjudicationCoverage(data?.merged_vulns ?? {}, adjCards),
     [data, adjCards],
   );
+  // 翻案卡（origin=dismissed 且 direction=upgrade）：置顶进漏洞区。
+  const upgradedCards = useMemo(() => collectUpgraded(adjCards), [adjCards]);
+  // 结论四件套计数（总览头第一行；与漏洞分组同一 verdictSplit，口径天然单源）。
+  const verdictCounts = useMemo(
+    () => ({
+      confirmed: verdictSplit.confirmed.length,
+      refuted: verdictSplit.refuted.length,
+      uncertain: verdictSplit.uncertain.length,
+      unadjudicated: verdictSplit.unadjudicated.length,
+      upgraded: upgradedCards.length,
+    }),
+    [verdictSplit, upgradedCards],
+  );
+  /** 定位结论组（总览头结论数字点击）：组头常驻 DOM（组体才受折叠控制），直接
+   *  focusAnchor；confirmed 有翻案时落翻案置顶块（本组最高优先级信号在前）。
+   *  目标组若折叠 → 先展开再定位（组头不受影响，展开只为后续逐卡浏览）。 */
+  const locateGroup = useCallback((group: CorrStatGroup) => {
+    if (group !== "upgraded") {
+      setOpenGroups((prev) => {
+        if (prev.has(group as CorrVerdictGroup)) return prev;
+        const next = new Set(prev);
+        next.add(group as CorrVerdictGroup);
+        return next;
+      });
+    }
+    const anchor =
+      group === "upgraded" || (group === "confirmed" && upgradedCards.length > 0)
+        ? "corr-vuln-upgraded"
+        : `corr-group-${group}`;
+    focusAnchor(anchor);
+  }, [upgradedCards.length]);
+
+  // severity → 成立组内该等级第一条漏洞 ID（扁平序）：总览 severity 药丸点击
+  // 定位目标。只数成立口径（2026-09-21 修正：此前数全量含消掉条目，点击会跳进
+  // 消掉组——药丸文案「成立严重度」与定位目标必须同一口径）。
+  const firstVulnIdBySev = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const { vuln } of verdictSplit.confirmed) {
+      const id = typeof vuln.ID === "string" ? vuln.ID : undefined;
+      const sev = typeof vuln.severity === "string" ? vuln.severity.toLowerCase() : "";
+      if (id && sev && !map.has(sev)) map.set(sev, id);
+    }
+    return map;
+  }, [verdictSplit]);
+  // 成立口径 severity 计数（总览头第二行药丸）。
+  const confirmedSevCounts = useMemo(() => {
+    const counts: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0 };
+    for (const { vuln } of verdictSplit.confirmed) {
+      const sev = typeof vuln.severity === "string" ? vuln.severity.toLowerCase() : "";
+      if (sev in counts) counts[sev] += 1;
+    }
+    return counts;
+  }, [verdictSplit]);
   // 子仓 service → scan_id（漏洞卡「查看单仓结果」链接）。
   const childScanByService = useMemo(() => {
     const m = new Map<string, string>();
@@ -196,6 +230,24 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
     () => data?.topology?.services.map((s) => s.name) ?? [],
     [data],
   );
+  // 未被任何漏洞引用的调用链（链章节已撤，孤链降级附录——有才显示）。
+  const orphanFlows = useMemo(() => {
+    const known = new Set(
+      Object.values(data?.merged_vulns ?? {})
+        .flat()
+        .map((v) =>
+          typeof v.service === "string" && typeof v.ID === "string"
+            ? verdictKey(v.service, v.ID)
+            : "",
+        )
+        .filter(Boolean),
+    );
+    return (data?.flows ?? []).filter(
+      (f) => !(f.vuln_refs ?? []).some(
+        (ref) => !!ref.vuln_id && known.has(verdictKey(ref.service, ref.vuln_id)),
+      ),
+    );
+  }, [data]);
 
   if (error) {
     return (
@@ -237,7 +289,8 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
   }
 
   // 漏洞卡 verdict 视图（origin=queue 卡归一 CorrVerdictView，key=service|id）；
-  // group 归类经 verdictGroupFromCard 与漏洞分组单源。
+  // group 归类经 verdictGroupFromCard 与漏洞分组单源；exploit_path 透传（宽松防御，
+  // 历史裁决卡无此字段 → 卡片走 flow 反查/入口自证/未建链降级）。
   const verdictViewByServiceId = new Map<string, CorrVerdictView>();
   for (const card of adjCards) {
     if (card.finding_ref?.origin !== "queue") continue;
@@ -248,21 +301,28 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
       confidence: card.confidence,
       crossServiceContext: card.cross_service_context || undefined,
       reasoning: card.reasoning || undefined,
+      exploitPath: card.exploit_path && typeof card.exploit_path === "object"
+        ? card.exploit_path : undefined,
+      refined: card.refined_finding && typeof card.refined_finding === "object"
+        ? card.refined_finding : undefined,
     });
   }
-  // 漏洞结论分组（组内按服务分组排序，规则同 groupByService：serviceOrder 优先）。
+  // 入口服务集合（漏洞所在服务是入口 → 单仓自证可达，卡片免跨服链）。
+  // 渲染段普通构造（勿 useMemo——位于早退 return 之后，会成条件 hook）。
+  const entryServices = new Set(
+    (data.topology?.services ?? [])
+      .filter((s) => s.role === "entrypoint")
+      .map((s) => s.name),
+  );
+  // 漏洞结论分组（组内按服务分组排序，规则同 groupSplitByService：serviceOrder 优先）。
   const vulnGroupsByVerdict = VERDICT_GROUP_ORDER.map((group) => ({
     group,
     services: groupSplitByService(verdictSplit[group], serviceOrder),
   })).filter((g) => g.services.some((s) => s.vulns.length > 0));
   // 目录数据：区块 presence + 漏洞条目（文档序 = 组序 → 服务序，scrollspy 才准）。
   const tocSections = {
-    flows: data.flows.length > 0,
     multihop: data.multi_hop_chains.length > 0,
     topology: true,
-    dismissed: data.dismissed.length > 0,
-    boundaries: data.boundaries.length > 0,
-    report: !!data.report_md,
   };
   const tocVulns: CorrTocVuln[] = vulnGroupsByVerdict.flatMap(({ group, services }) =>
     services.flatMap((svc) =>
@@ -289,49 +349,54 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
       return next;
     });
   };
-
-  // 裁决 direction 聚合（五向计数，裁决明细区徽标行）
-  const dirCountMap = new Map<string, number>();
-  for (const card of adjCards) {
-    dirCountMap.set(card.direction, (dirCountMap.get(card.direction) ?? 0) + 1);
-  }
-  const directionCounts = [...DIRECTION_ORDER]
-    .map((dir) => ({ dir, count: dirCountMap.get(dir) ?? 0 }))
-    .filter(({ count }) => count > 0);
-  // dismissed ↔ 裁决卡匹配（service+vuln_id 复合键防跨服务同 ID 碰撞；只认 origin="dismissed"）
-  const dismissedVerdicts = new Map<string, AdjudicationCard>();
-  for (const card of adjCards) {
-    if (card.finding_ref?.origin === "dismissed") {
-      dismissedVerdicts.set(`${card.finding_ref.service}|${card.finding_ref.vuln_id}`, card);
-    }
-  }
-  // 裁决卡折叠（见 collapsedAdj 注释）：默认非 error 收起；显式 set 后以 set 为准。
-  const adjKey = (c: AdjudicationCard) => `${c.finding_ref.service}|${c.finding_ref.vuln_id}`;
-  const isAdjCollapsed = (c: AdjudicationCard) =>
-    collapsedAdj ? collapsedAdj.has(adjKey(c)) : c.direction !== "error";
-  const toggleAdj = (c: AdjudicationCard) => {
-    setCollapsedAdj((prev) => {
-      const base =
-        prev ?? new Set(adjCards.filter((x) => x.direction !== "error").map(adjKey));
-      const next = new Set(base);
-      const k = adjKey(c);
-      if (next.has(k)) next.delete(k);
-      else next.add(k);
+  const toggleRow = (id: string) => {
+    setOpenRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
+
+  // 裁决状态横幅（仅在「有话说」时出现，正常完成零占位）：running 进度 /
+  // failed 透明提示 / error 占位卡（故障信号必见；全量卡留 md 附录与
+  // adjudication-log.json）。
+  const errorCards = (data.adjudication?.cards ?? []).filter((c) => c.direction === "error");
+  const showAdjudication =
+    data.adjudication_status === "running" || data.adjudication_status === "failed"
+    || errorCards.length > 0;
 
   // 左栏目录 + 右内容两栏（对齐 ReportView 布局：lg 起两栏，sticky top-44 ≈
   // TopBar + 进度 tabs 高度；跳转落点由 focusAnchor 运行时量取）。
   const body = (
     <div className="space-y-6">
-      {/* 总览头：数字卡 + severity 药丸（点击定位到该等级第一条漏洞卡） */}
+      {/* 总览头：结论四件套大数字（点击定位组）+ 成立口径 severity 药丸 +
+          过程量 mono 脚注；报告下载挂在行 1 右端（全文含成立漏洞全文 + 消掉
+          清单 + 信任边界 + 裁决留档附录，与结构化视图互补，不再上页面） */}
       <CorrStatsHeader
         detail={data}
-        onLocateSev={(sev: SevKey) => {
+        counts={verdictCounts}
+        confirmedSevCounts={confirmedSevCounts}
+        onLocateSev={(sev: string) => {
           const id = firstVulnIdBySev.get(sev);
           if (id) locateVuln(id);
         }}
+        onLocateGroup={locateGroup}
+        actions={
+          data.report_md ? (
+            <div data-testid="corr-report">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground"
+                onClick={() => downloadTextFile(`correlation-${scanId}.md`, data.report_md ?? "")}
+              >
+                <Download aria-hidden />
+                {t("scan.correlation.reportDownload")}
+              </Button>
+            </div>
+          ) : undefined
+        }
       />
       {/* 漂移警告横幅（后端 drift-warnings.json，2026-09-20 接线） */}
       {data.drift_warnings.length > 0 && (
@@ -347,19 +412,7 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
           </ul>
         </section>
       )}
-      {/* 跨仓结论摘要（第一屏回答「哪些成立/消掉/为什么」） */}
-      <section id={CORR_SEC_VERDICT} data-testid="corr-verdict-section">
-        <CorrVerdictSummary
-          counts={verdictCounts}
-          entries={verdictEntries}
-          upgraded={upgradedCards}
-          running={data.adjudication_status === "running"}
-          failed={data.adjudication_status === "failed"}
-          coverage={coverage}
-          onLocateVuln={locateVuln}
-        />
-      </section>
-      {/* 漏洞区（按裁决结论分组：成立展开，消掉/存疑/未重审折叠） */}
+      {/* 漏洞区（唯一主区）：翻案置顶 → 结论分组（成立完整卡，其余紧凑行） */}
       <section id={CORR_SEC_VULNS} data-testid="corr-vulns">
         <SectionHead
           title={t("scan.correlation.vulnsTitle")}
@@ -374,6 +427,9 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
           }
         />
         <div className="mt-2 space-y-3">
+          {upgradedCards.length > 0 && (
+            <CorrUpgradedList cards={upgradedCards} />
+          )}
           {vulnGroupsByVerdict.length === 0 && (
             <p className="text-sm text-muted-foreground">
               {t("scan.correlation.vulnsEmpty")}
@@ -382,6 +438,7 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
           {vulnGroupsByVerdict.map(({ group, services }) => {
             const total = services.reduce((a, s) => a + s.vulns.length, 0);
             const open = openGroups.has(group);
+            const rowMode = (ROW_GROUPS as string[]).includes(group);
             return (
               <div
                 key={group}
@@ -392,6 +449,7 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
                 <button
                   type="button"
                   data-testid={`corr-verdict-group-head-${group}`}
+                  id={`corr-group-${group}`}
                   aria-expanded={open}
                   onClick={() => toggleGroup(group)}
                   className="flex w-full items-center gap-2.5 rounded-t-md p-2.5 text-left transition-colors hover:bg-accent/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
@@ -414,31 +472,119 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
                         <Badge variant="outline" className="font-mono">
                           {g.service || t("scan.correlation.serviceUnknown")}
                         </Badge>
-                        {g.vulns.map((v, i) => {
-                          const view = toCorrVulnView(v);
-                          const id = typeof v.ID === "string" ? v.ID : "";
-                          const service = typeof v.service === "string" ? v.service : "";
-                          const sid = childScanByService.get(service);
-                          return (
-                            <CorrVulnCard
-                              key={`${group}-${g.service}-${i}`}
-                              view={view}
-                              anchorId={corrVulnAnchorId(view.id)}
-                              collapsed={collapsedVulns.has(view.id)}
-                              onToggleCollapse={() =>
-                                setCollapsedVulns((prev) => {
-                                  const next = new Set(prev);
-                                  if (next.has(view.id)) next.delete(view.id);
-                                  else next.add(view.id);
-                                  return next;
-                                })
-                              }
-                              verdict={verdictViewByServiceId.get(verdictKey(service, id))}
-                              chains={findChainsForVuln(service, id, data.flows)}
-                              childScanHref={sid ? `/p/${ws}/scans/${sid}` : undefined}
-                            />
-                          );
-                        })}
+                        {rowMode ? (
+                          // 紧凑行：原因一句话直接铺出（「为什么消掉」第一眼可见），
+                          // 点行展开完整卡（跨仓上下文 + 单仓全文 + 所在链）。
+                          g.vulns.map((v) => {
+                            const id = typeof v.ID === "string" ? v.ID : "";
+                            const service = typeof v.service === "string" ? v.service : "";
+                            const card = verdictIndex.get(verdictKey(service, id));
+                            const reason = card?.reasoning || card?.cross_service_context;
+                            const title = typeof v.title === "string" ? v.title : "";
+                            const sev = typeof v.severity === "string"
+                              ? v.severity.toLowerCase() : "";
+                            const sid = childScanByService.get(service);
+                            const rowOpen = openRows.has(id);
+                            return (
+                              <div key={`${group}-${id}`} className="rounded-md border border-border">
+                                <button
+                                  type="button"
+                                  data-testid="corr-verdict-row"
+                                  data-vuln-id={id}
+                                  aria-expanded={rowOpen}
+                                  onClick={() => toggleRow(id)}
+                                  className="flex w-full items-start gap-2 rounded-t-md p-2.5 text-left transition-colors hover:bg-accent/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                                >
+                                  <span className="min-w-0 flex-1 space-y-0.5">
+                                    <span className="flex min-w-0 items-center gap-2">
+                                      <span className="shrink-0 font-mono text-[12.5px] font-semibold text-foreground">
+                                        {id}
+                                      </span>
+                                      {sev && (
+                                        <span className="shrink-0 font-mono text-[10px] uppercase text-muted-foreground">
+                                          {sev}
+                                        </span>
+                                      )}
+                                      {title && (
+                                        <span className="min-w-0 truncate text-xs text-foreground/80">
+                                          {title}
+                                        </span>
+                                      )}
+                                    </span>
+                                    {reason ? (
+                                      <span className="line-clamp-1 block text-xs text-muted-foreground">
+                                        {reason}
+                                      </span>
+                                    ) : (
+                                      <span className="block text-xs text-muted-foreground">
+                                        {t("scan.correlation.verdict.empty")}
+                                      </span>
+                                    )}
+                                  </span>
+                                  {card?.confidence && (
+                                    <Badge variant="outline" className="mt-0.5 shrink-0 font-mono text-[10px]">
+                                      {card.confidence}
+                                    </Badge>
+                                  )}
+                                  <ChevronDown
+                                    className={`mt-1 size-4 shrink-0 text-muted-foreground transition-transform duration-150 ${rowOpen ? "" : "-rotate-90"}`}
+                                    aria-hidden="true"
+                                  />
+                                </button>
+                                {rowOpen && (
+                                  <div className="border-t border-border p-2.5">
+                                    <CorrVulnCard
+                                      view={toCorrVulnView(v)}
+                                      anchorId={corrVulnAnchorId(id)}
+                                      collapsed={collapsedVulns.has(id)}
+                                      onToggleCollapse={() =>
+                                        setCollapsedVulns((prev) => {
+                                          const next = new Set(prev);
+                                          if (next.has(id)) next.delete(id);
+                                          else next.add(id);
+                                          return next;
+                                        })
+                                      }
+                                      verdict={verdictViewByServiceId.get(verdictKey(service, id))}
+                                      chains={findChainsForVuln(service, id, data.flows)}
+                                      multiHops={findMultiHopsForVuln(service, data.multi_hop_chains)}
+                                      entrySelfServed={entryServices.has(service)}
+                                      childScanHref={sid ? `/p/${ws}/scans/${sid}` : undefined}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })
+                        ) : (
+                          g.vulns.map((v, i) => {
+                            const view = toCorrVulnView(v);
+                            const id = typeof v.ID === "string" ? v.ID : "";
+                            const service = typeof v.service === "string" ? v.service : "";
+                            const sid = childScanByService.get(service);
+                            return (
+                              <CorrVulnCard
+                                key={`${group}-${g.service}-${i}`}
+                                view={view}
+                                anchorId={corrVulnAnchorId(view.id)}
+                                collapsed={collapsedVulns.has(view.id)}
+                                onToggleCollapse={() =>
+                                  setCollapsedVulns((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(view.id)) next.delete(view.id);
+                                    else next.add(view.id);
+                                    return next;
+                                  })
+                                }
+                                verdict={verdictViewByServiceId.get(verdictKey(service, id))}
+                                chains={findChainsForVuln(service, id, data.flows)}
+                                multiHops={findMultiHopsForVuln(service, data.multi_hop_chains)}
+                                entrySelfServed={entryServices.has(service)}
+                                childScanHref={sid ? `/p/${ws}/scans/${sid}` : undefined}
+                              />
+                            );
+                          })
+                        )}
                       </div>
                     ))}
                   </div>
@@ -448,22 +594,49 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
           })}
         </div>
       </section>
-      <section id={CORR_SEC_FLOWS} data-testid="corr-flows">
-        <h3 className="font-medium">{t("scan.correlation.flowsTitle")}</h3>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {t("scan.correlation.flowsIntro")}
-        </p>
-        <div className="mt-2 space-y-2">
-          {data.flows.length ? (
-            data.flows.map((f, i) => (
-              <AttackChainCard key={i} flow={f} onLocateRef={locateVuln} />
-            ))
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              {t("scan.correlation.flowsEmpty")}
+      {/* 裁决状态横幅（仅进行中/失败/error 占位卡时出现——结论已并入漏洞区，
+          全量裁决卡留 md 附录与 adjudication-log.json 下载；正常完成零占位） */}
+      {showAdjudication && (
+        <div data-testid="corr-adjudication" className="space-y-2">
+          {data.adjudication_status === "running" && (
+            <div
+              data-testid="corr-adj-running"
+              className="rounded-md border border-amber/40 bg-amber/10 p-3 text-sm text-amber"
+            >
+              {t("scan.correlation.verdict.running", {
+                covered: coverage.covered,
+                total: coverage.total,
+              })}
+            </div>
+          )}
+          {data.adjudication_status === "failed" && (
+            <div
+              data-testid="corr-adj-failed"
+              className="rounded-md border border-red/40 bg-red/10 p-3 text-sm text-red"
+            >
+              {t("scan.correlation.verdict.failed")}
+            </div>
+          )}
+          {data.adjudication?.error && (
+            <p data-testid="corr-adjudication-error" className="text-sm text-destructive">
+              {data.adjudication.error}
             </p>
           )}
+          {errorCards.length > 0 && (
+            <div className="space-y-2">
+              {errorCards.map((c, i) => (
+                <AdjudicationCardView key={i} card={c} collapsed={false}
+                  onToggleCollapse={() => {}} />
+              ))}
+            </div>
+          )}
         </div>
+      )}
+      {/* 服务拓扑（背景区开始；多跳是拓扑的衍生推断，紧跟其后）：复用配置页
+          TopologyEditor 画布（只读）——2026-09-21 替换自绘小 SVG */}
+      <section id={CORR_SEC_TOPOLOGY} data-testid="corr-topology">
+        <h3 className="font-medium">{t("scan.correlation.topologyTitle")}</h3>
+        <TopologyResultView topology={data.topology} />
       </section>
       <section id={CORR_SEC_MULTIHOP} data-testid="corr-multihop">
         <h3 className="font-medium">{t("scan.correlation.multihopTitle")}</h3>
@@ -474,7 +647,7 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
           {data.multi_hop_chains.length ? (
             // 结构推断产物与拓扑图信息重叠、条数易多——默认收起，计数徽标示意量级。
             <details data-testid="corr-multihop-list">
-              <summary className="cursor-pointer text-xs text-muted-foreground">
+              <summary className="cursor-pointer rounded-sm py-1 text-[13px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
                 {t("scan.correlation.multihopExpand", { count: data.multi_hop_chains.length })}
               </summary>
               <div className="mt-2 space-y-1">
@@ -495,181 +668,15 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
           )}
         </div>
       </section>
-      {/* 服务拓扑（背景信息，结论之后） */}
-      <section id={CORR_SEC_TOPOLOGY} data-testid="corr-topology">
-        <h3 className="font-medium">{t("scan.correlation.topologyTitle")}</h3>
-        <TopologyGraph topology={data.topology} />
-      </section>
-      {(data.adjudication || data.adjudication_status === "running") && (
-        <section data-testid="corr-adjudication">
-          <SectionHead
-            title={t("scan.correlation.adjudicationTitle")}
-            intro={t("scan.correlation.adjudicationIntro")}
-            actions={
-              adjCards.length > 0 && (
-                <CollapseToggleButtons
-                  scope="adj"
-                  onCollapse={() => setCollapsedAdj(new Set(adjCards.map(adjKey)))}
-                  onExpand={() => setCollapsedAdj(new Set())}
-                />
-              )
-            }
-          />
-          {/* 裁决进行中横幅（log 未落盘时的唯一进行中信号，amber 对齐 drift 横幅） */}
-          {data.adjudication_status === "running" && (
-            <div
-              data-testid="corr-adj-running"
-              className="mt-2 rounded-md border border-amber/40 bg-amber/10 p-3 text-sm text-amber"
-            >
-              {t("scan.correlation.adjRunning")}
-            </div>
-          )}
-          {data.adjudication?.error ? (
-            <p data-testid="corr-adjudication-error" className="mt-2 text-sm text-destructive">
-              {data.adjudication.error}
-            </p>
-          ) : (data.adjudication?.cards ?? []).length === 0 ? (
-            // 仅 running 横幅（log 未落盘）时不显示「无裁决卡」占位
-            !data.adjudication ? null : (
-              <p className="mt-2 text-sm text-muted-foreground">
-                {t("scan.correlation.adjudicationEmpty")}
-              </p>
-            )
-          ) : (
-            <>
-              {directionCounts.length > 0 && (
-                <div data-testid="corr-adj-summary" className="mt-2 flex flex-wrap items-center gap-1.5">
-                  {directionCounts.map(({ dir, count }) => (
-                    <Badge key={dir} variant="outline" className="font-mono text-[10px]">
-                      {t(ADJ_DIRECTION_KEY[dir] ?? dir)} × {count}
-                    </Badge>
-                  ))}
-                </div>
-              )}
-              <div className="mt-2 space-y-2">
-                {(data.adjudication?.cards ?? []).map((c, i) => (
-                  <AdjudicationCardView
-                    key={i}
-                    card={c}
-                    collapsed={isAdjCollapsed(c)}
-                    onToggleCollapse={() => toggleAdj(c)}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-        </section>
-      )}
-      {/* 单仓已否决（跨仓重审）：dismissed 明单 + 命中裁决的行内 direction 徽标 */}
-      {data.dismissed.length > 0 && (
-        <section id={CORR_SEC_DISMISSED} data-testid="corr-dismissed">
-          <h3 className="font-medium">{t("scan.correlation.dismissedTitle")}</h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {t("scan.correlation.dismissedIntro")}
-          </p>
-          <Table className="mt-2">
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("scan.correlation.colService")}</TableHead>
-                <TableHead>{t("scan.correlation.colVulnClass")}</TableHead>
-                <TableHead>ID</TableHead>
-                <TableHead className="w-[28%]">{t("scan.correlation.colDismissReason")}</TableHead>
-                <TableHead>{t("scan.correlation.colDismissStage")}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.dismissed.map((d: CorrDismissed, i: number) => {
-                const verdict = dismissedVerdicts.get(`${d.service}|${d.ID}`);
-                return (
-                  <TableRow key={`${d.service}:${d.ID}:${i}`} data-testid="corr-dismissed-row">
-                    <TableCell className="font-mono text-xs">{d.service}</TableCell>
-                    <TableCell className="font-mono text-xs">{d.vuln_class ?? "—"}</TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {d.ID}
-                      {verdict && (
-                        <Badge
-                          data-testid="corr-dismissed-verdict"
-                          variant="outline"
-                          className="ml-1.5 font-sans text-[10px]"
-                        >
-                          {t(ADJ_DIRECTION_KEY[verdict.direction] ?? verdict.direction)}
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      <span className="line-clamp-2">{d.title || d.dismiss_reason || "—"}</span>
-                      {d.title && d.dismiss_reason && (
-                        <span className="mt-0.5 block line-clamp-2">{d.dismiss_reason}</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">{d.dismissed_at_stage ?? "—"}</TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </section>
-      )}
-      <section id={CORR_SEC_BOUNDARIES} data-testid="corr-boundaries">
-        <h3 className="font-medium">{t("scan.correlation.boundariesTitle")}</h3>
-        {data.boundaries.length === 0 ? (
-          <p className="mt-2 text-sm text-muted-foreground">
-            {t("scan.correlation.boundariesEmpty")}
-          </p>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("scan.correlation.colService")}</TableHead>
-                <TableHead>{t("scan.correlation.colMethod")}</TableHead>
-                <TableHead>{t("scan.correlation.colExposure")}</TableHead>
-                <TableHead>{t("scan.correlation.colReachableFrom")}</TableHead>
-                <TableHead>{t("scan.correlation.colReason")}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.boundaries.map((b, i) => (
-                <TableRow key={i}>
-                  <TableCell className="font-mono text-xs">{b.service}</TableCell>
-                  <TableCell className="font-mono text-xs">
-                    {b.method}{" "}
-                    <span className="text-muted-foreground">({b.confidence})</span>
-                  </TableCell>
-                  <TableCell className="text-xs">{b.exposure}</TableCell>
-                  <TableCell className="font-mono text-xs">
-                    {b.reachable_from.join(", ") || "—"}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{b.reason}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </section>
-      {data.report_md && (
-        // 导出物与上方结构化视图内容重叠——默认收起只留入口（标题 + 下载），
-        // 需要通读 md 全文时展开（对齐 AttackChainCard evidence 的 <details> 语言）。
-        <section id={CORR_SEC_REPORT} data-testid="corr-report">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="font-medium">{t("scan.correlation.reportTitle")}</h3>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground"
-              onClick={() => downloadTextFile(`correlation-${scanId}.md`, data.report_md ?? "")}
-            >
-              <Download aria-hidden />
-              {t("workspaceDetail.report.download")}
-            </Button>
+      {/* 未被漏洞引用的调用链（链章节已撤；孤链有保留价值才显示） */}
+      {orphanFlows.length > 0 && (
+        <section data-testid="corr-orphan-flows">
+          <h3 className="font-medium">{t("scan.correlation.orphanFlowsTitle")}</h3>
+          <div className="mt-2 space-y-2">
+            {orphanFlows.map((f, i) => (
+              <AttackChainCard key={i} flow={f} onLocateRef={locateVuln} />
+            ))}
           </div>
-          <details className="mt-2">
-            <summary className="cursor-pointer text-xs text-muted-foreground">
-              {t("scan.correlation.reportExpand")}
-            </summary>
-            <div className="mt-2">
-              <MarkdownView markdown={data.report_md} />
-            </div>
-          </details>
         </section>
       )}
     </div>
@@ -687,7 +694,47 @@ export function CorrelationTab({ ws, scanId }: { ws: string; scanId: string }) {
   );
 }
 
-/** 区块头（标题 + intro + 右侧 actions）：漏洞/裁决区的「全部收起/展开」挂点。 */
+/** 翻案置顶列表（origin=dismissed 且 direction=upgrade 的裁决卡全文）：单仓判非
+ *  漏洞、跨仓重审认为可达成立——本页最高优先级信号，amber 强调块。本地折叠
+ *  state（默认收起，点卡头展开论证），不影响漏洞卡集中折叠。 */
+function CorrUpgradedList({ cards }: { cards: AdjudicationCard[] }) {
+  const { t } = useTranslation();
+  const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set(cards.map((_, i) => i)));
+  return (
+    <div
+      data-testid="corr-vuln-upgraded"
+      id="corr-vuln-upgraded"
+      className="space-y-2 rounded-md border border-amber/40 bg-amber/5 p-2.5"
+    >
+      <div className="flex items-center gap-2">
+        <span className="inline-flex items-center rounded-full border border-amber/40 bg-amber/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-amber">
+          {t("scan.correlation.verdict.upgraded")}
+        </span>
+        <span className="text-[18px] font-bold leading-none">{cards.length}</span>
+        <span className="text-xs text-muted-foreground">
+          {t("scan.correlation.upgradedIntro")}
+        </span>
+      </div>
+      {cards.map((card, i) => (
+        <AdjudicationCardView
+          key={i}
+          card={card}
+          collapsed={collapsed.has(i)}
+          onToggleCollapse={() =>
+            setCollapsed((prev) => {
+              const next = new Set(prev);
+              if (next.has(i)) next.delete(i);
+              else next.add(i);
+              return next;
+            })
+          }
+        />
+      ))}
+    </div>
+  );
+}
+
+/** 区块头（标题 + intro + 右侧 actions）：漏洞区的「全部收起/展开」挂点。 */
 function SectionHead({ title, intro, actions }: {
   title: string;
   intro?: string;
@@ -705,9 +752,9 @@ function SectionHead({ title, intro, actions }: {
 }
 
 /** 全部收起/展开按钮对（视觉对齐 ReportView 的 collapse-all/expand-all）。
- *  scope 进 testid：裁决/漏洞两处同款按钮，测试 within 区块圈定。 */
+ *  scope 进 testid：漏洞区按钮，测试 within 区块圈定。 */
 function CollapseToggleButtons({ scope, onCollapse, onExpand }: {
-  scope: "vulns" | "adj";
+  scope: "vulns";
   onCollapse: () => void;
   onExpand: () => void;
 }) {
@@ -740,10 +787,6 @@ function CorrLoading() {
     </div>
   );
 }
-
-/** CorrVuln（宽松 dict）→ CorrVulnCard 视图：归一逻辑收敛在
- *  components/correlation/CorrVulnCard.tsx 的 toCorrVulnView（防御拾取 + 位置
- *  兜底链 + report_endpoints/poc 结构化，导出便于单测）。 */
 
 /** merged_vulns（键 = vuln class）拍平后按条目 service 字段分组（委托
  *  groupSplitByService，排序规则单源）。纯函数，导出便于测试。 */

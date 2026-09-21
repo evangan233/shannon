@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { ChevronDown, ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { MergeSourceBadge } from "@/components/VulnCard";
-import type { CorrFlow, CorrVuln } from "@/api/types";
+import type { CorrExploitPath, CorrFlow, CorrMultiHopChain, CorrRefinedFinding, CorrVuln } from "@/api/types";
 import type { CorrVerdictGroup } from "@/lib/correlation-verdict";
 import { SEV_CAP, SEV_PILL, SEV_DOT, SEV_EDGE } from "@/lib/severity-visual";
 import { highlightCode, langFromPath } from "@/lib/highlight-code";
@@ -81,6 +81,10 @@ export interface CorrVerdictView {
   confidence?: string;
   crossServiceContext?: string;
   reasoning?: string;
+  /** 结构化跨仓触发路径（confirm 卡 exploit_path；历史卡缺省）。 */
+  exploitPath?: CorrExploitPath;
+  /** 跨仓修订（按需）：危害重述/成因补充/定级建议。 */
+  refined?: CorrRefinedFinding;
 }
 
 /** 结论组 → 卡头徽标视觉（语义色走主题 token green/red/amber，同 AttackChainCard）。 */
@@ -203,7 +207,7 @@ export function toCorrVulnView(v: CorrVuln): CorrVulnView {
  * 折叠支持受控（collapsed/onToggleCollapse，ReportView 集中 state 模式——跨仓 tab 的
  * 全部收起/展开 + 定位联动需在父级持有）；缺省走内部 state（非受控，向后兼容）。
  */
-export function CorrVulnCard({ view, anchorId, collapsed, onToggleCollapse, verdict, chains, childScanHref }: {
+export function CorrVulnCard({ view, anchorId, collapsed, onToggleCollapse, verdict, chains, multiHops, entrySelfServed, childScanHref }: {
   view: CorrVulnView;
   /** DOM 锚点 id（定位目标），缺省不挂。 */
   anchorId?: string;
@@ -215,6 +219,10 @@ export function CorrVulnCard({ view, anchorId, collapsed, onToggleCollapse, verd
   verdict?: CorrVerdictView;
   /** 漏洞所在跨服候选链（父级 findChainsForVuln 反查）。 */
   chains?: CorrFlow[];
+  /** 漏洞所在多跳候选链（父级 findMultiHopsForVuln：path 经过本服务）。 */
+  multiHops?: CorrMultiHopChain[];
+  /** 漏洞所在服务本身是拓扑入口：单仓自证可达，无需跨服务链。 */
+  entrySelfServed?: boolean;
   /** 子仓扫描详情页路由（父级由 corr_children 映射；缺省不显「查看单仓结果」）。 */
   childScanHref?: string;
 }) {
@@ -250,7 +258,9 @@ export function CorrVulnCard({ view, anchorId, collapsed, onToggleCollapse, verd
         className="flex w-full items-start justify-between gap-2 rounded-sm text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
       >
         <div className="min-w-0 flex-1 space-y-1.5">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
+          {/* 结论行：只放结论四件套 + 可达标记（来源/置信/CWE/接口降为 meta 行）——
+              折叠态扫视时结论信号不被来源徽标稀释 */}
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             <span className="shrink-0 font-mono text-[13px] font-semibold text-foreground">
               {view.id}
             </span>
@@ -272,30 +282,43 @@ export function CorrVulnCard({ view, anchorId, collapsed, onToggleCollapse, verd
                 {t(`vuln.severity.${view.severity}`, { defaultValue: view.severity })}
               </span>
             )}
-            <MergeSourceBadge src={view.mergeSource ?? undefined} />
-            {view.confidence && (
-              <Badge variant="outline" className="font-mono text-muted-foreground">
-                {view.confidence}
-              </Badge>
+            {verdict?.refined?.severity && (
+              // 定级建议是 severity 同维度的跨仓修订，紧跟药丸以「→」衔接读作
+              // 「Critical → 建议 high」，不再做成并列徽标稀释结论行。
+              <span
+                data-testid="corr-vuln-sev-refined"
+                title={t("scan.correlation.refinedSevHint", { severity: verdict.refined.severity })}
+                className="inline-flex shrink-0 items-center gap-0.5 font-mono text-[10.5px] text-amber"
+              >
+                <span aria-hidden>→</span>
+                {t("scan.correlation.refinedSev", { severity: verdict.refined.severity })}
+              </span>
             )}
             {view.externallyExploitable && (
               <Badge variant="outline" className="text-foreground/75">
                 ⌖ {t("vuln.reachable")}
               </Badge>
             )}
-            {view.cweId && (
-              <span className="font-mono text-[11px] text-muted-foreground">{view.cweId}</span>
-            )}
-            {view.endpoint && (
-              <span className="truncate font-mono text-[11px] text-muted-foreground">
-                {view.endpoint}
-              </span>
-            )}
           </div>
           {(view.title || view.vulnType) && (
             <h3 className="break-words text-[15px] font-semibold leading-snug tracking-tight text-foreground">
               {view.title ?? view.vulnType}
             </h3>
+          )}
+          {/* meta 行：双轨来源 / 单仓置信度 / CWE / 入口接口（小字 mono，可与
+              结论行同 key 的 confidence 此处加 title 消歧——此为单仓分析置信度，
+              结论徽标内为跨仓裁决置信度） */}
+          {(view.mergeSource || view.confidence || view.cweId || view.endpoint) && (
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5 font-mono text-[11px] text-muted-foreground">
+              <MergeSourceBadge src={view.mergeSource ?? undefined} />
+              {view.confidence && (
+                <span title={t("scan.correlation.srcConfidence")}>{view.confidence}</span>
+              )}
+              {view.cweId && <span>{view.cweId}</span>}
+              {view.endpoint && (
+                <span className="min-w-0 break-all">{view.endpoint}</span>
+              )}
+            </div>
           )}
         </div>
         <ChevronDown
@@ -306,8 +329,10 @@ export function CorrVulnCard({ view, anchorId, collapsed, onToggleCollapse, verd
 
       {open && (
         <div className="space-y-4">
-          {/* 跨仓上下文（2026-09-20 结论优先批次）：裁决结论 + 所在跨服链 + 单仓结果入口 */}
-          {(verdict || chainList.length > 0 || childScanHref) && (
+          {/* 跨仓触发路径（2026-09-21）：回答「用户如何可控地触发该漏洞」——
+              ①裁决卡结构化 exploit_path ②flow 反查 ③入口服务单仓自证
+              ④未建链诚实提示；多跳候选链每卡附带。 */}
+          {(verdict || chainList.length > 0 || childScanHref || entrySelfServed) && (
             <div data-testid="corr-cross-ctx" className={SEC_CLS}>
               <div className={`mb-1.5 ${SEC_LABEL_CLS}`}>
                 {t("scan.correlation.crossCtxTitle")}
@@ -324,21 +349,38 @@ export function CorrVulnCard({ view, anchorId, collapsed, onToggleCollapse, verd
                     {verdict.crossServiceContext}
                   </div>
                 )}
-                {chainList.length > 0 && (
-                  <div data-testid="corr-vuln-chains" className="space-y-1.5">
-                    <div className={SEC_LABEL_CLS}>{t("scan.correlation.chainsTitle")}</div>
-                    {chainList.map((f, i) => (
-                      <div key={i} data-testid="corr-vuln-chain" className="space-y-0.5">
-                        <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
-                          <span className="text-foreground">{f.entry}</span>
-                          <span className="text-muted-foreground">→</span>
-                          <span className="text-cyan">{f.method}</span>
-                          <Badge variant="outline" className="font-sans text-[10px] text-muted-foreground">
-                            {f.confidence}
+                <ExploitPathBlock
+                  path={verdict?.exploitPath}
+                  chains={chainList}
+                  entrySelfServed={entrySelfServed}
+                  entryEndpoint={view.endpoint}
+                />
+                {(multiHops?.length ?? 0) > 0 && (
+                  <div data-testid="corr-vuln-multihops" className="space-y-1">
+                    <div className={SEC_LABEL_CLS}>{t("scan.correlation.multiHopRefTitle")}</div>
+                    {multiHops!.map((h, i) => (
+                      <div key={i} data-testid="corr-vuln-multihop" className="space-y-0.5">
+                        <div className="font-mono text-[11px] text-muted-foreground">
+                          {h.path.join(" → ")}{" "}
+                          <Badge variant="outline" className="ml-1 font-sans text-[10px]">
+                            {h.basis} · {h.confidence}
                           </Badge>
                         </div>
-                        {f.evidence && (
-                          <p className="line-clamp-2 text-[11px] text-muted-foreground">{f.evidence}</p>
+                        {(h.hops ?? []).some((hp) => hp.entry || (hp.rpc?.length ?? 0) > 0) && (
+                          <div className="space-y-0.5 pl-3">
+                            {h.hops!.map((hp, hi) => (
+                              <div key={hi} data-testid="corr-vuln-multihop-hop"
+                                className="font-mono text-[10.5px] text-muted-foreground">
+                                {hp.entry && (
+                                  <span className="text-foreground/80">{hp.entry} </span>
+                                )}
+                                {hp.from}→{hp.to}
+                                {(hp.rpc?.length ?? 0) > 0 && (
+                                  <span className="text-cyan"> · {hp.rpc!.join(", ")}</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
                         )}
                       </div>
                     ))}
@@ -358,20 +400,52 @@ export function CorrVulnCard({ view, anchorId, collapsed, onToggleCollapse, verd
             </div>
           )}
 
-          {/* 危害 */}
-          {view.impact && (
+          {/* 危害（跨仓修订版优先，单仓原文折叠保留可审计） */}
+          {(view.impact || verdict?.refined?.impact) && (
             <div data-testid="corr-impact" className={SEC_CLS}>
-              <div className={`mb-1.5 ${SEC_LABEL_CLS}`}>{t("report.impact")}</div>
+              <div className={`mb-1.5 flex items-center gap-2 ${SEC_LABEL_CLS}`}>
+                {t("report.impact")}
+                {verdict?.refined?.impact && (
+                  <Badge variant="outline" className="border-amber/40 font-sans text-[10px] text-amber">
+                    {t("scan.correlation.refinedBadge")}
+                  </Badge>
+                )}
+              </div>
               <p className="whitespace-pre-wrap text-xs leading-relaxed text-foreground/85">
-                {view.impact}
+                {verdict?.refined?.impact ?? view.impact}
+              </p>
+              {verdict?.refined?.impact && view.impact && (
+                <details className="mt-1">
+                  <summary className="cursor-pointer text-[11px] text-muted-foreground">
+                    {t("scan.correlation.refinedOriginal")}
+                  </summary>
+                  <p className="mt-1 whitespace-pre-wrap text-[11px] text-muted-foreground">
+                    {view.impact}
+                  </p>
+                </details>
+              )}
+            </div>
+          )}
+
+          {/* 成因补充（跨仓，按需）：跨仓分析才看得出的根因细节 */}
+          {verdict?.refined?.cause && (
+            <div data-testid="corr-refined-cause" className={SEC_CLS}>
+              <div className={`mb-1.5 ${SEC_LABEL_CLS}`}>{t("scan.correlation.refinedCause")}</div>
+              <p className="whitespace-pre-wrap text-xs leading-relaxed text-foreground/85">
+                {verdict.refined.cause}
               </p>
             </div>
           )}
 
-          {/* 相关接口 */}
+          {/* 相关接口（exploit_path 有跨仓跳时标注：单仓接口是内部面，入口见路径块） */}
           {view.endpoints.length > 0 && (
             <div data-testid="corr-vuln-endpoints" className={SEC_CLS}>
               <div className={`mb-1.5 ${SEC_LABEL_CLS}`}>{t("report.endpoints")}</div>
+              {verdict?.exploitPath?.hops?.length ? (
+                <p data-testid="corr-endpoints-note" className="mb-2 text-[11px] text-muted-foreground">
+                  {t("scan.correlation.endpointsInternalNote")}
+                </p>
+              ) : null}
               <div className="space-y-2">
                 {view.endpoints.map((ep, i) => (
                   <div key={i} data-testid="corr-endpoint-block">
@@ -436,11 +510,17 @@ export function CorrVulnCard({ view, anchorId, collapsed, onToggleCollapse, verd
             </div>
           )}
 
-          {/* POC：curl ↔ Burp 双 tab + 步骤（对齐 report 卡交互） */}
+          {/* POC：curl ↔ Burp 双 tab + 步骤（对齐 report 卡交互）；有跨仓 PoC 时
+              单仓 PoC 降级——打的是后端内部接口，跨仓场景不可达 */}
           {poc && (
             <div data-testid="corr-poc" className={`space-y-2 ${SEC_CLS}`}>
               <div className="flex flex-wrap items-center gap-2">
                 <span className={SEC_LABEL_CLS}>{t("markdown.pocSection")}</span>
+                {verdict?.exploitPath?.poc && (
+                  <span data-testid="corr-poc-single-note" className="text-[10.5px] text-muted-foreground">
+                    {t("scan.correlation.pocSingleNote")}
+                  </span>
+                )}
                 {(curl || rawHttp) && (
                   <div className="flex items-center gap-0.5" role="tablist">
                     {curl && (
@@ -570,5 +650,210 @@ export function CorrVulnCard({ view, anchorId, collapsed, onToggleCollapse, verd
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * 跨仓触发路径块（2026-09-21）：四级降级回答「用户如何可控触发」——
+ * ①裁决卡结构化 exploit_path（入口接口 → 逐跳 RPC → 触达点 + 用户可控性）
+ * ②flow 反查（entry 接口 → RPC method + 调用点证据）
+ * ③入口服务单仓自证（漏洞接口即对外入口，无需跨服务链）
+ * ④未建链诚实提示（可达性论证在跨仓上下文，不给假路径）。
+ * 纯渲染；宽松防御拾取（exploit_path 是新字段，历史卡/后端版本可缺）。
+ */
+function ExploitPathBlock({ path, chains, entrySelfServed, entryEndpoint }: {
+  path?: CorrExploitPath;
+  chains: CorrFlow[];
+  entrySelfServed?: boolean;
+  entryEndpoint?: string;
+}) {
+  const { t } = useTranslation();
+  const hops = Array.isArray(path?.hops) ? path!.hops! : [];
+  const hasStructured = !!path && (!!path.entry_endpoint || hops.length > 0 || !!path.sink);
+  // 跨仓 PoC 宽松防御拾取（新字段，历史卡/残缺数据可缺）。
+  const rawPoc = (path?.poc && typeof path.poc === "object" ? path.poc : undefined) as
+    | { curl?: unknown; raw_http?: unknown; steps?: unknown;
+        preconditions?: unknown; notes?: unknown } | undefined;
+  const rawSteps = Array.isArray(rawPoc?.steps)
+    ? rawPoc!.steps.filter((s): s is string => typeof s === "string") : [];
+  const pocBlock = rawPoc && (asStr(rawPoc.curl) || asStr(rawPoc.raw_http)
+      || asStr(rawPoc.preconditions) || asStr(rawPoc.notes) || rawSteps.length > 0)
+    ? { curl: asStr(rawPoc.curl), raw_http: asStr(rawPoc.raw_http),
+        preconditions: asStr(rawPoc.preconditions), notes: asStr(rawPoc.notes),
+        steps: rawSteps }
+    : undefined;
+
+  if (hasStructured) {
+    return (
+      <div data-testid="corr-exploit-path" className="rounded-md border border-border/70 bg-muted/30 p-3">
+        <div className={SEC_LABEL_CLS}>{t("scan.correlation.pathTitle")}</div>
+        {/* timeline：入口/触达点是节点（色点 + 连线），RPC 是连线上的边注记——
+            攻击链方向感是本块的视觉锚点，读作 自上而下：入口 → RPC ×N → 触达 */}
+        <ol className="mt-2">
+          {path?.entry_endpoint && (
+            <li data-testid="corr-exploit-entry" className="flex gap-3">
+              <div className="flex flex-col items-center">
+                <span aria-hidden className="mt-1 size-2 shrink-0 rounded-full bg-green" />
+                {(hops.length > 0 || path.sink) && (
+                  <span aria-hidden className="w-px flex-1 bg-border" />
+                )}
+              </div>
+              <div className="min-w-0 pb-3">
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  <span className="text-[11px] font-medium leading-5 text-green">
+                    {t("scan.correlation.pathEntry")}
+                  </span>
+                  <span className="font-mono text-[11px] text-muted-foreground">
+                    {path.entry_service}
+                  </span>
+                </div>
+                <div className="mt-0.5 break-all font-mono text-[12.5px] font-semibold text-foreground">
+                  {path.entry_endpoint}
+                </div>
+              </div>
+            </li>
+          )}
+          {hops.map((h, i) => (
+            <li key={i} data-testid="corr-exploit-hop" className="flex gap-3">
+              <div className="flex flex-col items-center">
+                {(i > 0 || path?.entry_endpoint) && (
+                  <span aria-hidden className="w-px flex-1 bg-border" />
+                )}
+                {(i < hops.length - 1 || path?.sink) && (
+                  <span aria-hidden className="w-px flex-1 bg-border" />
+                )}
+              </div>
+              <div className="min-w-0 py-0.5">
+                <div className="flex flex-wrap items-baseline gap-x-2 font-mono">
+                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    RPC {i + 1}
+                  </span>
+                  <span className="break-all text-[12px] font-medium leading-5 text-cyan">
+                    {h.rpc}
+                  </span>
+                </div>
+                <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                  {h.from} → {h.to}
+                  {h.call_site ? ` · @ ${h.call_site}` : ""}
+                </div>
+              </div>
+            </li>
+          ))}
+          {path?.sink && (
+            <li data-testid="corr-exploit-sink" className="flex gap-3">
+              <div className="flex flex-col items-center">
+                {(hops.length > 0 || path?.entry_endpoint) && (
+                  <span aria-hidden className="w-px flex-1 bg-border" />
+                )}
+                <span
+                  aria-hidden
+                  className="mt-1 size-2 shrink-0 rounded-full bg-red ring-2 ring-red/20"
+                />
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  <span className="text-[11px] font-medium leading-5 text-red">
+                    {t("scan.correlation.pathSink")}
+                  </span>
+                  <span className="break-all font-mono text-[12.5px] font-semibold text-foreground/90">
+                    {path.sink}
+                  </span>
+                </div>
+              </div>
+            </li>
+          )}
+        </ol>
+        {path?.user_controlled && (
+          <div data-testid="corr-exploit-ctrl" className="mt-2 border-t border-border/60 pt-2 text-[11.5px] text-foreground/85">
+            <span className={SEC_LABEL_CLS}>{t("scan.correlation.pathCtrl")}: </span>
+            {path.user_controlled}
+          </div>
+        )}
+        {pocBlock && (
+          <div data-testid="corr-exploit-poc" className="mt-2 space-y-1.5 border-t border-border/60 pt-2">
+            <div className={SEC_LABEL_CLS}>{t("scan.correlation.crossPocTitle")}</div>
+            {pocBlock.preconditions && (
+              <div className="text-[11px] text-foreground/80">
+                <span className={SEC_LABEL_CLS}>{t("report.preconditions")}: </span>
+                {pocBlock.preconditions}
+              </div>
+            )}
+            {pocBlock.steps.length > 0 && (
+              <ol className="list-decimal space-y-0.5 pl-5 text-[11px] text-foreground/80">
+                {pocBlock.steps.map((s, i) => <li key={i}>{s}</li>)}
+              </ol>
+            )}
+            {pocBlock.curl && (
+              <CopyableCodePanel
+                value={pocBlock.curl}
+                testId="corr-exploit-poc-curl"
+                copyTestId="copy-exploit-poc-curl"
+                copyLabel={t("report.copyCurl")}
+                className={CODE_CLS}
+              >
+                {highlightCode(pocBlock.curl, "bash")}
+              </CopyableCodePanel>
+            )}
+            {pocBlock.raw_http && (
+              <CopyableCodePanel
+                value={pocBlock.raw_http}
+                testId="corr-exploit-poc-raw-http"
+                copyTestId="copy-exploit-poc-raw-http"
+                copyLabel={t("report.pocBurp")}
+                className={CODE_CLS}
+              >
+                {highlightCode(pocBlock.raw_http, "http")}
+              </CopyableCodePanel>
+            )}
+            {pocBlock.notes && (
+              <div className="text-[11px] text-muted-foreground">{pocBlock.notes}</div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (chains.length > 0) {
+    return (
+      <div data-testid="corr-vuln-chains" className="space-y-1.5">
+        <div className={SEC_LABEL_CLS}>{t("scan.correlation.pathTitle")}</div>
+        {chains.map((f, i) => (
+          <div key={i} data-testid="corr-vuln-chain" className="space-y-0.5">
+            <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
+              <span className="text-foreground">{f.entry}</span>
+              <span className="text-muted-foreground">→</span>
+              <span className="text-cyan">{f.method}</span>
+              <Badge variant="outline" className="font-sans text-[10px] text-muted-foreground">
+                {f.confidence}
+              </Badge>
+            </div>
+            {f.evidence && (
+              <p className="line-clamp-2 text-[11px] text-muted-foreground">{f.evidence}</p>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (entrySelfServed) {
+    return (
+      <div data-testid="corr-exploit-self" className="text-[11px] text-foreground/80">
+        <Badge variant="outline" className="mr-1.5 font-sans text-[10px] text-green">
+          {t("scan.correlation.pathEntry")}
+        </Badge>
+        {t("scan.correlation.pathSelfServed")}
+        {entryEndpoint && (
+          <span className="ml-1 font-mono text-foreground/85">{entryEndpoint}</span>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div data-testid="corr-exploit-unlinked" className="text-[11px] text-muted-foreground">
+      {t("scan.correlation.pathUnlinked")}
+    </div>
   );
 }

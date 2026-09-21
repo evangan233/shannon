@@ -938,11 +938,36 @@ export interface CorrFlow {
   confidence: string;
   evidence: string;
 }
-/** 多跳候选链（spec 2026-08-27 §6.2）：边邻接启发拼装，basis/confidence 显式标注。 */
+/** 多跳候选链（spec 2026-08-27 §6.2）：边邻接启发拼装，basis/confidence 显式标注。
+ *  hops（2026-09-21）：逐跳确定性上下文——首跳带种子边 flow 的 entry + vuln_refs，
+ *  每跳带该边 calls 的 rpc method 列表（旧产物无此字段，按缺失降级为纯 path）。 */
 export interface CorrMultiHopChain {
   path: string[];
   basis: string;
   confidence: string;
+  hops?: { from?: string; to?: string; rpc?: string[];
+           entry?: string; vuln_refs?: Record<string, unknown>[] }[];
+}
+/**
+ * 跨仓触发路径（2026-09-21）：confirm 卡可选结构化字段（adjudication prompt 产出）
+ * ——入口服务与接口 → 逐跳 RPC → 漏洞触达点，回答「用户如何可控地触发该漏洞」。
+ * 宽松可选：历史裁决卡无此字段，前端按缺失降级（flow 反查 / 入口自证 / 未建链提示）。
+ */
+export interface CorrExploitPath {
+  entry_service?: string;
+  entry_endpoint?: string;
+  hops?: { from?: string; to?: string; rpc?: string; call_site?: string }[];
+  sink?: string;
+  user_controlled?: string;
+  /** 跨仓 PoC（2026-09-21）：以入口接口为起点重写；单仓 PoC 打后端内部端口。 */
+  poc?: { curl?: string; raw_http?: string; steps?: string[];
+          preconditions?: string; notes?: string };
+}
+/** 跨仓修订（2026-09-21，按需）：跨仓分析改变了单仓表述时才由裁决卡给出。 */
+export interface CorrRefinedFinding {
+  impact?: string;
+  cause?: string;
+  severity?: string;
 }
 /** 裁决卡（spec 2026-08-27 §7.3）：双向留证——正反结论同构带完整证据链。 */
 export interface AdjudicationCard {
@@ -955,6 +980,8 @@ export interface AdjudicationCard {
                            snippet: string; note: string }[];
   reasoning: string;
   confidence: string;
+  exploit_path?: CorrExploitPath;
+  refined_finding?: CorrRefinedFinding;
 }
 export interface AdjudicationLog {
   cards?: AdjudicationCard[];

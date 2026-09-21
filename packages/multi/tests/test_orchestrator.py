@@ -354,9 +354,9 @@ async def test_run_correlation_phase_two_stage(tmp_path, monkeypatch):
     by_vid = {c["finding_ref"]["vuln_id"]: c for c in cards}
     assert by_vid["INJ-001"]["direction"] == "confirm"
     assert by_vid["INJ-D1"]["direction"] == "upgrade"
-    # 3) 报告裁决章节（非漏洞与漏洞同表留证）
+    # 3) 报告结论章节（成立漏洞 + 翻案候选；全量裁决卡撤出报告改由 json 留档）
     report = (dlv / "correlation-report.md").read_text(encoding="utf-8")
-    assert "跨仓裁决" in report
+    assert "全量裁决留档" in report
     assert "INJ-D1" in report          # dismissed 项（翻案候选）进报告
     # 4) adjudication phase 事件(对齐 CorrelationEventWriter schema:
     #    type=correlation_progress, node=phase, name=adjudication)
@@ -585,8 +585,8 @@ def test_render_report_first_version_has_adjudication_pending_note():
 
 
 def test_render_report_full_verdict_sections():
-    """裁决后：结论统计一行 + 成立漏洞全文（接口/问题点/POC/修复）+ 翻案卡全文
-    + 消掉/存疑清单 + 既有裁决五组列表。"""
+    """裁决后：结论统计一行（per-vuln 口径）+ 成立漏洞全文（接口/问题点/POC/修复）
+    + 翻案卡全文 + 消掉/存疑清单 + 单仓否决复核行 + 既有裁决五组列表。"""
     from supernova_multi.orchestrator import _render_report
     merged = {"injection": [{
         "ID": "INJ-01", "service": "order-svc", "title": "SQL 注入", "severity": "critical",
@@ -598,11 +598,26 @@ def test_render_report_full_verdict_sections():
                                    "snippet": "query(sql)"}],
         "report_poc": {"curl": "curl -X POST /orders", "steps": ["1. 注入"],
                        "preconditions": "可公网达", "expected_response": "行数异常"},
+    }], "xss": [{
+        "ID": "XSS-01", "service": "order-svc", "title": "反射 XSS", "severity": "high",
     }]}
     cards = [
         {"direction": "confirm",
          "finding_ref": {"service": "order-svc", "vuln_id": "INJ-01", "origin": "queue"},
          "conclusion": "vulnerable", "cross_service_context": "via gateway",
+         "exploit_path": {
+             "entry_service": "gateway", "entry_endpoint": "POST /orders",
+             "hops": [{"from": "gateway", "to": "order-svc",
+                       "rpc": "order.v1.OrderService/CreateOrder", "call_site": "g.ts:9"}],
+             "sink": "db.py:10", "user_controlled": "q 参数全程透传",
+             "poc": {"preconditions": "可公网达入口",
+                     "steps": ["1. 构造注入参数"],
+                     "curl": "curl -X POST 'http://ENTRY/orders' -d '{\"q\":\"1 OR 1=1\"}'",
+                     "notes": "响应行数异常即命中"}},
+         "refined_finding": {
+             "impact": "外部用户经入口接口可拖库（跨仓可达后危害升级）",
+             "cause": "sink 信任上游透传的客户端可控 q 参数",
+             "severity": "high"},
          "analysis_process": [], "verification_evidence": [], "reasoning": "可达", "confidence": "high"},
         {"direction": "downgrade",
          "finding_ref": {"service": "order-svc", "vuln_id": "XSS-01", "origin": "queue"},
@@ -615,22 +630,128 @@ def test_render_report_full_verdict_sections():
          "reasoning": "翻案", "confidence": "high"},
     ]
     md = _render_report(_report_topology(), [], merged, ["svc: drifted"], cards=cards)
+    # per-vuln 口径：成立 1 / 消掉 1（XSS-01 在合并漏洞里才计数——卡有而漏洞无不计）
     assert "## 结论统计" in md and "成立 1" in md and "消掉 1" in md and "未重审 0" in md
+    # 单仓否决复核行（1 条 dismissed 卡 = 翻案 1）
+    assert "单仓已否决复核：维持 0 · 翻案 1" in md
     # 成立全文：confirm 关联 queue 条目渲染全文
     assert "## 成立的漏洞（跨仓确认 + 翻案）" in md
-    assert "[INJ-01] order-svc — SQL 注入（critical）" in md
-    assert "- 接口: POST /orders" in md
+    assert "[INJ-01] order-svc — SQL 注入（critical，跨仓定级建议: high）" in md
+    # 跨仓触发路径（source→sink 流程：入口接口 → 逐跳 RPC → 触达点 + 可控性）
+    assert "- 跨仓触发路径:" in md
+    assert "- 入口: gateway `POST /orders`" in md
+    assert "- RPC: gateway → order-svc · order.v1.OrderService/CreateOrder（g.ts:9）" in md
+    assert "- 触达点: db.py:10" in md
+    assert "- 用户可控性: q 参数全程透传" in md
+    # 跨仓 PoC（从入口接口触发）优先渲染
+    assert "- 跨仓 PoC（从入口接口触发）:" in md
+    assert "curl -X POST 'http://ENTRY/orders'" in md
+    assert "- 说明: 响应行数异常即命中" in md
+    # 单仓接口/PoC 降级标注（内部面不可达，防复核者拿错 PoC）
+    assert "- 单仓接口（后端内部面，非公网入口）: POST /orders" in md
+    assert "- 单仓 PoC（直连后端内部接口；跨仓场景请用上方跨仓 PoC）:" in md
     assert "curl -X POST /orders" in md
     assert "参数化查询" in md
+    # 跨仓修订（按需）：标题定级建议 + 成因补充 + 危害修订版优先（单仓原文保留）
+    assert "（critical，跨仓定级建议: high）" in md
+    assert "- 成因补充（跨仓）: sink 信任上游透传的客户端可控 q 参数" in md
+    assert "- 危害: 外部用户经入口接口可拖库（跨仓可达后危害升级）" in md
+    assert "（跨仓修订；单仓原表述: 拖库）" in md
     # 翻案：裁决卡全文（无 queue 条目）
     assert "### 翻案候选（单仓已否决 → 跨仓可达，待人工复核）" in md
     assert "① 读 dismissed" in md
     # 消掉清单一行一条
     assert "## 消掉/存疑清单" in md
     assert "[XSS-01] order-svc（消掉, confidence: high）— 出口转义" in md
-    # 既有裁决五组列表保留 + 漂移
-    assert "## 跨仓裁决(阶段 B)" in md
+    # 全量裁决章节已撤（2026-09-21 精简）：确认卡融入成立全文、消掉论证在清单、
+    # 维持是纯噪音——留档指引并入统计节尾 + 漂移保留
+    assert "## 跨仓裁决(阶段 B)" not in md
+    assert "> 全量裁决留档：3 张卡见 adjudication-log.json。" in md
     assert "svc: drifted" in md
+    assert "## 版本漂移警告" in md
+    # 有 exploit_path 时跨仓上下文散文行不再重复
+    assert "- 跨仓上下文: via gateway" not in md
+    # 目录优化（2026-09-21）：速览表当章首目录 + 章节序结论区在前背景区垫底
+    assert "| ID | 服务 | 严重度 | 定级建议 | 标题 |" in md
+    assert "| INJ-01 | order-svc | critical | high | SQL 注入 |" in md
+    assert "| INJ-09 | order-svc | — | — | 翻案：" in md
+    assert md.index("## 结论统计") < md.index("## 成立的漏洞") \
+        < md.index("## 消掉/存疑清单") < md.index("## 服务拓扑")
+
+
+def test_render_report_error_cards_kept_and_prose_context_fallback():
+    """error 占位卡单列留档（故障信号）；旧卡无 exploit_path 时跨仓上下文散文行保留。"""
+    from supernova_multi.orchestrator import _render_report
+    merged = {"xss": [{"ID": "X-1", "service": "s", "title": "t"}]}
+    cards = [
+        {"direction": "confirm",
+         "finding_ref": {"service": "s", "vuln_id": "X-1", "origin": "queue"},
+         "conclusion": "vulnerable", "cross_service_context": "经 gateway 的 /x 可达",
+         "analysis_process": [], "verification_evidence": [], "reasoning": "可达",
+         "confidence": "high"},
+        {"direction": "error",
+         "finding_ref": {"service": "s", "vuln_id": "X-9", "origin": "queue"},
+         "conclusion": "needs-review", "cross_service_context": "",
+         "analysis_process": [], "verification_evidence": [],
+         "reasoning": "adjudication batch failed: llm down", "confidence": "low"},
+    ]
+    md = _render_report(_report_topology(), [], merged, [], cards=cards)
+    assert "## 裁决失败(占位留档)" in md
+    assert "adjudication batch failed: llm down" in md
+    # 旧卡（无 exploit_path）：跨仓上下文散文行兜底保留
+    assert "- 跨仓上下文: 经 gateway 的 /x 可达" in md
+
+
+def test_render_report_trust_boundaries_appendix():
+    """信任边界附录（2026-09-21 页面撤章后信息落位 md）：service/method/exposure/
+    可达来源/reason 一行一条；空边界省略章节。"""
+    from supernova_core.correlation.schemas import TrustBoundary
+    from supernova_multi.orchestrator import _render_report
+    md = _render_report(_report_topology(), [], {}, [])
+    assert "## 信任边界" not in md
+    tb = TrustBoundary(service="order-svc", method="order.CreateOrder",
+                       exposure="internal", reachable_from=["gateway"],
+                       reason="仅集群内 grpc 可达，未挂网关", confidence="high")
+    md = _render_report(_report_topology(), [tb], {}, [])
+    assert "## 信任边界" in md
+    assert "- order-svc · order.CreateOrder（high）— internal，可达来源: gateway" \
+           " · 仅集群内 grpc 可达，未挂网关" in md
+
+
+def test_render_report_caliber_matches_page():
+    """口径对齐结果页（2026-09-20）：confirm 卡含 needs-review → 存疑不进成立；
+    dismissed 维持卡不进消掉清单（只在复核行计数）；卡有而合并漏洞无 → 不计。"""
+    from supernova_multi.orchestrator import _render_report
+    merged = {"xss": [{"ID": "X-1", "service": "s", "title": "t1"},
+                      {"ID": "X-2", "service": "s", "title": "t2"}]}
+    cards = [
+        # confirm 卡但 conclusion=needs-review → 存疑（旧口径会误计成立）
+        {"direction": "confirm",
+         "finding_ref": {"service": "s", "vuln_id": "X-1", "origin": "queue"},
+         "conclusion": "needs-review", "cross_service_context": "",
+         "analysis_process": [], "verification_evidence": [],
+         "reasoning": "信息不足", "confidence": "low"},
+        # dismissed 维持卡：不进消掉清单
+        {"direction": "maintain",
+         "finding_ref": {"service": "s", "vuln_id": "DIS-1", "origin": "dismissed"},
+         "conclusion": "not-vulnerable", "cross_service_context": "",
+         "analysis_process": [], "verification_evidence": [],
+         "reasoning": "维持否决", "confidence": "high"},
+        # 卡有而合并漏洞无：不参与计数
+        {"direction": "downgrade",
+         "finding_ref": {"service": "s", "vuln_id": "GHOST-1", "origin": "queue"},
+         "conclusion": "downgraded", "cross_service_context": "",
+         "analysis_process": [], "verification_evidence": [],
+         "reasoning": "幽灵卡", "confidence": "high"},
+    ]
+    md = _render_report(_report_topology(), [], merged, [], cards=cards)
+    assert "成立 0 ｜ 翻案 0 ｜ 消掉 0 ｜ 存疑 1 ｜ 未重审 1（合并漏洞共 2 条）" in md
+    assert "单仓已否决复核：1 条全部维持原判，无翻案。" in md
+    # X-1 以存疑进清单；维持卡与幽灵卡全篇不出现（全量裁决章节已撤）
+    assert "[X-1] s（存疑, confidence: low）— 信息不足" in md
+    assert "维持否决" not in md
+    assert "幽灵卡" not in md
+    assert "[X-2] s（存疑" not in md  # 未重审不进清单
 
 
 def test_render_report_unadjudicated_counted():

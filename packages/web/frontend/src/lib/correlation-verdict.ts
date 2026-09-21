@@ -1,4 +1,4 @@
-import type { AdjudicationCard, CorrFlow, CorrVuln } from "@/api/types";
+import type { AdjudicationCard, CorrFlow, CorrMultiHopChain, CorrVuln } from "@/api/types";
 
 /**
  * 跨仓结论 join 纯函数（2026-09-20 结论优先批次）：把阶段 B 裁决卡
@@ -123,6 +123,16 @@ export function findChainsForVuln(
       (ref) => ref.vuln_id === vulnId && ref.service === service,
     ),
   );
+}
+
+/** 漏洞所在多跳候选链：path 经过该漏洞所在服务的链（保序）——卡片内展示
+ *  「从入口如何二跳/三跳到达本服务」（2026-09-21 每卡给出）。 */
+export function findMultiHopsForVuln(
+  service: string,
+  hops: CorrMultiHopChain[],
+): CorrMultiHopChain[] {
+  if (!service) return [];
+  return hops.filter((h) => (h.path ?? []).includes(service));
 }
 
 /** 裁决覆盖进度（running 态展示）：queue 总数与已覆盖数（含 error 占位卡）。 */
